@@ -1,22 +1,24 @@
 -- ─────────────────────────────────────────────────────────────
--- ⚡ SUPABASE DATABASE SCHEMA FOR EVENTIDE-ORIGINAL MULTI-BOT
+-- ⚡ UPGRADED SCHEMA: SINGLE-ROW PACKAGED SYNC FOR EVENTIDE-ORIGINAL
 -- ─────────────────────────────────────────────────────────────
--- Run this SQL script in your Supabase SQL Editor to set up the 
--- necessary tables for session persistence and user mapping.
+-- Run this SQL in your Supabase SQL Editor to wipe out the old 
+-- file-by-file "jargon" structure and replace it with the ultra-clean, 
+-- single-row-per-user JSONB schema!
 
--- 1. Create the WhatsApp Sessions Table (stores session files)
-CREATE TABLE IF NOT EXISTS whatsapp_sessions (
-    phone_number TEXT NOT NULL,
-    file_path TEXT NOT NULL,
-    file_content TEXT NOT NULL,
-    updated_at TIMESTAMPTZ DEFAULT NOW(),
-    PRIMARY KEY (phone_number, file_path)
+-- 1. DROP THE OLD JARGON SESSIONS TABLE
+DROP TABLE IF EXISTS whatsapp_sessions CASCADE;
+
+-- 2. CREATE THE ULTRA-CLEAN PACKAGED SESSIONS TABLE
+-- Each phone number will have EXACTLY ONE ROW here! No matter how many files Baileys creates.
+CREATE TABLE whatsapp_sessions (
+    phone_number TEXT PRIMARY KEY,
+    session_files JSONB NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Enable Row Level Security (RLS) or add indexes
+-- Enable RLS and add full administrative access
 ALTER TABLE whatsapp_sessions ENABLE ROW LEVEL SECURITY;
 
--- Create an open policy for convenience (or customize to restrict access to authenticated roles)
 CREATE POLICY "Allow service_role full access to whatsapp_sessions" 
 ON whatsapp_sessions 
 FOR ALL 
@@ -24,7 +26,7 @@ TO service_role
 USING (true) 
 WITH CHECK (true);
 
--- 2. Create the WhatsApp Users Table (stores Telegram-to-WhatsApp mappings)
+-- 3. ENSURE USER MAPPING TABLE EXISTS (No changes needed, but runs for safety)
 CREATE TABLE IF NOT EXISTS whatsapp_users (
     chat_id BIGINT NOT NULL PRIMARY KEY,
     phone_number TEXT,
@@ -32,17 +34,21 @@ CREATE TABLE IF NOT EXISTS whatsapp_users (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Enable Row Level Security (RLS) for whatsapp_users
+-- Enable RLS and add full administrative access for users mapping
 ALTER TABLE whatsapp_users ENABLE ROW LEVEL SECURITY;
 
--- Create an open policy for service_role
-CREATE POLICY "Allow service_role full access to whatsapp_users" 
-ON whatsapp_users 
-FOR ALL 
-TO service_role 
-USING (true) 
-WITH CHECK (true);
+-- If policy doesn't exist, create it (wrapped in a try block or handled gracefully)
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'whatsapp_users' AND policyname = 'Allow service_role full access to whatsapp_users'
+    ) THEN
+        CREATE POLICY "Allow service_role full access to whatsapp_users" 
+        ON whatsapp_users FOR ALL TO service_role USING (true) WITH CHECK (true);
+    END IF;
+END $$;
 
--- Add helpful indexes for fast lookup
+-- 4. CREATE CLEAN INDEXES
 CREATE INDEX IF NOT EXISTS idx_whatsapp_sessions_phone_number ON whatsapp_sessions(phone_number);
 CREATE INDEX IF NOT EXISTS idx_whatsapp_users_phone_number ON whatsapp_users(phone_number);

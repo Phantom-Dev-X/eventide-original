@@ -43,11 +43,12 @@ export function isSupabaseEnabled() {
 }
 
 // ──────────────────────────────────────────────
-// 📂 SESSION OPERATIONS
+// 📂 SESSION OPERATIONS (SINGLE-ROW PACKAGED SYNC)
 // ──────────────────────────────────────────────
 
 /**
- * Downloads all session files for a phone number from Supabase to a local directory.
+ * Downloads the entire packaged session for a phone number from Supabase and extracts it locally.
+ * This query is ultra-fast as it retrieves exactly one row by primary key.
  * @param {string} phoneNumber - The target WhatsApp phone number.
  * @param {string} targetDir - The local directory where session files should be saved.
  * @returns {Promise<boolean>} True if restored successfully, false otherwise.
@@ -55,19 +56,24 @@ export function isSupabaseEnabled() {
 export async function downloadSessionFromSupabase(phoneNumber, targetDir) {
     if (!supabase) return false;
     try {
-        console.log(`[SUPABASE] Fetching session files for ${phoneNumber}...`);
+        console.log(`[SUPABASE] Fetching packaged session for ${phoneNumber}...`);
         const { data, error } = await supabase
             .from('whatsapp_sessions')
-            .select('file_path, file_content')
-            .eq('phone_number', phoneNumber);
+            .select('session_files')
+            .eq('phone_number', phoneNumber)
+            .single();
 
         if (error) {
-            console.error(`[SUPABASE] Error downloading session for ${phoneNumber}:`, error.message);
+            if (error.code === 'PGRST116') {
+                console.log(`[SUPABASE] No existing session row found for ${phoneNumber} in database.`);
+            } else {
+                console.error(`[SUPABASE] Error downloading session for ${phoneNumber}:`, error.message);
+            }
             return false;
         }
 
-        if (!data || data.length === 0) {
-            console.log(`[SUPABASE] No session files found for ${phoneNumber} in database.`);
+        if (!data || !data.session_files) {
+            console.log(`[SUPABASE] Session row for ${phoneNumber} is empty.`);
             return false;
         }
 
@@ -75,14 +81,16 @@ export async function downloadSessionFromSupabase(phoneNumber, targetDir) {
             fs.mkdirSync(targetDir, { recursive: true });
         }
 
-        for (const file of data) {
-            const fullPath = path.join(targetDir, file.file_path);
-            // Ensure parent directory exists
+        const filesMap = data.session_files;
+        const fileNames = Object.keys(filesMap);
+
+        for (const fileName of fileNames) {
+            const fullPath = path.join(targetDir, fileName);
             fs.mkdirSync(path.dirname(fullPath), { recursive: true });
-            fs.writeFileSync(fullPath, file.file_content, 'utf8');
+            fs.writeFileSync(fullPath, filesMap[fileName], 'utf8');
         }
 
-        console.log(`[SUPABASE] Successfully restored ${data.length} files for ${phoneNumber} to ${targetDir}`);
+        console.log(`[SUPABASE] Successfully restored ${fileNames.length} files from a single row for ${phoneNumber}.`);
         return true;
     } catch (err) {
         console.error(`[SUPABASE] Unexpected error restoring session for ${phoneNumber}:`, err);
@@ -91,9 +99,8 @@ export async function downloadSessionFromSupabase(phoneNumber, targetDir) {
 }
 
 /**
- * Syncs local session files to Supabase:
- * - Upserts new or modified files.
- * - Deletes files from Supabase that no longer exist locally.
+ * Packages all local session files into a single JSON object and uploads it to Supabase in one atomic row.
+ * Eliminates "table jargon" (hundreds of rows of pre-keys) and avoids partial sync corruption.
  * @param {string} phoneNumber - The WhatsApp phone number.
  * @param {string} localDir - The local directory of the session.
  */
@@ -105,92 +112,44 @@ export async function syncLocalToSupabase(phoneNumber, localDir) {
             return;
         }
 
-        // 1. Read all files in the local directory (only files, ignoring directories)
+        // 1. Read all local files and build a single packaged object
         const localFiles = fs.readdirSync(localDir).filter(name => {
             const full = path.join(localDir, name);
             try { return fs.statSync(full).isFile(); }
             catch { return false; }
         });
 
-        // Map local files to their path and content
-        const localFilesMap = new Map();
+        const sessionFiles = {};
         for (const name of localFiles) {
             try {
                 const content = fs.readFileSync(path.join(localDir, name), 'utf8');
-                localFilesMap.set(name, content);
+                sessionFiles[name] = content;
             } catch (err) {
-                console.error(`[SUPABASE] Error reading local file ${name}:`, err.message);
+                console.error(`[SUPABASE] Error reading local file ${name} for packaging:`, err.message);
             }
         }
 
-        // 2. Fetch remote files info from Supabase for this phone number
-        const { data: remoteFiles, error: fetchError } = await supabase
-            .from('whatsapp_sessions')
-            .select('file_path, file_content')
-            .eq('phone_number', phoneNumber);
-
-        if (fetchError) {
-            console.error(`[SUPABASE] Error fetching remote files for ${phoneNumber}:`, fetchError.message);
+        const fileCount = Object.keys(sessionFiles).length;
+        if (fileCount === 0) {
+            console.log(`[SUPABASE] No local files found to sync for ${phoneNumber}.`);
             return;
         }
 
-        const remoteFilesMap = new Map();
-        if (remoteFiles) {
-            for (const file of remoteFiles) {
-                remoteFilesMap.set(file.file_path, file.file_content);
-            }
-        }
+        console.log(`[SUPABASE] Packaging and uploading ${fileCount} files in a single row for ${phoneNumber}...`);
 
-        // 3. Identify files to upsert (new or modified)
-        const toUpsert = [];
-        for (const [filePath, localContent] of localFilesMap.entries()) {
-            const remoteContent = remoteFilesMap.get(filePath);
-            if (remoteContent !== localContent) {
-                toUpsert.push({
-                    phone_number: phoneNumber,
-                    file_path: filePath,
-                    file_content: localContent,
-                    updated_at: new Date().toISOString()
-                });
-            }
-        }
+        // 2. Perform atomic single-row upsert
+        const { error } = await supabase
+            .from('whatsapp_sessions')
+            .upsert({
+                phone_number: phoneNumber,
+                session_files: sessionFiles,
+                updated_at: new Date().toISOString()
+            }, { onConflict: 'phone_number' });
 
-        // 4. Identify files to delete (present in DB but no longer local)
-        const toDelete = [];
-        for (const remotePath of remoteFilesMap.keys()) {
-            if (!localFilesMap.has(remotePath)) {
-                toDelete.push(remotePath);
-            }
-        }
-
-        // 5. Perform upserts
-        if (toUpsert.length > 0) {
-            console.log(`[SUPABASE] Upserting ${toUpsert.length} files for ${phoneNumber}...`);
-            const { error: upsertError } = await supabase
-                .from('whatsapp_sessions')
-                .upsert(toUpsert, { onConflict: 'phone_number,file_path' });
-
-            if (upsertError) {
-                console.error(`[SUPABASE] Error upserting files for ${phoneNumber}:`, upsertError.message);
-            } else {
-                console.log(`[SUPABASE] Successfully upserted ${toUpsert.length} files for ${phoneNumber}.`);
-            }
-        }
-
-        // 6. Perform deletions
-        if (toDelete.length > 0) {
-            console.log(`[SUPABASE] Deleting ${toDelete.length} obsolete files for ${phoneNumber}...`);
-            const { error: deleteError = null } = await supabase
-                .from('whatsapp_sessions')
-                .delete()
-                .eq('phone_number', phoneNumber)
-                .in('file_path', toDelete) || {};
-
-            if (deleteError) {
-                console.error(`[SUPABASE] Error deleting obsolete files for ${phoneNumber}:`, deleteError.message);
-            } else {
-                console.log(`[SUPABASE] Successfully deleted ${toDelete.length} obsolete files for ${phoneNumber}.`);
-            }
+        if (error) {
+            console.error(`[SUPABASE] Error upserting packaged session for ${phoneNumber}:`, error.message);
+        } else {
+            console.log(`[SUPABASE] Successfully synced all ${fileCount} files to Supabase in a single row for ${phoneNumber}!`);
         }
 
     } catch (err) {
@@ -214,7 +173,7 @@ export function debouncedSyncLocalToSupabase(phoneNumber, localDir, delayMs = 30
 
     const timer = setTimeout(async () => {
         syncTimers.delete(phoneNumber);
-        console.log(`[SUPABASE] Debounced sync triggered for ${phoneNumber}...`);
+        console.log(`[SUPABASE] Debounced single-row sync triggered for ${phoneNumber}...`);
         await syncLocalToSupabase(phoneNumber, localDir);
     }, delayMs);
 
@@ -222,22 +181,22 @@ export function debouncedSyncLocalToSupabase(phoneNumber, localDir, delayMs = 30
 }
 
 /**
- * Deletes all files of a session from Supabase.
+ * Deletes the single session row of a phone number from Supabase.
  * @param {string} phoneNumber - The phone number whose session is being deleted.
  */
 export async function deleteSessionFromSupabase(phoneNumber) {
     if (!supabase) return;
     try {
-        console.log(`[SUPABASE] Deleting all session files for ${phoneNumber} from database...`);
+        console.log(`[SUPABASE] Deleting packaged session row for ${phoneNumber} from database...`);
         const { error } = await supabase
             .from('whatsapp_sessions')
             .delete()
             .eq('phone_number', phoneNumber);
 
         if (error) {
-            console.error(`[SUPABASE] Error deleting session files for ${phoneNumber}:`, error.message);
+            console.error(`[SUPABASE] Error deleting session row for ${phoneNumber}:`, error.message);
         } else {
-            console.log(`[SUPABASE] Successfully deleted all session files for ${phoneNumber}.`);
+            console.log(`[SUPABASE] Successfully deleted session row for ${phoneNumber}.`);
         }
     } catch (err) {
         console.error(`[SUPABASE] Unexpected error deleting session for ${phoneNumber}:`, err);
@@ -251,7 +210,7 @@ export async function deleteSessionFromSupabase(phoneNumber) {
 export async function getAllSessionPhoneNumbers() {
     if (!supabase) return [];
     try {
-        console.log('[SUPABASE] Fetching all distinct phone numbers with saved sessions...');
+        console.log('[SUPABASE] Fetching all registered phone numbers with saved sessions...');
         const { data, error } = await supabase
             .from('whatsapp_sessions')
             .select('phone_number');
@@ -261,8 +220,8 @@ export async function getAllSessionPhoneNumbers() {
             return [];
         }
 
-        const phoneNumbers = [...new Set(data.map(item => item.phone_number))];
-        console.log(`[SUPABASE] Found ${phoneNumbers.length} session(s) in database:`, phoneNumbers);
+        const phoneNumbers = data.map(item => item.phone_number);
+        console.log(`[SUPABASE] Found ${phoneNumbers.length} session row(s) in database:`, phoneNumbers);
         return phoneNumbers;
     } catch (err) {
         console.error('[SUPABASE] Unexpected error getting session phone numbers:', err);
