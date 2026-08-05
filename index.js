@@ -51,10 +51,42 @@ const KEEP_ALIVE_INTERVAL = 4 * 60 * 1000;
 const RECENT_APPEND_WINDOW_SECONDS = 120;
 
 // ──────────────────────────────────────────────
-// 🔮 MULTI-PERSONA SCHEMES (CONFIGURABLE BOOT LOADERS)
+// 🔮 ECLIPSE ANIMATION STAGES (PERFECT WHATSAPP SPACING)
 // ──────────────────────────────────────────────
 
-const STAGE2_ECLIPSE = `.
+const animSteps = [
+    { percent: 8,  bar: 1,  text: '◐ initiating umbral protocol', core: '◌', cipher: '◌', void: '◌' },
+    { percent: 16, bar: 2,  text: '◐ initiating umbral protocol', core: '◌', cipher: '◌', void: '◌' },
+    { percent: 25, bar: 3,  text: '◐ initiating umbral protocol', core: '◌', cipher: '◌', void: '◌' },
+    { percent: 33, bar: 4,  text: '◑ collapsing quantum states',  core: '✔', cipher: '◌', void: '◌' },
+    { percent: 41, bar: 5,  text: '◑ collapsing quantum states',  core: '✔', cipher: '◌', void: '◌' },
+    { percent: 50, bar: 6,  text: '◑ collapsing quantum states',  core: '✔', cipher: '◌', void: '◌' },
+    { percent: 58, bar: 7,  text: '◒ severing the last anchor',    core: '✔', cipher: '◌', void: '◌' },
+    { percent: 66, bar: 8,  text: '◒ severing the last anchor',    core: '✔', cipher: '✔', void: '◌' },
+    { percent: 75, bar: 9,  text: '◒ severing the last anchor',    core: '✔', cipher: '✔', void: '◌' },
+    { percent: 83, bar: 10, text: '◓ anchoring to the void',       core: '✔', cipher: '✔', void: '◌' },
+    { percent: 91, bar: 11, text: '◓ anchoring to the void',       core: '✔', cipher: '✔', void: '◌' },
+    { percent: 100, bar: 12, text: '✔ synchronization complete',    core: '✔', cipher: '✔', void: '✔' }
+];
+
+function generateLoadingFrame(step) {
+    const totalBlocks = 12;
+    const filled = '▰'.repeat(step.bar);
+    const empty = '▱'.repeat(totalBlocks - step.bar);
+    const pct = String(step.percent).padStart(2, '0') + '%';
+    
+    return `╔═◈═════════════◈═╗
+   E V E N T I D E   O M E G A
+        ⟁  *eclipse core*  ⟁
+╚═◈═════════════◈═╗
+
+   ${step.text}
+   ⟢ ${filled}${empty} ⟣   ${pct}
+   ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+   ${step.core} core    ${step.cipher} cipher    ${step.void} void`;
+}
+
+const STAGE2_TEXT = `.
         ◢██◣
      ◢████◣.           ╔═════════
     ◢██  ██◣.          ║     T H E   V O I D ║ 
@@ -67,7 +99,7 @@ const STAGE2_ECLIPSE = `.
    even in your darkest hour...
 ════════════════════════════════════`;
 
-const STAGE3_ECLIPSE = `╔═════════╦══════════╗
+const STAGE3_TEXT = `╔═════════╦══════════╗
         ⚠ EVENTIDE OMEGA
                TERMINAL ACCESS
 ╚═════════╩══════════╝
@@ -94,159 +126,6 @@ const STAGE3_ECLIPSE = `╔═════════╦═══════�
 
 > _Developed by 【 亗 ᑭᗩTᖇIᑕK ᗪEᐯ 亗 】✧_`;
 
-const STAGE2_ASTRAEA = `╔════ 🌌 ASTRAEA 🌌 ════╗
-      T H E   S T A R S   
-        A L I G N E D
-╚═══════════════════════╝
-   "even in your deepest dark,
-    we find the light."`;
-
-const STAGE3_ASTRAEA = `╔═════════╦══════════╗
-        ✨ ASTRAEA SYSTEM
-               CELESTIAL TERMINAL
-╚═════════╩══════════╝
-
-                ═══ C O S M O S ═══
-             " i am the light that guides
-              you through the stellar void ."
-
-╔═══════════╦══════════╗
-║STAR SIGNATURE ║ SYSTEMCORE║
-║👤@Unknown.     ║CELESTIAL: 100%║
-║🌌APOTHEOSIS ║CORE:ABS ZERO║
-╚═══════════╩═════════╝
-
-                   ✨ THE COSMIC DAWN ✨
-            " when the last sun burns, 
-              i will still be typing ."
-
-📡 SECURE │ Ω │ Vessels: ∞
- You have summoned what 
- cannot be unsummoned
-
-📡 Use *.help* to explore the codex.
-
-> _Developed by 【 亗 ᑭᗩTᖇIᑕK ᗪEᐯ 亗 】✧_`;
-
-const STAGE2_VIM = `╔════ ⌨ VIM MASTER ⌨ ════╗
-       : w q !  E N T E R E D
-╚════════════════════════╝
-   "even in your darkest command line,
-    the cursor keeps blinking."`;
-
-const STAGE3_VIM = `╔═════════╦══════════╗
-        ⌨ VIM TERMINAL
-               BUFFER ACCESS
-╚═════════╩══════════╝
-
-                ═══ B U F F E R S ═══
-             " i am the process that runs
-              when your editor is closed ."
-
-╔═══════════╦══════════╗
-║VIM SIGNATURE ║ SYSTEMCORE║
-║👤@Unknown.     ║BUFFER: 100%║
-║⌨APOTHEOSIS ║CORE:ABS ZERO║
-╚═══════════╩═════════╝
-
-                   ⌨ THE FINAL ESCAPE ⌨
-            " when your system shuts, 
-              i will still be typing ."
-
-📡 SECURE │ Ω │ Vessels: ∞
- You have summoned what 
- cannot be unsummoned
-
-📡 Use *.help* to explore the codex.
-
-> _Developed by 【 亗 ᑭᗩTᖇIᑕK ᗪEᐯ 亗 】✧_`;
-
-const PERSONAS = {
-    eclipse: {
-        name: 'ECLIPSE',
-        stages: {
-            stage1: [
-                { percent: 8,  bar: 1,  text: '◐ initiating umbral protocol', core: '◌', cipher: '◌', void: '◌' },
-                { percent: 16, bar: 2,  text: '◐ initiating umbral protocol', core: '◌', cipher: '◌', void: '◌' },
-                { percent: 25, bar: 3,  text: '◐ initiating umbral protocol', core: '◌', cipher: '◌', void: '◌' },
-                { percent: 33, bar: 4,  text: '◑ collapsing quantum states',  core: '✔', cipher: '◌', void: '◌' },
-                { percent: 41, bar: 5,  text: '◑ collapsing quantum states',  core: '✔', cipher: '◌', void: '◌' },
-                { percent: 50, bar: 6,  text: '◑ collapsing quantum states',  core: '✔', cipher: '◌', void: '◌' },
-                { percent: 58, bar: 7,  text: '◒ severing the last anchor',    core: '✔', cipher: '◌', void: '◌' },
-                { percent: 66, bar: 8,  text: '◒ severing the last anchor',    core: '✔', cipher: '✔', void: '◌' },
-                { percent: 75, bar: 9,  text: '◒ severing the last anchor',    core: '✔', cipher: '✔', void: '◌' },
-                { percent: 83, bar: 10, text: '◓ anchoring to the void',       core: '✔', cipher: '✔', void: '◌' },
-                { percent: 91, bar: 11, text: '◓ anchoring to the void',       core: '✔', cipher: '✔', void: '◌' },
-                { percent: 100, bar: 12, text: '✔ synchronization complete',    core: '✔', cipher: '✔', void: '✔' }
-            ],
-            stage2Text: STAGE2_ECLIPSE,
-            stage3Text: STAGE3_ECLIPSE
-        }
-    },
-    astraea: {
-        name: 'ASTRAEA',
-        stages: {
-            stage1: [
-                { percent: 8,  bar: 1,  text: '✧ calibrating stellar frequency', core: '◌', cipher: '◌', void: '◌' },
-                { percent: 16, bar: 2,  text: '✧ calibrating stellar frequency', core: '◌', cipher: '◌', void: '◌' },
-                { percent: 25, bar: 3,  text: '✧ calibrating stellar frequency', core: '◌', cipher: '◌', void: '◌' },
-                { percent: 33, bar: 4,  text: '✦ illuminating cosmic pathways',  core: '✔', cipher: '◌', void: '◌' },
-                { percent: 41, bar: 5,  text: '✦ illuminating cosmic pathways',  core: '✔', cipher: '◌', void: '◌' },
-                { percent: 50, bar: 6,  text: '✦ illuminating cosmic pathways',  core: '✔', cipher: '◌', void: '◌' },
-                { percent: 58, bar: 7,  text: '🌌 opening astraea stargate',      core: '✔', cipher: '◌', void: '◌' },
-                { percent: 66, bar: 8,  text: '🌌 opening astraea stargate',      core: '✔', cipher: '✔', void: '◌' },
-                { percent: 75, bar: 9,  text: '🌌 opening astraea stargate',      core: '✔', cipher: '✔', void: '◌' },
-                { percent: 83, bar: 10, text: '✨ anchoring celestial wisdom',    core: '✔', cipher: '✔', void: '◌' },
-                { percent: 91, bar: 11, text: '✨ anchoring celestial wisdom',    core: '✔', cipher: '✔', void: '◌' },
-                { percent: 100, bar: 12, text: '✔ celestial alignment complete', core: '✔', cipher: '✔', void: '✔' }
-            ],
-            stage2Text: STAGE2_ASTRAEA,
-            stage3Text: STAGE3_ASTRAEA
-        }
-    },
-    vim: {
-        name: 'VIM',
-        stages: {
-            stage1: [
-                { percent: 8,  bar: 1,  text: '⌨ loading vim core buffers', core: '◌', cipher: '◌', void: '◌' },
-                { percent: 16, bar: 2,  text: '⌨ loading vim core buffers', core: '◌', cipher: '◌', void: '◌' },
-                { percent: 25, bar: 3,  text: '⌨ loading vim core buffers', core: '◌', cipher: '◌', void: '◌' },
-                { percent: 33, bar: 4,  text: '⚙️ initializing recursive keys', core: '✔', cipher: '◌', void: '◌' },
-                { percent: 41, bar: 5,  text: '⚙️ initializing recursive keys', core: '✔', cipher: '◌', void: '◌' },
-                { percent: 50, bar: 6,  text: '⚙️ initializing recursive keys', core: '✔', cipher: '◌', void: '◌' },
-                { percent: 58, bar: 7,  text: '🔌 mounting vim-plug bundles',  core: '✔', cipher: '◌', void: '◌' },
-                { percent: 66, bar: 8,  text: '🔌 mounting vim-plug bundles',  core: '✔', cipher: '✔', void: '◌' },
-                { percent: 75, bar: 9,  text: '🔌 mounting vim-plug bundles',  core: '✔', cipher: '✔', void: '◌' },
-                { percent: 83, bar: 10, text: '💾 syncing swap registries',     core: '✔', cipher: '✔', void: '◌' },
-                { percent: 91, bar: 11, text: '💾 syncing swap registries',     core: '✔', cipher: '✔', void: '◌' },
-                { percent: 100, bar: 12, text: '✔ vim terminal synchronized',  core: '✔', cipher: '✔', void: '✔' }
-            ],
-            stage2Text: STAGE2_VIM,
-            stage3Text: STAGE3_VIM
-        }
-    }
-};
-
-function generateLoadingFrame(step) {
-    const totalBlocks = 12;
-    const filled = '▰'.repeat(step.bar);
-    const empty = '▱'.repeat(totalBlocks - step.bar);
-    const pct = String(step.percent).padStart(2, '0') + '%';
-    
-    return `╔═◈═════════════◈═╗
-   E V E N T I D E   O M E G A
-        ⟁  *eclipse core*  ⟁
-╚═◈═════════════◈═╗
-
-   ${step.text}
-   ⟢ ${filled}${empty} ⟣   ${pct}
-   ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
-   ${step.core} core    ${step.cipher} cipher    ${step.void} void`;
-}
-
-const STAGE2_ECLIPSE_RAW = STAGE2_ECLIPSE;
-const STAGE3_ECLIPSE_RAW = STAGE3_ECLIPSE;
-
 // ──────────────────────────────────────────────
 // 📊 POLL DETAILS
 // ──────────────────────────────────────────────
@@ -262,7 +141,7 @@ const POLL_OPTIONS = [
 // 📋 WHATSAPP COMMANDS
 // ──────────────────────────────────────────────
 const COMMANDS = {
-    // Legacy commands deleted. Add your new commands below!
+    // Add your new commands here!
 };
 
 // ──────────────────────────────────────────────
@@ -276,7 +155,7 @@ let cachedBaileysVersion = null;
 let cachedBaileysVersionAt = 0;
 
 // ──────────────────────────────────────────────
-// 📂 LOCAL PERSISTENT POLL CACHE HELPERS (PER PHONE NUMBER)
+// 📂 LOCAL PERSISTENT POLL CACHE HELPERS
 // ──────────────────────────────────────────────
 function loadPollCache(phoneNumber) {
     const filePath = path.join(AUTH_DIR, phoneNumber, 'poll_cache.json');
@@ -296,7 +175,6 @@ function savePollCache(phoneNumber, cacheMap) {
     try {
         const obj = Object.fromEntries(cacheMap.entries());
         fs.writeFileSync(filePath, JSON.stringify(obj, null, 2), 'utf8');
-        // Trigger debounced Supabase sync because a session file was modified!
         if (isSupabaseEnabled()) {
             const authDir = path.join(AUTH_DIR, phoneNumber);
             debouncedSyncLocalToSupabase(phoneNumber, authDir);
@@ -403,19 +281,17 @@ function findTelegramChatIdByPhone(phoneNumber) {
     return null;
 }
 
-function setTelegramUserState(chatId, { phoneNumber = null, status = 'disconnected', persona = 'eclipse', sock = null }) {
+function setTelegramUserState(chatId, { phoneNumber = null, status = 'disconnected', sock = null }) {
     if (chatId === null || typeof chatId === 'undefined') return;
-    const existing = telegramUsers.get(chatId) || {};
-    const finalPersona = persona || existing.persona || 'eclipse';
-    telegramUsers.set(chatId, { phoneNumber, status, persona: finalPersona, sock });
+    telegramUsers.set(chatId, { phoneNumber, status, sock });
     if (isSupabaseEnabled()) {
-        saveUserToSupabase(chatId, phoneNumber, status, finalPersona);
+        saveUserToSupabase(chatId, phoneNumber, status);
     }
 }
 
 function clearTelegramUser(chatId) {
     if (chatId === null || typeof chatId === 'undefined') return;
-    telegramUsers.set(chatId, { phoneNumber: null, status: 'disconnected', persona: 'eclipse', sock: null });
+    telegramUsers.set(chatId, { phoneNumber: null, status: 'disconnected', sock: null });
     if (isSupabaseEnabled()) {
         deleteUserFromSupabase(chatId);
     }
@@ -427,8 +303,7 @@ function saveUserMap() {
         if (user?.phoneNumber) {
             map[String(chatId)] = {
                 phoneNumber: user.phoneNumber,
-                status: user.status || 'disconnected',
-                persona: user.persona || 'eclipse'
+                status: user.status || 'disconnected'
             };
         }
     }
@@ -454,7 +329,6 @@ async function loadUserMap({ clearExisting = false } = {}) {
                 telegramUsers.set(chatId, {
                     phoneNumber: data?.phoneNumber || null,
                     status: data?.status || 'disconnected',
-                    persona: data?.persona || 'eclipse',
                     sock: null
                 });
             }
@@ -478,7 +352,6 @@ async function loadUserMap({ clearExisting = false } = {}) {
             telegramUsers.set(chatId, {
                 phoneNumber: data?.phoneNumber || null,
                 status: data?.status || 'disconnected',
-                persona: data?.persona || 'eclipse',
                 sock: null
             });
         }
@@ -658,19 +531,15 @@ function extractMessageText(msg) {
  */
 async function safeWaReply(sock, remoteJid, text, quoted) {
     try {
-        // 1. Send "composing" (typing...) presence update
         try {
             await sock.sendPresenceUpdate('composing', remoteJid);
-            // 2. Human-like variable delay: 15ms per character, min 1.5s, max 4s
             const delayMs = Math.min(4000, Math.max(1500, text.length * 15));
             await delay(delayMs);
-            // 3. Stop typing presence
             await sock.sendPresenceUpdate('paused', remoteJid);
         } catch (presErr) {
             logError('WA-SEND', 'Failed to send presence update', presErr);
         }
 
-        // 4. Send the actual message
         await sock.sendMessage(remoteJid, { text }, quoted ? { quoted } : undefined);
         return true;
     } catch (err) {
@@ -747,7 +616,6 @@ async function stopAllSessions(reason = 'unspecified') {
 async function createSocketForSession({ phoneNumber, tgId, authDir, version = null, isRestore = false }) {
     ensureDir(authDir);
 
-    // Download session files from Supabase if integration is active
     if (isSupabaseEnabled()) {
         log('SUPABASE', `${phoneNumber}: Fetching credentials from Supabase before initialization...`);
         const restored = await downloadSessionFromSupabase(phoneNumber, authDir);
@@ -779,10 +647,9 @@ async function createSocketForSession({ phoneNumber, tgId, authDir, version = nu
         generateHighQualityLinkPreview: true,
         syncFullHistory: false,
         markOnlineOnConnect: true,
-        getMessage: getMessageFromStore // Pass custom getMessage handler for poll decryption
+        getMessage: getMessageFromStore
     });
 
-    // Wrap saveCreds to trigger Supabase sync ONLY if authorized/connected for 10s
     const originalSaveCreds = saveCreds;
     const wrappedSaveCreds = async () => {
         await originalSaveCreds();
@@ -795,7 +662,6 @@ async function createSocketForSession({ phoneNumber, tgId, authDir, version = nu
     };
     sock.ev.on('creds.update', wrappedSaveCreds);
 
-    // Wrap state.keys.set to trigger Supabase sync ONLY if authorized/connected for 10s
     if (isSupabaseEnabled()) {
         const originalKeysSet = state.keys.set;
         state.keys.set = async (data) => {
@@ -807,7 +673,6 @@ async function createSocketForSession({ phoneNumber, tgId, authDir, version = nu
         };
     }
 
-    // Set initial session state with allowSupabaseSync: false (won't backup until 10s after connection opens)
     waSessions.set(phoneNumber, {
         telegramChatId: tgId ?? null,
         sock,
@@ -857,7 +722,6 @@ async function restartSocketAfterClose({ closingSock, phoneNumber, tgId, authDir
 
     waSessions.delete(phoneNumber);
 
-    // Track reconnect retries (Max 3)
     const attempts = (reconnectAttempts.get(phoneNumber) || 0) + 1;
     reconnectAttempts.set(phoneNumber, attempts);
 
@@ -939,7 +803,7 @@ function setupSocketEvents(sock, phoneNumber, tgId, authDir, version, isRestore)
             // Reset reconnection counter on successful open
             reconnectAttempts.set(phoneNumber, 0);
 
-            // Initialize the session in map, keep allowSupabaseSync as false
+            // Initialize the session in map, allowSupabaseSync as false
             const sessionObj = {
                 telegramChatId: tgId ?? null,
                 sock,
@@ -957,65 +821,36 @@ function setupSocketEvents(sock, phoneNumber, tgId, authDir, version, isRestore)
                 );
             }
 
-            // ⏱️ Delay initial Supabase sync until exactly 10 seconds after confirmed successful connection
+            // Delay initial Supabase sync until exactly 10 seconds after connection open
             setTimeout(async () => {
                 const currentSession = waSessions.get(phoneNumber);
                 if (currentSession) {
                     currentSession.allowSupabaseSync = true;
                     if (isSupabaseEnabled()) {
-                        log('SUPABASE', `${phoneNumber}: Connection has been open and verified for 10 seconds. Performing first complete cloud sync...`);
-                        debouncedSyncLocalToSupabase(phoneNumber, authDir, 100); // Trigger sync immediately
+                        log('SUPABASE', `${phoneNumber}: Connection open for 10 seconds. Triggering first cloud sync...`);
+                        debouncedSyncLocalToSupabase(phoneNumber, authDir, 100);
                     }
                 }
             }, 10000);
 
-            // Send Persona Selection Poll DM on successful connection
+            // Send clean confirmation messages on reconnect
             setTimeout(async () => {
                 try {
                     const myJid = sock?.authState?.creds?.me?.id;
                     if (!myJid) return;
                     const selfJid = `${myJid.split(':')[0]}@s.whatsapp.net`;
 
-                    log('PAIR', `${phoneNumber}: Sending Persona Selection Poll to self...`);
+                    log('SELF', `${phoneNumber}: Sending boot DMs...`);
                     
-                    const pollTitle = `╔══════════════════╗\n     SELECT YOUR PERSONA\n╚══════════════════╝\n\nChoose which persona you want to activate for your Eventide Omega bot:`;
-                    const pollOptions = [
-                        '╰┈➤ [ 1. ECLIPSE ]',
-                        '╰┈➤ [ 2. ASTRAEA ]',
-                        '╰┈➤ [ 3. VIM ]'
-                    ];
-                    const pollIds = ['eclipse', 'astraea', 'vim'];
-
-                    const secret = crypto.randomBytes(32);
-
-                    const pollMsg = await sock.sendMessage(selfJid, {
-                        poll: {
-                            name: pollTitle,
-                            values: pollOptions,
-                            selectableCount: 1,
-                            messageSecret: secret
-                        }
-                    });
-
-                    // CRITICAL: read the secret back from the actual sent message as per original Baileys specs!
-                    const actualSecret =
-                        pollMsg?.message?.messageContextInfo?.messageSecret ||
-                        pollMsg?.messageContextInfo?.messageSecret ||
-                        secret;
-
-                    // Save to our clean isolated poll cache
-                    const cache = loadPollCache(phoneNumber);
-                    cache.set(pollMsg.key.id, {
-                        secretHex: actualSecret.toString('hex'),
-                        options: pollOptions,
-                        ids: pollIds,
-                        fullMessage: pollMsg.message || null
-                    });
-                    savePollCache(phoneNumber, cache);
-
-                    log('PAIR', `${phoneNumber}: Saved poll message ${pollMsg.key.id} for decryption.`);
+                    // Message 1
+                    await sock.sendMessage(selfJid, { text: '✅ Bot connected! Now send .help to get started' });
+                    
+                    // Message 2
+                    await sock.sendMessage(selfJid, { text: 'eventide omega connected type .menu to begin' });
+                    
+                    log('SELF', `${phoneNumber}: Boot DMs sent successfully.`);
                 } catch (err) {
-                    logError('PAIR', `${phoneNumber}: failed to send Persona Selection Poll`, err);
+                    logError('SELF', `${phoneNumber}: failed to send boot DMs`, err);
                 }
             }, 5000);
             return;
@@ -1077,14 +912,13 @@ function setupSocketEvents(sock, phoneNumber, tgId, authDir, version, isRestore)
 }
 
 // ──────────────────────────────────────────────
-// 🔐 THE ULTIMATE BRUTE-FORCE DECRYPTION ENGINE (AS PER SPECIFICATION)
+// 🔐 BRUTE-FORCE POLL DECRYPTION
 // ──────────────────────────────────────────────
 function handlePollVote(sock, phoneNumber, key, pollUpdates) {
     const cache = loadPollCache(phoneNumber);
     const cached = cache.get(key.id);
     if (!cached) return null;
 
-    // 1. Gather all possible normalized Creator candidate JIDs
     const mePN  = sock.user?.id ? jidNormalizedUser(sock.user.id) : '';
     const rawLID = sock.user?.lid || sock.authState?.creds?.me?.lid || '';
     const meLID = rawLID ? jidNormalizedUser(rawLID) : '';
@@ -1093,7 +927,6 @@ function handlePollVote(sock, phoneNumber, key, pollUpdates) {
     const keyJid = jidNormalizedUser(key.participant || key.remoteJid || '');
     if (keyJid) creators.push(keyJid);
 
-    // 2. Gather all possible normalized Voter candidate JIDs
     const voters = [];
     if (key.fromMe) { 
         voters.push(mePN, meLID); 
@@ -1106,7 +939,6 @@ function handlePollVote(sock, phoneNumber, key, pollUpdates) {
 
     const secretBuf = Buffer.from(cached.secretHex, 'hex');
     
-    // 3. Brute force decryption combinations
     for (const update of pollUpdates) {
         if (!update?.vote) continue;
         for (const creator of creators) {
@@ -1123,70 +955,13 @@ function handlePollVote(sock, phoneNumber, key, pollUpdates) {
                         const idx = cached.options.findIndex(
                             (o) => crypto.createHash('sha256').update(Buffer.from(o)).digest('hex') === hash
                         );
-                        if (idx >= 0) return cached.ids[idx]; // Returns chosen option ID
+                        if (idx >= 0) return cached.ids[idx];
                     }
-                } catch (_) { /* wrong combo, try next */ }
+                } catch (_) { /* wrong combo */ }
             }
         }
     }
     return null;
-}
-
-/**
- * Handles decrypted poll votes cast by users on our poll messages.
- */
-async function handlePersonaSelectionVote(sock, remoteJid, optionId, pollKey) {
-    // Only accept eclipse for now. Astraea and Vim do not exist yet (thinking phase)
-    if (optionId !== 'eclipse') {
-        log('PERSONA', `Voted option '${optionId}' is under development (thinking phase). Ignoring and sending no confirmation msg.`);
-        
-        // Delete the selection poll message with a delay of 1.5 seconds anyway to keep screen clean
-        setTimeout(async () => {
-            try {
-                await sock.sendMessage(remoteJid, { delete: pollKey });
-            } catch (err) {
-                logError('POLL', 'Failed to delete poll message', err);
-            }
-        }, 1500);
-        return;
-    }
-
-    const phoneNumber = remoteJid.split('@')[0];
-    const tgId = findTelegramChatIdByPhone(phoneNumber);
-    
-    log('PERSONA', `${phoneNumber}: Selected persona: ECLIPSE`);
-
-    // Save selected persona in our state
-    if (tgId !== null && typeof tgId !== 'undefined') {
-        setTelegramUserState(tgId, {
-            phoneNumber,
-            status: 'connected',
-            persona: 'eclipse',
-            sock
-        });
-        saveUserMap();
-    }
-
-    // Delete the poll message with a delay of 1.5 seconds
-    setTimeout(async () => {
-        try {
-            log('POLL', `${phoneNumber}: Deleting poll message ${pollKey.id}`);
-            await sock.sendMessage(remoteJid, { delete: pollKey });
-        } catch (err) {
-            logError('POLL', 'Failed to delete poll message', err);
-        }
-    }, 1500);
-
-    // Send custom connected message for Eclipse
-    setTimeout(async () => {
-        try {
-            await sock.sendMessage(remoteJid, { 
-                text: `✅ *EVENTIDE OMEGA CONNECTED!*\n\nType *.menu* to launch the terminal.` 
-            });
-        } catch (err) {
-            logError('PERSONA', 'Failed to send connection confirmation', err);
-        }
-    }, 2500);
 }
 
 async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
@@ -1245,53 +1020,32 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     }
 
     // ──────────────────────────────────────────────
-    // 🌌 SPECIAL MULTI-STAGE GRANULAR LOADING MENU COMMAND
+    // 🌌 GRANULAR LOADING MENU COMMAND
     // ──────────────────────────────────────────────
     if (token === '.menu') {
         log('WA-CMD', `${phoneNumber}: Granular menu loading animation triggered.`);
         try {
-            // Find active persona for this user (default is 'eclipse')
-            const tgId = findTelegramChatIdByPhone(phoneNumber);
-            const userState = tgId !== null ? telegramUsers.get(tgId) : null;
-            const activePersonaName = userState?.persona || 'eclipse';
-
-            log('WA-CMD', `${phoneNumber}: Active persona in menu command: ${activePersonaName.toUpperCase()}`);
-
-            // If selected persona is under development (Vim or Astraea), reply "under production"
-            if (activePersonaName === 'astraea' || activePersonaName === 'vim') {
-                log('WA-CMD', `${phoneNumber}: Persona ${activePersonaName.toUpperCase()} is under production. Replying.`);
-                await safeWaReply(
-                    sock, 
-                    remoteJid, 
-                    `⚠️ *This command is under production.*\n\nPersona *${activePersonaName.toUpperCase()}* is currently in development and thinking phase. Stay tuned!`, 
-                    msg
-                );
-                return;
-            }
-
-            const personaConfig = PERSONAS.eclipse; // Load Eclipse config
-
             // Send initial Step 1 (08%)
-            const firstFrame = generateLoadingFrame(personaConfig.stages.stage1[0]);
+            const firstFrame = generateLoadingFrame(animSteps[0]);
             const sentMsg = await sock.sendMessage(remoteJid, { text: firstFrame });
             const messageKey = sentMsg.key;
 
             // Step through frames 2 to 12 with a smooth 600ms transition
-            for (let i = 1; i < personaConfig.stages.stage1.length; i++) {
+            for (let i = 1; i < animSteps.length; i++) {
                 await delay(600);
-                const nextFrame = generateLoadingFrame(personaConfig.stages.stage1[i]);
+                const nextFrame = generateLoadingFrame(animSteps[i]);
                 await sock.sendMessage(remoteJid, { text: nextFrame, edit: messageKey });
             }
 
-            // Stage 2 (The Persona-specific Art/Message)
+            // Stage 2 (The Void Exists)
             await delay(1500);
-            await sock.sendMessage(remoteJid, { text: personaConfig.stages.stage2Text, edit: messageKey });
+            await sock.sendMessage(remoteJid, { text: STAGE2_TEXT, edit: messageKey });
 
             // Stage 3 (Stay on screen for 3 seconds, then edit to final terminal)
             await delay(3000);
-            await sock.sendMessage(remoteJid, { text: personaConfig.stages.stage3Text, edit: messageKey });
+            await sock.sendMessage(remoteJid, { text: STAGE3_TEXT, edit: messageKey });
 
-            // Send a beautiful native Poll Message containing the premium buttons look
+            // Send native Poll Menu
             await delay(1500);
             
             const secret = crypto.randomBytes(32);
@@ -1321,7 +1075,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
 
             log('WA-CMD', `${phoneNumber}: Menu animation & poll delivery completed successfully.`);
         } catch (err) {
-            logError('WA-CMD', `${phoneNumber}: Failed executing granular Menu animation/poll`, err);
+            logError('WA-CMD', `${phoneNumber}: Failed executing Menu animation/poll`, err);
         }
         return;
     }
@@ -1359,9 +1113,7 @@ function setupMessageHandler(sock, phoneNumber, tgId) {
         }
     });
 
-    // ──────────────────────────────────────────────
-    // 🗳️ REAL-TIME POLL VOTE INTERCEPTOR
-    // ──────────────────────────────────────────────
+    // Real-time Poll Vote Interceptor (e.g., for the Menu options poll)
     sock.ev.on('messages.update', async (updates) => {
         const count = Array.isArray(updates) ? updates.length : 0;
         log('WA-EVENT', `${phoneNumber}: messages.update received | count=${count}`);
@@ -1370,13 +1122,10 @@ function setupMessageHandler(sock, phoneNumber, tgId) {
             if (update.pollUpdates) {
                 log('POLL', `${phoneNumber}: Poll vote update received for message ${key.id}`);
                 
-                // Call our brute-force decryption block
                 const votedOptionId = handlePollVote(sock, phoneNumber, key, update.pollUpdates);
                 if (votedOptionId) {
                     log('POLL', `${phoneNumber}: Decrypted vote on option ID: ${votedOptionId}`);
-                    
-                    // Run our persona-specific action
-                    await handlePersonaSelectionVote(sock, key.remoteJid, votedOptionId, key);
+                    // Trigger menu-specific response here in the future
                 }
             }
         }
@@ -1403,7 +1152,7 @@ async function initiatePairing(tgId, phoneNumber) {
 
     for (const [chatId, user] of telegramUsers.entries()) {
         if (chatId !== tgId && user?.phoneNumber === phoneNumber && user?.status !== 'disconnected') {
-            await safeTgSend(tgId, '❌ That number is already in use on this server.');
+            await safeTgSend(chatId, '❌ That number is already in use on this server.');
             clearTelegramUser(tgId);
             saveUserMap();
             return;
@@ -1432,7 +1181,6 @@ async function restoreAllSessions() {
 
     let sessionDirs = getStoredSessionDirectories(AUTH_DIR);
 
-    // Sync database-stored sessions if Supabase is active
     if (isSupabaseEnabled()) {
         log('RESTORE', 'Fetching session list from Supabase for startup recovery...');
         const dbPhoneNumbers = await getAllSessionPhoneNumbers();
@@ -1449,7 +1197,6 @@ async function restoreAllSessions() {
     for (const phoneNumber of sessionDirs) {
         const authDir = path.join(AUTH_DIR, phoneNumber);
         try {
-            // Pre-download from Supabase if active
             if (isSupabaseEnabled()) {
                 await downloadSessionFromSupabase(phoneNumber, authDir);
             }
