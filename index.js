@@ -14,6 +14,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
+import https from 'https';
 
 // Import Supabase Sync Service
 import {
@@ -151,11 +152,12 @@ const telegramUsers = new Map();
 const waSessions = new Map();
 const reconnectAttempts = new Map(); // Tracks reconnection retries per phone number (Max 3)
 const sentPolls = new Map(); // Tracks sent poll creation messages in memory for decryption (ID -> message)
+const helpModeUsers = new Map(); // Tracks active AI Help Mode chats (JID -> timeoutTimer)
 let cachedBaileysVersion = null;
 let cachedBaileysVersionAt = 0;
 
 // ──────────────────────────────────────────────
-// 📂 LOCAL PERSISTENT POLL CACHE HELPERS
+// 📂 LOCAL PERSISTENT BOT CONFIG HELPERS (SAVED TO SUPABASE AUTOMATICALLY)
 // ──────────────────────────────────────────────
 function loadPollCache(phoneNumber) {
     const filePath = path.join(AUTH_DIR, phoneNumber, 'poll_cache.json');
@@ -182,6 +184,196 @@ function savePollCache(phoneNumber, cacheMap) {
     } catch (err) {
         logError('CACHE', `${phoneNumber}: Failed to save poll_cache.json`, err);
     }
+}
+
+function loadBotMode(phoneNumber) {
+    const filePath = path.join(AUTH_DIR, phoneNumber, 'bot_mode.txt');
+    if (fs.existsSync(filePath)) {
+        try {
+            return fs.readFileSync(filePath, 'utf8').trim();
+        } catch (err) {
+            logError('MODE', `${phoneNumber}: Failed to read bot_mode.txt`, err);
+        }
+    }
+    return 'public'; // Default mode is public
+}
+
+function saveBotMode(phoneNumber, mode) {
+    const filePath = path.join(AUTH_DIR, phoneNumber, 'bot_mode.txt');
+    try {
+        fs.writeFileSync(filePath, mode, 'utf8');
+        if (isSupabaseEnabled()) {
+            const authDir = path.join(AUTH_DIR, phoneNumber);
+            debouncedSyncLocalToSupabase(phoneNumber, authDir);
+        }
+    } catch (err) {
+        logError('MODE', `${phoneNumber}: Failed to save bot_mode.txt`, err);
+    }
+}
+
+// ──────────────────────────────────────────────
+// 🧠 UNIFIED MULTI-PROVIDER AI ENGINE
+// ──────────────────────────────────────────────
+
+async function callGemini(prompt, systemInstruction = '', apiKey) {
+    const model = process.env.GEMINI_MODEL || "gemini-2.0-flash";
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+    const body = JSON.stringify({
+        system_instruction: systemInstruction ? { parts: [{ text: systemInstruction }] } : undefined,
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.85 }
+    });
+
+    return new Promise((resolve, reject) => {
+        const req = https.request(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        }, (res) => {
+            let data = '';
+            res.on('data', chunk => data += chunk);
+            res.on('end', () => {
+                try {
+                    const parsed = JSON.parse(data);
+                    const text = parsed?.candidates?.[0]?.content?.parts?.[0]?.text;
+                    if (text) resolve(text.trim());
+                    else reject(new Error(parsed?.error?.message || 'Empty Gemini response'));
+                } catch (e) { reject(e); }
+            });
+        });
+        req.on('error', reject);
+        req.write(body);
+        req.end();
+    });
+}
+
+async function callOpenAI(prompt, systemInstruction = '', apiKey) {
+    const url = `https://api.openai.com/v1/chat/completions`;
+    const messages = [];
+    if (systemInstruction) {
+        messages.push({ role: 'system', content: systemInstruction });
+    }
+    messages.push({ role: 'user', content: prompt });
+    const body = JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages,
+        temperature: 0.85
+    });
+
+    return new Promise((resolve, reject) => {
+        const req = https.request(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${apiKey}`
+            }
+        }, (res) => {
+            let data = '';
+            res.on('data', chunk => data += chunk);
+            res.on('end', () => {
+                try {
+                    const parsed = JSON.parse(data);
+                    const text = parsed?.choices?.[0]?.message?.content;
+                    if (text) resolve(text.trim());
+                    else reject(new Error(parsed?.error?.message || 'Empty OpenAI response'));
+                } catch (e) { reject(e); }
+            });
+        });
+        req.on('error', reject);
+        req.write(body);
+        req.end();
+    });
+}
+
+async function callPollinations(prompt, systemInstruction = '') {
+    const url = `https://text.pollinations.ai/`;
+    const messages = [];
+    if (systemInstruction) {
+        messages.push({ role: 'system', content: systemInstruction });
+    }
+    messages.push({ role: 'user', content: prompt });
+    const body = JSON.stringify({
+        messages,
+        model: 'openai',
+        seed: Math.floor(Math.random() * 9999)
+    });
+
+    return new Promise((resolve, reject) => {
+        const req = https.request(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        }, (res) => {
+            let data = '';
+            res.on('data', chunk => data += chunk);
+            res.on('end', () => {
+                const text = data.trim();
+                if (!text) return reject(new Error('Empty Pollinations response'));
+                
+                let parsed = null;
+                try { parsed = JSON.parse(text); } catch (_) {}
+
+                const out = parsed?.choices?.[0]?.message?.content || parsed?.text || text;
+                if (out && String(out).trim()) {
+                    resolve(String(out).trim());
+                } else {
+                    reject(new Error('Empty output from Pollinations'));
+                }
+            });
+        });
+        req.on('error', reject);
+        req.write(body);
+        req.end();
+    });
+}
+
+async function callUniversalAI(prompt, systemInstruction = '') {
+    const GEMINI_KEY = (process.env.GEMINI_API_KEY || '').trim();
+    if (GEMINI_KEY && GEMINI_KEY.length > 5) {
+        try {
+            log('AI', 'Attempting Gemini AI response...');
+            return await callGemini(prompt, systemInstruction, GEMINI_KEY);
+        } catch (err) {
+            logError('AI', 'Gemini AI failed, trying fallback...', err);
+        }
+    }
+
+    const OPENAI_KEY = (process.env.OPENAI_API_KEY || '').trim();
+    if (OPENAI_KEY && OPENAI_KEY.length > 5) {
+        try {
+            log('AI', 'Attempting OpenAI response...');
+            return await callOpenAI(prompt, systemInstruction, OPENAI_KEY);
+        } catch (err) {
+            logError('AI', 'OpenAI failed, trying fallback...', err);
+        }
+    }
+
+    // Free keyless fallback
+    try {
+        log('AI', 'Attempting Pollinations AI keyless fallback...');
+        return await callPollinations(prompt, systemInstruction);
+    } catch (err) {
+        logError('AI', 'Pollinations AI failed', err);
+        throw new Error('All AI providers and fallbacks failed to respond.');
+    }
+}
+
+function getHelpSystemPrompt() {
+    return `You are "Eventide Omega", an advanced, highly sophisticated, yet friendly and casual AI Customer Care Assistant for the Eventide Omega WhatsApp multi-device bot.
+Your tone should be casual, helpful, reassuring, and conversational (e.g. use "oh, I get you!", "don't worry, we got you covered!").
+You assist users in understanding how to use the bot, explain commands, and trouble-shoot.
+
+Key Information about the bot:
+- To see the main menu, type ".menu". It triggers a premium animated loading bar sequence and presents active menu polls.
+- The bot supports several administrative group commands:
+  1. ".join <link>": Joins a group via a WhatsApp invite link.
+  2. ".add <number>": Adds a member to the group (sender must be admin, bot must be admin).
+  3. ".kick <number/reply/mention>": Removes a participant from the group (supports replying to their message, tagging them, or entering their number).
+  4. ".link": Generates and sends the current group invite link.
+- Bot Access Privacy Mode (".mode"):
+  - ".mode owner" (or shortcut ".owner"): Locks the bot so only the paired owner (the primary account) can execute dot commands.
+  - ".mode public" (or shortcut ".public"): Opens the bot so anyone in private chats or groups can use commands.
+- Security Features:
+  - You can answer questions about safety, antilink, anti-spam, and setup. If a command doesn't exist yet, explain it casually and professionally.
+- Remember: Keep answers friendly, casual, and highly informative! Speak directly to the user as a real customer care agent.`;
 }
 
 // ──────────────────────────────────────────────
@@ -1000,24 +1192,64 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     );
 
     const text = parsed.text.trim();
-    if (!text) {
-        log('WA-PARSE', `${phoneNumber}: no command text extracted from message ${msgId}.`);
-        return;
-    }
-
+    
+    // ──────────────────────────────────────────────
+    // 🗣️ AI HELP ORACLE INTERCEPTOR (HUMAN-LIKE typing, no prefix needed!)
+    // ──────────────────────────────────────────────
     const normalized = text.trim();
     const token = normalized.split(/\s+/)[0].toLowerCase();
     const args = normalized.split(/\s+/).slice(1);
     const startsWithDot = normalized.startsWith('.');
 
+    if (!startsWithDot) {
+        // If they are actively in Help Mode, chat with Customer Care AI Oracle
+        if (helpModeUsers.has(remoteJid)) {
+            log('HELP-MODE', `${phoneNumber}: Intercepting conversation message in help mode.`);
+            
+            // Reset the 10-minute timer
+            const stateObj = helpModeUsers.get(remoteJid);
+            if (stateObj?.timer) clearTimeout(stateObj.timer);
+
+            const newTimer = setTimeout(async () => {
+                helpModeUsers.delete(remoteJid);
+                try {
+                    await sock.sendMessage(remoteJid, {
+                        text: `╔═════ HELP_MODE ═════╗\n\n   ⏳  Help mode timed out after 10 min inactivity.\n   Type *.help* again to re-enable.`
+                    });
+                } catch {}
+            }, 10 * 60 * 1000);
+
+            helpModeUsers.set(remoteJid, { timer: newTimer });
+
+            try {
+                const systemPrompt = getHelpSystemPrompt();
+                const aiReply = await callUniversalAI(text, systemPrompt);
+                await safeWaReply(sock, remoteJid, `🤖 *Eventide Help:*\n\n${aiReply}`, msg);
+            } catch (err) {
+                logError('HELP-MODE', 'AI Help reply failed', err);
+                await safeWaReply(sock, remoteJid, '❌ *AI Oracle Offline*\n\nI couldn\'t connect to the support grid. Please try again in a moment!', msg);
+            }
+            return;
+        }
+        return; // Ignore regular non-dot messages
+    }
+
     log(
         'WA-CMD',
-        `${phoneNumber}: command flow | raw=${JSON.stringify(trimForLog(text, 250))} normalized=${JSON.stringify(trimForLog(normalized, 250))} token=${JSON.stringify(token)} startsWithDot=${startsWithDot}`
+        `${phoneNumber}: command flow | raw=${JSON.stringify(trimForLog(text, 250))} normalized=${JSON.stringify(trimForLog(normalized, 250))} token=${JSON.stringify(token)}`
     );
 
-    if (!startsWithDot) {
-        log('WA-CMD', `${phoneNumber}: message ${msgId} is not a dot command. Ignoring.`);
-        return;
+    // ──────────────────────────────────────────────
+    // 🔒 BOT ACCESS PRIVACY MODE ENFORCEMENT (.mode owner)
+    // ──────────────────────────────────────────────
+    const currentMode = loadBotMode(phoneNumber);
+    if (currentMode === 'owner') {
+        const senderJid = msg.key.participant || msg.key.remoteJid;
+        const isSenderOwner = msg.key.fromMe || jidNormalizedUser(senderJid) === jidNormalizedUser(sock.user.id);
+        if (!isSenderOwner) {
+            log('SECURITY', `${phoneNumber}: Ignored command ${token} from non-owner: ${senderJid}`);
+            return; // Ignore completely
+        }
     }
 
     // ──────────────────────────────────────────────
@@ -1026,25 +1258,27 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     if (token === '.menu') {
         log('WA-CMD', `${phoneNumber}: Granular menu loading animation triggered.`);
         try {
+            const personaConfig = PERSONAS.eclipse; // Load Eclipse config
+
             // Send initial Step 1 (08%)
-            const firstFrame = generateLoadingFrame(animSteps[0]);
+            const firstFrame = generateLoadingFrame(personaConfig.stages.stage1[0]);
             const sentMsg = await sock.sendMessage(remoteJid, { text: firstFrame });
             const messageKey = sentMsg.key;
 
             // Step through frames 2 to 12 with a smooth 600ms transition
-            for (let i = 1; i < animSteps.length; i++) {
+            for (let i = 1; i < personaConfig.stages.stage1.length; i++) {
                 await delay(600);
-                const nextFrame = generateLoadingFrame(animSteps[i]);
+                const nextFrame = generateLoadingFrame(personaConfig.stages.stage1[i]);
                 await sock.sendMessage(remoteJid, { text: nextFrame, edit: messageKey });
             }
 
-            // Stage 2 (The Void Exists)
+            // Stage 2 (The Persona-specific Art/Message)
             await delay(1500);
-            await sock.sendMessage(remoteJid, { text: STAGE2_TEXT, edit: messageKey });
+            await sock.sendMessage(remoteJid, { text: personaConfig.stages.stage2Text, edit: messageKey });
 
             // Stage 3 (Stay on screen for 3 seconds, then edit to final terminal)
             await delay(3000);
-            await sock.sendMessage(remoteJid, { text: STAGE3_TEXT, edit: messageKey });
+            await sock.sendMessage(remoteJid, { text: personaConfig.stages.stage3Text, edit: messageKey });
 
             // Send native Poll Menu
             await delay(1500);
@@ -1059,6 +1293,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
                 }
             });
 
+            // Save poll creation in memory & phone cache for decryption
             const actualSecret =
                 pollMsg?.message?.messageContextInfo?.messageSecret ||
                 pollMsg?.messageContextInfo?.messageSecret ||
@@ -1081,7 +1316,157 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     }
 
     // ──────────────────────────────────────────────
-    // 👥 GROUP COMMANDS (NEW!)
+    // 🗣️ CUSTOMER CARE AI ORACLE (.help <question>)
+    // ──────────────────────────────────────────────
+    if (token === '.help') {
+        const question = args.join(' ').trim();
+        const systemPrompt = getHelpSystemPrompt();
+
+        // If a specific question is asked, run AI immediately
+        if (question) {
+            try {
+                log('HELP-CMD', `${phoneNumber}: Querying AI Oracle: ${question}`);
+                const response = await callUniversalAI(question, systemPrompt);
+                await safeWaReply(sock, remoteJid, `🤖 *Eventide Help:*\n\n${response}`, msg);
+            } catch (err) {
+                logError('HELP-CMD', 'AI Oracle failed', err);
+                await safeWaReply(sock, remoteJid, '❌ *AI Oracle Offline*\n\nI couldn\'t connect to the support grid. Please try again soon!', msg);
+            }
+            return;
+        }
+
+        // Otherwise, toggle help mode ON or OFF
+        const helpKey = remoteJid;
+        if (helpModeUsers.has(helpKey)) {
+            const stateObj = helpModeUsers.get(helpKey);
+            if (stateObj?.timer) clearTimeout(stateObj.timer);
+            helpModeUsers.delete(helpKey);
+            await safeWaReply(
+                sock, 
+                remoteJid, 
+                `   ╾━━━ HELP_MODE — OFFLINE ━━━╼\n\n` +
+                `   🔇  AI guide deactivated.\n\n` +
+                `   " The oracle steps back.\n     You walk alone again. "`, 
+                msg
+            );
+        } else {
+            const timer = setTimeout(async () => {
+                helpModeUsers.delete(helpKey);
+                try {
+                    await sock.sendMessage(remoteJid, {
+                        text: `╔═════ HELP_MODE ═════╗\n\n   ⏳  Help mode timed out after 10 min inactivity.\n   Type *.help* again to re-enable.`
+                    });
+                } catch {}
+            }, 10 * 60 * 1000);
+
+            helpModeUsers.set(helpKey, { timer });
+            await safeWaReply(
+                sock, 
+                remoteJid, 
+                `   ╔══ HELP_PROTOCOL — ACTIVE ══╗\n\n` +
+                `   ✨  *AI help mode is ON*\n\n` +
+                `   Ask me anything about the bot:\n` +
+                `   • _"how do I use antilink?"_\n` +
+                `   • _"what does .kick do?"_\n` +
+                `   • _"how does .mode work?"_\n\n` +
+                `   🔄 Auto-exits after 10 min silence.\n` +
+                `   Type *.help* again to turn off.\n\n` +
+                `   " The oracle is listening. "`, 
+                msg
+            );
+        }
+        return;
+    }
+
+    // ──────────────────────────────────────────────
+    // 🔒 PRIVACY ACCESS LOCK (.mode public / owner)
+    // ──────────────────────────────────────────────
+    if (token === '.mode') {
+        const targetMode = args[0]?.toLowerCase();
+        const currentMode = loadBotMode(phoneNumber);
+
+        if (!targetMode || !['public', 'owner'].includes(targetMode)) {
+            await safeWaReply(
+                sock, 
+                remoteJid, 
+                `📌 *Bot Access Privacy Mode*\n━━━━━━━━━━━━━━━━━━━━\n\n` +
+                `👤 *Current Mode*: ${currentMode === 'owner' ? 'OWNER ONLY 🔒' : 'PUBLIC 🔓'}\n\n` +
+                `💡 *Usage*:\n` +
+                `• *.mode public* — Open commands to everyone\n` +
+                `• *.mode owner* — Restrict commands to owner only`, 
+                msg
+            );
+            return;
+        }
+
+        // Verify the sender is the paired owner
+        const senderJid = msg.key.participant || msg.key.remoteJid;
+        const isSenderOwner = msg.key.fromMe || jidNormalizedUser(senderJid) === jidNormalizedUser(sock.user.id);
+        if (!isSenderOwner) {
+            await safeWaReply(sock, remoteJid, '❌ Only the paired bot owner can modify the access mode.', msg);
+            return;
+        }
+
+        saveBotMode(phoneNumber, targetMode);
+
+        const bannerText = targetMode === 'owner'
+            ? `   ░▒▓█ *SYSTEM_MODAL_SHIFT* █▓▒░\n\n` +
+              `   [ 💠 ] *PREVIOUS* : ${currentMode.toUpperCase()}\n` +
+              `   [ ⚡ ] *CURRENT* : OWNER_ONLY\n` +
+              `   [ 🛠️ ] *STATUS* : RECONFIGURED\n\n` +
+              `   " *I choose who breathes in*\n     *this space. The gates are*\n     *sealed at my command.* "`
+            : `   ░▒▓█ *SYSTEM_MODAL_SHIFT* █▓▒░\n\n` +
+              `   [ 💠 ] *PREVIOUS* : ${currentMode.toUpperCase()}\n` +
+              `   [ ⚡ ] *CURRENT* : PUBLIC\n` +
+              `   [ 🛠️ ] *STATUS* : RECONFIGURED\n\n` +
+              `   " *The gates have opened.*\n     *All who enter are seen.*\n     *Step carefully.* "`;
+
+        await safeWaReply(sock, remoteJid, bannerText, msg);
+        return;
+    }
+
+    if (token === '.public') {
+        const senderJid = msg.key.participant || msg.key.remoteJid;
+        const isSenderOwner = msg.key.fromMe || jidNormalizedUser(senderJid) === jidNormalizedUser(sock.user.id);
+        if (!isSenderOwner) {
+            await safeWaReply(sock, remoteJid, '❌ Only the paired bot owner can modify the access mode.', msg);
+            return;
+        }
+        const currentMode = loadBotMode(phoneNumber);
+        saveBotMode(phoneNumber, 'public');
+        await safeWaReply(sock, remoteJid, 
+            `   ░▒▓█ *SYSTEM_MODAL_SHIFT* █▓▒░\n\n` +
+            `   [ 💠 ] *PREVIOUS* : ${currentMode.toUpperCase()}\n` +
+            `   [ ⚡ ] *CURRENT* : PUBLIC\n` +
+            `   [ 🛠️ ] *STATUS* : GATES_OPEN\n\n` +
+            `   " *The gates have opened.*\n     *All who enter are seen.*\n     *Step carefully.* "`, 
+            msg
+        );
+        return;
+    }
+
+    if (token === '.owner') {
+        const senderJid = msg.key.participant || msg.key.remoteJid;
+        const isSenderOwner = msg.key.fromMe || jidNormalizedUser(senderJid) === jidNormalizedUser(sock.user.id);
+        if (!isSenderOwner) {
+            await safeWaReply(sock, remoteJid, '❌ Only the paired bot owner can modify the access mode.', msg);
+            return;
+        }
+        const currentMode = loadBotMode(phoneNumber);
+        saveBotMode(phoneNumber, 'owner');
+        await safeWaReply(sock, remoteJid, 
+            `   ░▒▓█ *SYSTEM_MODAL_SHIFT* █▓▒░\n\n` +
+            `   [ 💠 ] *PREVIOUS* : ${currentMode.toUpperCase()}\n` +
+            `   [ ⚡ ] *CURRENT* : OWNER_ONLY\n` +
+            `   [ 🛠️ ] *STATUS* : THRONE_SEALED\n\n` +
+            `   " *I choose who breathes in*\n     *this space. The gates are*\n     *sealed at my command.* "`, 
+            msg
+        );
+        return;
+    }
+
+    // ──────────────────────────────────────────────
+    // 👥 GROUP COMMANDS
     // ──────────────────────────────────────────────
 
     // 1. .join <invite-link> (Join a group via link)
@@ -1283,7 +1668,6 @@ function setupMessageHandler(sock, phoneNumber, tgId) {
                 const votedOptionId = handlePollVote(sock, phoneNumber, key, update.pollUpdates);
                 if (votedOptionId) {
                     log('POLL', `${phoneNumber}: Decrypted vote on option ID: ${votedOptionId}`);
-                    // Trigger menu-specific response here in the future
                 }
             }
         }
