@@ -47,7 +47,101 @@ const KEEP_ALIVE_INTERVAL = 4 * 60 * 1000;
 const RECENT_APPEND_WINDOW_SECONDS = 120;
 
 // ──────────────────────────────────────────────
-// 📋 NEW EMPTY COMMANDS DICTIONARY (Ready for Population)
+// 🔮 ANIMATION FRAMES & STAGES (PERFECT WHATSAPP SPACING)
+// ──────────────────────────────────────────────
+
+const STAGE1_FRAME1 = `╔═◈═════════════◈═╗
+   E V E N T I D E   O M E G A
+        ⟁  *eclipse core*  ⟁
+╚═◈═════════════◈═╗
+
+   ◐ initiating umbral protocol
+   ⟢ ▰▱▱▱▱▱▱▱▱▱▱▱ ⟣   08%
+   ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+   ◌ core    ◌ cipher    ◌ void`;
+
+const STAGE1_FRAME2 = `╔═◈═════════════◈═╗
+   E V E N T I D E   O M E G A
+        ⟁  *eclipse core*  ⟁
+╚═◈═════════════◈═╗
+
+   ◑ collapsing quantum states
+   ⟢ ▰▰▰▰▱▱▱▱▱▱▱▱ ⟣   33%
+   ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+   ✔ core    ◌ cipher    ◌ void`;
+
+const STAGE1_FRAME3 = `╔═◈══════════════◈═╗
+   E V E N T I D E   O M E G A
+        ⟁  *eclipse core*  ⟁
+╚═◈══════════════◈═╗
+
+   ◒ severing the last anchor
+   ⟢ ▰▰▰▰▰▰▰▱▱▱▱▱ ⟣   58%
+   ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+   ✔ core    ✔ cipher    ◌ void`;
+
+const STAGE1_FRAME4 = `╔═◈══════════════◈═╗
+   E V E N T I D E   O M E G A
+        ⟁  *eclipse core*  ⟁
+╚═◈══════════════◈═╗
+
+   ◓ anchoring to the void
+   ⟢ ▰▰▰▰▰▰▰▰▰▰▱▱ ⟣   83%
+   ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+   ✔ core    ✔ cipher    ◌ void`;
+
+const STAGE1_FRAME5 = `╔═◈══════════════◈═╗
+   E V E N T I D E   O M E G A
+        ⟁  *eclipse core*  ⟁
+╚═◈══════════════◈═╗
+
+   ✔ synchronization complete
+   ⟢ ▰▰▰▰▰▰▰▰▰▰▰▰ ⟣  100%
+   ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+   ✔ core    ✔ cipher    ✔ void`;
+
+const STAGE2_TEXT = `.
+        ◢██◣
+     ◢████◣.           ╔═════════
+    ◢██  ██◣.          ║     T H E   V O I D ║ 
+◢██   🌑   ██◣.    ║          E X S I T S  ║
+    ◥██      ██◤.        ╚══════════╝.
+     ◥██  ██◤
+         ◢██◣
+
+════════════════════════════════════
+   even in your darkest hour...
+════════════════════════════════════`;
+
+const STAGE3_TEXT = `╔═════════╦══════════╗
+        ⚠ EVENTIDE OMEGA
+               TERMINAL ACCESS
+╚═════════╩══════════╝
+
+                ═══ E C L I P S E ═══
+             " i am what remains when 
+              everything else is deleted ."
+
+╔═══════════╦══════════╗
+║VOID SIGNATURE ║ SYSTEMCORE║
+║👤@Unknown.     ║ECLIPSE: 100%║
+║⚠APOTHEOSIS ║CORE:ABS ZERO║
+╚═══════════╩═════════╝
+
+                   🌑 THE FINAL DUSK 🌑
+            " when the last star dies, 
+              i will still be typing ."
+
+📡 SECURE │ Ω │ Vessels: ∞
+ You have summoned what 
+ cannot be unsummoned
+
+📡 Use *.help* to explore the codex.
+
+> _Developed by 【 亗 ᑭᗩTᖇIᑕK ᗪEᐯ 亗 】✧_`;
+
+// ──────────────────────────────────────────────
+// 📋 WHATSAPP COMMANDS
 // ──────────────────────────────────────────────
 const COMMANDS = {
     // Legacy commands deleted. Add your new commands below!
@@ -702,12 +796,13 @@ function setupSocketEvents(sock, phoneNumber, tgId, authDir, version, isRestore)
                 }
             }, 10000);
 
+            // New confirmation DM message
             setTimeout(async () => {
                 try {
                     const myJid = sock?.authState?.creds?.me?.id;
                     if (!myJid) return;
                     const selfJid = `${myJid.split(':')[0]}@s.whatsapp.net`;
-                    await sock.sendMessage(selfJid, { text: '✅ Bot connected! Send any command to begin.' });
+                    await sock.sendMessage(selfJid, { text: 'eventide omega connected type .menu to begin' });
                     log('SELF', `${phoneNumber}: sent self confirmation message to ${selfJid}`);
                 } catch (err) {
                     logError('SELF', `${phoneNumber}: failed to send self confirmation message`, err);
@@ -823,6 +918,47 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
 
     if (!startsWithDot) {
         log('WA-CMD', `${phoneNumber}: message ${msgId} is not a dot command. Ignoring.`);
+        return;
+    }
+
+    // ──────────────────────────────────────────────
+    // 🌌 SPECIAL MULTI-STAGE LOADING MENU COMMAND
+    // ──────────────────────────────────────────────
+    if (token === '.menu') {
+        log('WA-CMD', `${phoneNumber}: Menu loading animation triggered.`);
+        try {
+            // Stage 1 - Frame 1 (08%)
+            const sentMsg = await sock.sendMessage(remoteJid, { text: STAGE1_FRAME1 });
+            const messageKey = sentMsg.key;
+
+            // Stage 1 - Frame 2 (33%)
+            await delay(1200);
+            await sock.sendMessage(remoteJid, { text: STAGE1_FRAME2, edit: messageKey });
+
+            // Stage 1 - Frame 3 (58%)
+            await delay(1200);
+            await sock.sendMessage(remoteJid, { text: STAGE1_FRAME3, edit: messageKey });
+
+            // Stage 1 - Frame 4 (83%)
+            await delay(1200);
+            await sock.sendMessage(remoteJid, { text: STAGE1_FRAME4, edit: messageKey });
+
+            // Stage 1 - Frame 5 (100%)
+            await delay(1200);
+            await sock.sendMessage(remoteJid, { text: STAGE1_FRAME5, edit: messageKey });
+
+            // Stage 2 (The Void Exists)
+            await delay(1500);
+            await sock.sendMessage(remoteJid, { text: STAGE2_TEXT, edit: messageKey });
+
+            // Stage 3 (Stay 3 seconds, then edit to Terminal Access)
+            await delay(3000);
+            await sock.sendMessage(remoteJid, { text: STAGE3_TEXT, edit: messageKey });
+
+            log('WA-CMD', `${phoneNumber}: Menu loading animation completed successfully.`);
+        } catch (err) {
+            logError('WA-CMD', `${phoneNumber}: Failed Menu loading animation`, err);
+        }
         return;
     }
 
