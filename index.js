@@ -52,8 +52,13 @@ const KEEP_ALIVE_INTERVAL = 4 * 60 * 1000;
 const RECENT_APPEND_WINDOW_SECONDS = 120;
 
 // ──────────────────────────────────────────────
-// 🔮 ECLIPSE ANIMATION STAGES (PERFECT WHATSAPP SPACING)
+// 🔮 HEADERS & ANIMATION STAGES (PERFECT WHATSAPP SPACING)
 // ──────────────────────────────────────────────
+
+const TERMINAL_HEADER = `╔═════════╦══════════╗
+        ⚠ EVENTIDE OMEGA
+               TERMINAL ACCESS
+╚═════════╩══════════╝\n\n`;
 
 const animSteps = [
     { percent: 8,  bar: 1,  text: '◐ initiating umbral protocol', core: '◌', cipher: '◌', void: '◌' },
@@ -132,10 +137,10 @@ const STAGE3_TEXT = `╔═════════╦════════�
 // ──────────────────────────────────────────────
 const POLL_QUESTION = `╔═════════╦══════════╗\n        ⚠ EVENTIDE OMEGA ⚠\n╚═════════╩══════════╝`;
 const POLL_OPTIONS = [
-    '╰|1┈➤ [ 1. OWNERS MENU ]',
-    '╰|1┈➤ [ 2. GROUP MENU ]',
-    '╰|1┈➤ [ 3. SYSTEM MENU ]',
-    '╰|1┈➤ [ 4. FUN MENU ]'
+    '╰┈➤ [ 1. OWNERS MENU ]',
+    '╰┈➤ [ 2. GROUP MENU ]',
+    '╰┈➤ [ 3. SYSTEM MENU ]',
+    '╰┈➤ [ 4. FUN MENU ]'
 ];
 
 // ──────────────────────────────────────────────
@@ -157,7 +162,7 @@ let cachedBaileysVersion = null;
 let cachedBaileysVersionAt = 0;
 
 // ──────────────────────────────────────────────
-// 📂 LOCAL PERSISTENT BOT CONFIG HELPERS (SAVED TO SUPABASE AUTOMATICALLY)
+// 📂 LOCAL PERSISTENT BOT CONFIG HELPERS
 // ──────────────────────────────────────────────
 function loadPollCache(phoneNumber) {
     const filePath = path.join(AUTH_DIR, phoneNumber, 'poll_cache.json');
@@ -285,43 +290,28 @@ async function callOpenAI(prompt, systemInstruction = '', apiKey) {
 }
 
 async function callPollinations(prompt, systemInstruction = '') {
-    const url = `https://text.pollinations.ai/`;
-    const messages = [];
-    if (systemInstruction) {
-        messages.push({ role: 'system', content: systemInstruction });
-    }
-    messages.push({ role: 'user', content: prompt });
-    const body = JSON.stringify({
-        messages,
-        model: 'openai',
-        seed: Math.floor(Math.random() * 9999)
-    });
+    const encodedPrompt = encodeURIComponent(prompt);
+    const systemParam = systemInstruction ? `&system=${encodeURIComponent(systemInstruction)}` : '';
+    const url = `https://text.pollinations.ai/${encodedPrompt}?model=openai${systemParam}`;
 
     return new Promise((resolve, reject) => {
-        const req = https.request(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' }
-        }, (res) => {
+        const req = https.get(url, (res) => {
             let data = '';
             res.on('data', chunk => data += chunk);
             res.on('end', () => {
                 const text = data.trim();
-                if (!text) return reject(new Error('Empty Pollinations response'));
-                
-                let parsed = null;
-                try { parsed = JSON.parse(text); } catch (_) {}
-
-                const out = parsed?.choices?.[0]?.message?.content || parsed?.text || text;
-                if (out && String(out).trim()) {
-                    resolve(String(out).trim());
+                const badStatus = res.statusCode && (res.statusCode < 200 || res.statusCode >= 300);
+                if (badStatus) {
+                    return reject(new Error(`Pollinations HTTP ${res.statusCode}: ${text}`));
+                }
+                if (text && String(text).trim()) {
+                    resolve(String(text).trim());
                 } else {
-                    reject(new Error('Empty output from Pollinations'));
+                    reject(new Error('Empty response from Pollinations'));
                 }
             });
         });
         req.on('error', reject);
-        req.write(body);
-        req.end();
     });
 }
 
@@ -346,7 +336,7 @@ async function callUniversalAI(prompt, systemInstruction = '') {
         }
     }
 
-    // Free keyless fallback
+    // Free keyless fallback GET request
     try {
         log('AI', 'Attempting Pollinations AI keyless fallback...');
         return await callPollinations(prompt, systemInstruction);
@@ -1192,21 +1182,30 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     );
 
     const text = parsed.text.trim();
-    
-    // ──────────────────────────────────────────────
-    // 🗣️ AI HELP ORACLE INTERCEPTOR (HUMAN-LIKE typing, no prefix needed!)
-    // ──────────────────────────────────────────────
     const normalized = text.trim();
     const token = normalized.split(/\s+/)[0].toLowerCase();
     const args = normalized.split(/\s+/).slice(1);
     const startsWithDot = normalized.startsWith('.');
 
+    // ──────────────────────────────────────────────
+    // 🔒 BOT ACCESS PRIVACY MODE ENFORCEMENT & CONVERSATIONAL INTERCEPTOR
+    // ──────────────────────────────────────────────
+    const currentMode = loadBotMode(phoneNumber);
+    const senderJid = msg.key.participant || msg.key.remoteJid;
+    const isSenderOwner = msg.key.fromMe || jidNormalizedUser(senderJid) === jidNormalizedUser(sock.user.id);
+
+    // If locked to owner-only mode, completely freeze for other users
+    if (currentMode === 'owner' && !isSenderOwner) {
+        log('SECURITY', `${phoneNumber}: Ignored non-owner interaction in owner-only mode.`);
+        return;
+    }
+
+    // AI Help mode interceptor (runs on normal text without dots)
     if (!startsWithDot) {
-        // If they are actively in Help Mode, chat with Customer Care AI Oracle
         if (helpModeUsers.has(remoteJid)) {
             log('HELP-MODE', `${phoneNumber}: Intercepting conversation message in help mode.`);
             
-            // Reset the 10-minute timer
+            // Reset 10m timer
             const stateObj = helpModeUsers.get(remoteJid);
             if (stateObj?.timer) clearTimeout(stateObj.timer);
 
@@ -1231,26 +1230,13 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             }
             return;
         }
-        return; // Ignore regular non-dot messages
+        return; // Ignore regular text
     }
 
     log(
         'WA-CMD',
         `${phoneNumber}: command flow | raw=${JSON.stringify(trimForLog(text, 250))} normalized=${JSON.stringify(trimForLog(normalized, 250))} token=${JSON.stringify(token)}`
     );
-
-    // ──────────────────────────────────────────────
-    // 🔒 BOT ACCESS PRIVACY MODE ENFORCEMENT (.mode owner)
-    // ──────────────────────────────────────────────
-    const currentMode = loadBotMode(phoneNumber);
-    if (currentMode === 'owner') {
-        const senderJid = msg.key.participant || msg.key.remoteJid;
-        const isSenderOwner = msg.key.fromMe || jidNormalizedUser(senderJid) === jidNormalizedUser(sock.user.id);
-        if (!isSenderOwner) {
-            log('SECURITY', `${phoneNumber}: Ignored command ${token} from non-owner: ${senderJid}`);
-            return; // Ignore completely
-        }
-    }
 
     // ──────────────────────────────────────────────
     // 🌌 GRANULAR LOADING MENU COMMAND
@@ -1335,34 +1321,31 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             return;
         }
 
-        // Otherwise, toggle help mode ON or OFF
+        // Otherwise, toggle help mode ON or OFF with premium headers
         const helpKey = remoteJid;
         if (helpModeUsers.has(helpKey)) {
             const stateObj = helpModeUsers.get(helpKey);
             if (stateObj?.timer) clearTimeout(stateObj.timer);
             helpModeUsers.delete(helpKey);
-            await safeWaReply(
-                sock, 
-                remoteJid, 
+            
+            const offMsg = TERMINAL_HEADER + 
                 `   ╾━━━ HELP_MODE — OFFLINE ━━━╼\n\n` +
                 `   🔇  AI guide deactivated.\n\n` +
-                `   " The oracle steps back.\n     You walk alone again. "`, 
-                msg
-            );
+                `   " The oracle steps back.\n     You walk alone again. "`;
+            await safeWaReply(sock, remoteJid, offMsg, msg);
         } else {
             const timer = setTimeout(async () => {
                 helpModeUsers.delete(helpKey);
                 try {
                     await sock.sendMessage(remoteJid, {
-                        text: `╔═════ HELP_MODE ═════╗\n\n   ⏳  Help mode timed out after 10 min inactivity.\n   Type *.help* again to re-enable.`
+                        text: TERMINAL_HEADER + `╔═════ HELP_MODE ═════╗\n\n   ⏳  Help mode timed out after 10 min inactivity.\n   Type *.help* again to re-enable.`
                     });
                 } catch {}
             }, 10 * 60 * 1000);
 
             helpModeUsers.set(helpKey, { timer });
-            await safeWaReply(
-                sock, 
-                remoteJid, 
+
+            const onMsg = TERMINAL_HEADER +
                 `   ╔══ HELP_PROTOCOL — ACTIVE ══╗\n\n` +
                 `   ✨  *AI help mode is ON*\n\n` +
                 `   Ask me anything about the bot:\n` +
@@ -1371,9 +1354,8 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
                 `   • _"how does .mode work?"_\n\n` +
                 `   🔄 Auto-exits after 10 min silence.\n` +
                 `   Type *.help* again to turn off.\n\n` +
-                `   " The oracle is listening. "`, 
-                msg
-            );
+                `   " The oracle is listening. "`;
+            await safeWaReply(sock, remoteJid, onMsg, msg);
         }
         return;
     }
@@ -1389,6 +1371,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             await safeWaReply(
                 sock, 
                 remoteJid, 
+                TERMINAL_HEADER +
                 `📌 *Bot Access Privacy Mode*\n━━━━━━━━━━━━━━━━━━━━\n\n` +
                 `👤 *Current Mode*: ${currentMode === 'owner' ? 'OWNER ONLY 🔒' : 'PUBLIC 🔓'}\n\n` +
                 `💡 *Usage*:\n` +
@@ -1400,8 +1383,6 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         }
 
         // Verify the sender is the paired owner
-        const senderJid = msg.key.participant || msg.key.remoteJid;
-        const isSenderOwner = msg.key.fromMe || jidNormalizedUser(senderJid) === jidNormalizedUser(sock.user.id);
         if (!isSenderOwner) {
             await safeWaReply(sock, remoteJid, '❌ Only the paired bot owner can modify the access mode.', msg);
             return;
@@ -1409,7 +1390,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
 
         saveBotMode(phoneNumber, targetMode);
 
-        const bannerText = targetMode === 'owner'
+        const bannerText = TERMINAL_HEADER + (targetMode === 'owner'
             ? `   ░▒▓█ *SYSTEM_MODAL_SHIFT* █▓▒░\n\n` +
               `   [ 💠 ] *PREVIOUS* : ${currentMode.toUpperCase()}\n` +
               `   [ ⚡ ] *CURRENT* : OWNER_ONLY\n` +
@@ -1419,15 +1400,13 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
               `   [ 💠 ] *PREVIOUS* : ${currentMode.toUpperCase()}\n` +
               `   [ ⚡ ] *CURRENT* : PUBLIC\n` +
               `   [ 🛠️ ] *STATUS* : RECONFIGURED\n\n` +
-              `   " *The gates have opened.*\n     *All who enter are seen.*\n     *Step carefully.* "`;
+              `   " *The gates have opened.*\n     *All who enter are seen.*\n     *Step carefully.* "`);
 
         await safeWaReply(sock, remoteJid, bannerText, msg);
         return;
     }
 
     if (token === '.public') {
-        const senderJid = msg.key.participant || msg.key.remoteJid;
-        const isSenderOwner = msg.key.fromMe || jidNormalizedUser(senderJid) === jidNormalizedUser(sock.user.id);
         if (!isSenderOwner) {
             await safeWaReply(sock, remoteJid, '❌ Only the paired bot owner can modify the access mode.', msg);
             return;
@@ -1435,6 +1414,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         const currentMode = loadBotMode(phoneNumber);
         saveBotMode(phoneNumber, 'public');
         await safeWaReply(sock, remoteJid, 
+            TERMINAL_HEADER +
             `   ░▒▓█ *SYSTEM_MODAL_SHIFT* █▓▒░\n\n` +
             `   [ 💠 ] *PREVIOUS* : ${currentMode.toUpperCase()}\n` +
             `   [ ⚡ ] *CURRENT* : PUBLIC\n` +
@@ -1446,8 +1426,6 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     }
 
     if (token === '.owner') {
-        const senderJid = msg.key.participant || msg.key.remoteJid;
-        const isSenderOwner = msg.key.fromMe || jidNormalizedUser(senderJid) === jidNormalizedUser(sock.user.id);
         if (!isSenderOwner) {
             await safeWaReply(sock, remoteJid, '❌ Only the paired bot owner can modify the access mode.', msg);
             return;
@@ -1455,6 +1433,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         const currentMode = loadBotMode(phoneNumber);
         saveBotMode(phoneNumber, 'owner');
         await safeWaReply(sock, remoteJid, 
+            TERMINAL_HEADER +
             `   ░▒▓█ *SYSTEM_MODAL_SHIFT* █▓▒░\n\n` +
             `   [ 💠 ] *PREVIOUS* : ${currentMode.toUpperCase()}\n` +
             `   [ ⚡ ] *CURRENT* : OWNER_ONLY\n` +
@@ -1505,7 +1484,6 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         const targetJid = `${targetNumber}@s.whatsapp.net`;
         try {
             const metadata = await sock.groupMetadata(remoteJid);
-            const senderJid = msg.key.participant || msg.key.remoteJid;
             
             const isSenderAdmin = metadata.participants.find(p => jidNormalizedUser(p.id) === jidNormalizedUser(senderJid))?.admin;
             const isBotAdmin = metadata.participants.find(p => jidNormalizedUser(p.id) === jidNormalizedUser(sock.user.id))?.admin;
@@ -1568,7 +1546,6 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
 
         try {
             const metadata = await sock.groupMetadata(remoteJid);
-            const senderJid = msg.key.participant || msg.key.remoteJid;
             
             const isSenderAdmin = metadata.participants.find(p => jidNormalizedUser(p.id) === jidNormalizedUser(senderJid))?.admin;
             const isBotAdmin = metadata.participants.find(p => jidNormalizedUser(p.id) === jidNormalizedUser(sock.user.id))?.admin;
@@ -1599,7 +1576,6 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         }
         try {
             const metadata = await sock.groupMetadata(remoteJid);
-            const senderJid = msg.key.participant || msg.key.remoteJid;
             
             const isSenderAdmin = metadata.participants.find(p => jidNormalizedUser(p.id) === jidNormalizedUser(senderJid))?.admin;
             const isBotAdmin = metadata.participants.find(p => jidNormalizedUser(p.id) === jidNormalizedUser(sock.user.id))?.admin;
