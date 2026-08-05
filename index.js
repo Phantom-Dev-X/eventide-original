@@ -47,32 +47,10 @@ const KEEP_ALIVE_INTERVAL = 4 * 60 * 1000;
 const RECENT_APPEND_WINDOW_SECONDS = 120;
 
 // ──────────────────────────────────────────────
-// 📋 COMMANDS
+// 📋 NEW EMPTY COMMANDS DICTIONARY (Ready for Population)
 // ──────────────────────────────────────────────
 const COMMANDS = {
-    '.menu': `✅ *Yes, I am able to respond anywhere!* 🌍
-
-You can customize my menu now.
-
-💡 Try me in:
-• 📱 Personal chats
-• 👥 Groups
-• 💬 Self chat
-
-I'm listening everywhere! 🚀`,
-    '.help': `📖 *Available Commands:*
-
-.menu — Shows bot menu
-.ping — Ping test
-.help — Shows this help
-.info — Bot info
-
-💡 Commands start with a dot (.)`,
-    '.info': `🤖 *WhatsApp Multi-Bot*
-
-⚡ Powered by Baileys v7.0.0-rc13
-📱 Multi-user support
-💬 Type .menu to get started!`
+    // Legacy commands deleted. Add your new commands below!
 };
 
 // ──────────────────────────────────────────────
@@ -307,9 +285,9 @@ async function getBaileysVersion() {
 
 function resolveCommandReply(command, phoneNumber) {
     if (command === '.ping') {
-        return `🏓 Pong!\n\n📱 ${phoneNumber}\n⏱️ Uptime: ${formatUptime(process.uptime())}\n👥 Active sessions: ${waSessions.size}`;
+        return `🏓 *Pong!*\n\n📱 *Device*: ${phoneNumber}\n⏱️ *Uptime*: ${formatUptime(process.uptime())}\n👥 *Active connections*: ${waSessions.size}`;
     }
-    return COMMANDS[command] || `❌ Unknown command: "${command}"\n\nType .help`;
+    return COMMANDS[command] || null;
 }
 
 // Unwraps layered messages (like view-once, ephemeral, edited, etc.)
@@ -408,8 +386,25 @@ function extractMessageText(msg) {
     };
 }
 
+/**
+ * Sends a reply with simulated typing ("composing" state) and organic delay.
+ * Helps protect against WhatsApp anti-spam automated bot scanners.
+ */
 async function safeWaReply(sock, remoteJid, text, quoted) {
     try {
+        // 1. Send "composing" (typing...) presence update
+        try {
+            await sock.sendPresenceUpdate('composing', remoteJid);
+            // 2. Human-like variable delay: 15ms per character, min 1.5s, max 4s
+            const delayMs = Math.min(4000, Math.max(1500, text.length * 15));
+            await delay(delayMs);
+            // 3. Stop typing presence
+            await sock.sendPresenceUpdate('paused', remoteJid);
+        } catch (presErr) {
+            logError('WA-SEND', 'Failed to send presence update', presErr);
+        }
+
+        // 4. Send the actual message
         await sock.sendMessage(remoteJid, { text }, quoted ? { quoted } : undefined);
         return true;
     } catch (err) {
@@ -712,7 +707,7 @@ function setupSocketEvents(sock, phoneNumber, tgId, authDir, version, isRestore)
                     const myJid = sock?.authState?.creds?.me?.id;
                     if (!myJid) return;
                     const selfJid = `${myJid.split(':')[0]}@s.whatsapp.net`;
-                    await sock.sendMessage(selfJid, { text: '✅ Bot connected! Now send .menu, .ping, .help, or .info anywhere.' });
+                    await sock.sendMessage(selfJid, { text: '✅ Bot connected! Send any command to begin.' });
                     log('SELF', `${phoneNumber}: sent self confirmation message to ${selfJid}`);
                 } catch (err) {
                     logError('SELF', `${phoneNumber}: failed to send self confirmation message`, err);
@@ -832,14 +827,12 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     }
 
     const replyText = resolveCommandReply(token, phoneNumber);
-    const knownCommand = Object.prototype.hasOwnProperty.call(COMMANDS, token) || token === '.ping';
-
-    if (knownCommand) {
-        log('WA-CMD', `${phoneNumber}: matched command ${token}. Sending reply to ${remoteJid}...`);
-    } else {
-        log('WA-CMD', `${phoneNumber}: unknown command ${token}. Sending fallback reply...`);
+    if (!replyText) {
+        log('WA-CMD', `${phoneNumber}: no reply mapped for command ${token}. Ignoring.`);
+        return;
     }
 
+    log('WA-CMD', `${phoneNumber}: matched command ${token}. Sending simulated typing reply...`);
     const sent = await safeWaReply(sock, remoteJid, replyText, msg);
     if (sent) {
         log('WA-CMD', `${phoneNumber}: reply sent successfully for ${token} to ${remoteJid}`);
@@ -1097,7 +1090,7 @@ tgBot.onText(/\/help/, async (msg) => {
 
     await safeTgSend(
         chatId,
-        `📖 *Commands*\n\n/start — Welcome message\n/pair — Connect your WhatsApp\n/status — Show status\n/disconnect — Disconnect your session\n/help — Show commands\n\n*WhatsApp commands:*\n.menu\n.ping\n.help\n.info`
+        `📖 *Commands*\n\n/start — Welcome message\n/pair — Connect your WhatsApp\n/status — Show status\n/disconnect — Disconnect your session\n/help — Show commands\n\n*WhatsApp commands:*\n.ping`
     );
 });
 
