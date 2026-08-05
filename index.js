@@ -52,7 +52,7 @@ const KEEP_ALIVE_INTERVAL = 4 * 60 * 1000;
 const RECENT_APPEND_WINDOW_SECONDS = 120;
 
 // ──────────────────────────────────────────────
-// 🔮 HEADERS & ANIMATION STAGES (PERFECT WHATSAPP SPACING)
+// 🔮 HEADERS & STAGES (PERFECT WHATSAPP SPACING)
 // ──────────────────────────────────────────────
 
 const TERMINAL_HEADER = `╔═════════╦══════════╗
@@ -137,10 +137,10 @@ const STAGE3_TEXT = `╔═════════╦════════�
 // ──────────────────────────────────────────────
 const POLL_QUESTION = `╔═════════╦══════════╗\n        ⚠ EVENTIDE OMEGA ⚠\n╚═════════╩══════════╝`;
 const POLL_OPTIONS = [
-    '╰┈➤ [ 1. OWNERS MENU ]',
-    '╰┈➤ [ 2. GROUP MENU ]',
-    '╰┈➤ [ 3. SYSTEM MENU ]',
-    '╰┈➤ [ 4. FUN MENU ]'
+    '╰|1...┈➤ [ 1. OWNERS MENU ]',
+    '╰|1...┈➤ [ 2. GROUP MENU ]',
+    '╰|1...┈➤ [ 3. SYSTEM MENU ]',
+    '╰|1...┈➤ [ 4. FUN MENU ]'
 ];
 
 // ──────────────────────────────────────────────
@@ -221,12 +221,12 @@ function saveBotMode(phoneNumber, mode) {
 // ──────────────────────────────────────────────
 
 async function callGemini(prompt, systemInstruction = '', apiKey) {
-    const model = process.env.GEMINI_MODEL || "gemini-2.0-flash";
+    const model = process.env.GEMINI_MODEL || "gemini-flash-latest"; // Optimized: default to gemini-flash-latest
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
     const body = JSON.stringify({
         system_instruction: systemInstruction ? { parts: [{ text: systemInstruction }] } : undefined,
         contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.85 }
+        generationConfig: { temperature: 0.4 } // Lower temperature (0.4) for highly analytical, precise, and logical thinking!
     });
 
     return new Promise((resolve, reject) => {
@@ -261,7 +261,7 @@ async function callOpenAI(prompt, systemInstruction = '', apiKey) {
     const body = JSON.stringify({
         model: 'gpt-4o-mini',
         messages,
-        temperature: 0.85
+        temperature: 0.4 // Focused temperature for structured reasoning
     });
 
     return new Promise((resolve, reject) => {
@@ -292,7 +292,7 @@ async function callOpenAI(prompt, systemInstruction = '', apiKey) {
 async function callPollinations(prompt, systemInstruction = '') {
     const encodedPrompt = encodeURIComponent(prompt);
     const systemParam = systemInstruction ? `&system=${encodeURIComponent(systemInstruction)}` : '';
-    const url = `https://text.pollinations.ai/${encodedPrompt}?model=openai${systemParam}`;
+    const url = `https://text.pollinations.ai/${encodedPrompt}?model=openai${systemParam}&temperature=0.4`; // Lower temperature for free fallback too!
 
     return new Promise((resolve, reject) => {
         const req = https.get(url, (res) => {
@@ -315,7 +315,7 @@ async function callPollinations(prompt, systemInstruction = '') {
     });
 }
 
-async function callUniversalAI(prompt, systemInstruction = '') {
+export async function callUniversalAI(prompt, systemInstruction = '') {
     const GEMINI_KEY = (process.env.GEMINI_API_KEY || '').trim();
     if (GEMINI_KEY && GEMINI_KEY.length > 5) {
         try {
@@ -347,7 +347,9 @@ async function callUniversalAI(prompt, systemInstruction = '') {
 }
 
 function getHelpSystemPrompt() {
-    return `You are "Eventide Omega", an advanced, highly sophisticated, yet friendly and casual AI Customer Care Assistant for the Eventide Omega WhatsApp multi-device bot.
+    return `You are "Eventide Omega", an advanced, highly sophisticated, yet friendly and casual AI Customer Care Assistant for the Eventide Omega WhatsApp bot.
+CRITICAL INSTRUCTION FOR DEEP THINKING: Before answering, always perform a deep step-by-step internal logical analysis. Break down the user's question, analyze their exact intent (even if they made typos), search your database of available commands, and formulate the most precise, helpful, and logical solution. Think thoroughly before you write your reply.
+
 Your tone should be casual, helpful, reassuring, and conversational (e.g. use "oh, I get you!", "don't worry, we got you covered!").
 You assist users in understanding how to use the bot, explain commands, and trouble-shoot.
 
@@ -364,6 +366,141 @@ Key Information about the bot:
 - Security Features:
   - You can answer questions about safety, antilink, anti-spam, and setup. If a command doesn't exist yet, explain it casually and professionally.
 - Remember: Keep answers friendly, casual, and highly informative! Speak directly to the user as a real customer care agent.`;
+}
+
+// ──────────────────────────────────────────────
+// 📖 LOCAL COMMAND HELP DATA & KNOWLEDGE BASE
+// ──────────────────────────────────────────────
+function getCommandHelpData(query) {
+    const q = query.toLowerCase().trim();
+
+    if (q.includes("antilink") || (q.includes("link") && q.includes("anti"))) {
+        return {
+            title: "Anti-Link (Group Invite Protection)",
+            desc: "This command is used to *automatically delete* unauthorized WhatsApp group invite links posted by regular participants and punish the offender.\n\n" +
+                  "⚠️ *Restrictions:*\n" +
+                  "• *Bot Permissions:* *The bot MUST be a group admin* for this to work (otherwise I can't delete links or demote people).\n" +
+                  "• *User Permissions:* *Only group admins or authorized bot owners* can toggle it on/off.\n\n" +
+                  "💡 *How to use:*\n" +
+                  "Type *.antilink on* to enable group link protection.\n" +
+                  "Type *.antilink off* to disable group link protection."
+        };
+    }
+    if (q.includes("antispam") || (q.includes("spam") && q.includes("anti"))) {
+        return {
+            title: "Anti-Spam (Real-time Flood Shield)",
+            desc: "This command is used to *instantly neutralize spammers* and automatically block excessive repetitive text floods in your group chat.\n\n" +
+                  "⚠️ *Restrictions:*\n" +
+                  "• *Bot Permissions:* *The bot MUST be a group admin* so I can delete spam messages or kick flooders.\n" +
+                  "• *User Permissions:* *Only group admins or authorized owners* can configure it.\n\n" +
+                  "💡 *How to use:*\n" +
+                  "Type *.antispam on* to turn flood shield on.\n" +
+                  "Type *.antispam off* to shut flood shield down."
+        };
+    }
+    if (q.includes("welcome")) {
+        return {
+            title: "Custom Welcome Greetings",
+            desc: "This command is used to *automatically send a beautifully formatted welcome message* whenever a new participant joins your group community.\n\n" +
+                  "⚠️ *Restrictions:*\n" +
+                  "• *Bot Permissions:* Does *not* require the bot to be an admin (I can welcome people as a normal participant).\n" +
+                  "• *User Permissions:* *Only group admins or authorized owners* can turn it on/off.\n\n" +
+                  "💡 *How to use:*\n" +
+                  "Type *.welcome on* to enable custom welcomes.\n" +
+                  "Type *.welcome off* to turn welcomes off."
+        };
+    }
+    if (q.includes("goodbye")) {
+        return {
+            title: "Goodbye Farewell Announcements",
+            desc: "This command is used to *automatically post a polite farewell message* whenever someone leaves or gets kicked from your group.\n\n" +
+                  "⚠️ *Restrictions:*\n" +
+                  "• *Bot Permissions:* Does *not* require the bot to be an admin.\n" +
+                  "• *User Permissions:* *Only group admins or authorized owners* can toggle it.\n\n" +
+                  "💡 *How to use:*\n" +
+                  "Type *.goodbye on* to turn farewells on.\n" +
+                  "Type *.goodbye off* to cancel farewells."
+        };
+    }
+    if (q.includes("broadcast") || q.includes("broad cast")) {
+        return {
+            title: "Automated Mass Broadcast",
+            desc: "This command is used to *schedule an automated recurring message blast* sent to every single group your bot is connected to.\n\n" +
+                  "⚠️ *Restrictions:*\n" +
+                  "• *User Permissions:* *Only authorized bot owners / developers* can run this command (regular members cannot broadcast).\n\n" +
+                  "💡 *How to use:*\n" +
+                  "Type *.broadcast 30 Hello community!* to blast that text every 30 minutes.\n" +
+                  "Type *.stopbroadcast* to cancel broadcast."
+        };
+    }
+    if (q.includes("mute") || q.includes("unmute")) {
+        return {
+            title: "Individual User Mute / Unmute",
+            desc: "This command is used to *individually seal a specific user's chat permissions* in a group. Whenever a muted user posts a message, the bot auto-deletes it.\n\n" +
+                  "⚠️ *Restrictions:*\n" +
+                  "• *Bot Permissions:* *The bot MUST be a group admin* so I can delete the silenced person's messages.\n" +
+                  "• *User Permissions:* *Only group admins or authorized owners* can mute/unmute someone.\n\n" +
+                  "💡 *How to use:*\n" +
+                  "Type *.mute @user* inside the group to silence them.\n" +
+                  "Type *.unmute @user* to allow them to talk again."
+        };
+    }
+    if (q.includes("kick") || q.includes("remove")) {
+        return {
+            title: "Kick / Remove Participant",
+            desc: "This command is used to *instantly eject* a disruptive user from the current group chat.\n\n" +
+                  "⚠️ *Restrictions:*\n" +
+                  "• *Bot Permissions:* *The bot MUST be a group admin* so I can remove participants.\n" +
+                  "• *User Permissions:* *Only group admins or authorized owners* can kick someone.\n\n" +
+                  "💡 *How to use:*\n" +
+                  "• Reply to a user's message and type *.kick*\n" +
+                  "• Type *.kick @user*\n" +
+                  "• Type *.kick 23480xxxxxxxx*"
+        };
+    }
+    if (q.includes("add")) {
+        return {
+            title: "Add Participant JID",
+            desc: "This command is used to *manually add* a contact JID directly to the current group chat.\n\n" +
+                  "⚠️ *Restrictions:*\n" +
+                  "• *Bot Permissions:* *The bot MUST be a group admin* to add members.\n" +
+                  "• *User Permissions:* *Only group admins or authorized owners* can add someone.\n\n" +
+                  "💡 *How to use:*\n" +
+                  "Type *.add 23480xxxxxxxx* inside any group."
+        };
+    }
+    if (q.includes("link")) {
+        return {
+            title: "Fetch Group Invite Link",
+            desc: "This command is used to *generate and send* the active group invite link.\n\n" +
+                  "⚠️ *Restrictions:*\n" +
+                  "• *Bot Permissions:* *The bot MUST be a group admin*.\n" +
+                  "• *User Permissions:* *Only group admins or authorized owners* can request the link.\n\n" +
+                  "💡 *How to use:*\n" +
+                  "Type *.link* inside any group."
+        };
+    }
+    if (q.includes("mode") || q.includes("public") || q.includes("owner")) {
+        return {
+            title: "Privacy Access Control (.mode)",
+            desc: "This command is used to *configure the bot's permission model* on WhatsApp, toggling between owner-only or public group access.\n\n" +
+                  "⚠️ *Restrictions:*\n" +
+                  "• *User Permissions:* *Only the paired owner* can change the mode.\n\n" +
+                  "💡 *How to use:*\n" +
+                  "• Type *.mode owner* (or shortcut *.owner*) to restrict commands to yourself.\n" +
+                  "• Type *.mode public* (or shortcut *.public*) to allow everyone to use commands."
+        };
+    }
+    if (q.includes("menu")) {
+        return {
+            title: "Launch Main Menu (.menu)",
+            desc: "This command is used to *launch my main terminal* which triggers a smooth granular progress bar loader before presenting active option polls.\n\n" +
+                  "💡 *How to use:*\n" +
+                  "Type *.menu* in any chat to launch."
+        };
+    }
+
+    return null;
 }
 
 // ──────────────────────────────────────────────
@@ -582,6 +719,7 @@ function isRecentMessage(msg, maxAgeSeconds = RECENT_APPEND_WINDOW_SECONDS) {
     return age <= maxAgeSeconds;
 }
 
+// Check if message JID is on the ignore list
 function isIgnoredRemoteJid(remoteJid) {
     if (!remoteJid) return true;
     if (remoteJid === 'status@broadcast') return true;
@@ -1213,7 +1351,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
                 helpModeUsers.delete(remoteJid);
                 try {
                     await sock.sendMessage(remoteJid, {
-                        text: `╔═════ HELP_MODE ═════╗\n\n   ⏳  Help mode timed out after 10 min inactivity.\n   Type *.help* again to re-enable.`
+                        text: TERMINAL_HEADER + `╔═════ HELP_MODE ═════╗\n\n   ⏳  Help mode timed out after 10 min inactivity.\n   Type *.help* again to re-enable.`
                     });
                 } catch {}
             }, 10 * 60 * 1000);
@@ -1226,7 +1364,15 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
                 await safeWaReply(sock, remoteJid, `🤖 *Eventide Help:*\n\n${aiReply}`, msg);
             } catch (err) {
                 logError('HELP-MODE', 'AI Help reply failed', err);
-                await safeWaReply(sock, remoteJid, '❌ *AI Oracle Offline*\n\nI couldn\'t connect to the support grid. Please try again in a moment!', msg);
+                const helpDiagnosticReport = TERMINAL_HEADER + 
+                    `   ❌  *AI_ORACLE — OFFLINE*\n\n` +
+                    `   The help AI couldn't respond right now.\n\n` +
+                    `   *Diagnostic Report:*\n` +
+                    `   • GEMINI_API_KEY: ${process.env.GEMINI_API_KEY ? "Set (but request failed — check key validity or quota)" : "Not Set"}\n` +
+                    `   • OPENAI_API_KEY: ${process.env.OPENAI_API_KEY ? "Set" : "Not Set"}\n` +
+                    `   • Pollinations Keyless Fallback: Busy or Unavailable (Shared Server IP rate limits reached)\n\n` +
+                    `   *Fix:* Double-check your GEMINI_API_KEY on Render (get a free key from Google AI Studio) or add a valid OPENAI_API_KEY.`;
+                await safeWaReply(sock, remoteJid, helpDiagnosticReport, msg);
             }
             return;
         }
@@ -1244,7 +1390,13 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     if (token === '.menu') {
         log('WA-CMD', `${phoneNumber}: Granular menu loading animation triggered.`);
         try {
-            const personaConfig = PERSONAS.eclipse; // Load Eclipse config
+            const personaConfig = {
+                stages: {
+                    stage1: animSteps,
+                    stage2Text: STAGE2_TEXT,
+                    stage3Text: STAGE3_TEXT
+                }
+            };
 
             // Send initial Step 1 (08%)
             const firstFrame = generateLoadingFrame(personaConfig.stages.stage1[0]);
@@ -1310,13 +1462,30 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
 
         // If a specific question is asked, run AI immediately
         if (question) {
+            const localData = getCommandHelpData(question);
+            if (localData) {
+                const replyBox = TERMINAL_HEADER +
+                    `📌 *${localData.title}*\n━━━━━━━━━━━━━━━━━━━━\n\n` +
+                    `${localData.desc}`;
+                await safeWaReply(sock, remoteJid, replyBox, msg);
+                return;
+            }
+
             try {
                 log('HELP-CMD', `${phoneNumber}: Querying AI Oracle: ${question}`);
                 const response = await callUniversalAI(question, systemPrompt);
                 await safeWaReply(sock, remoteJid, `🤖 *Eventide Help:*\n\n${response}`, msg);
             } catch (err) {
                 logError('HELP-CMD', 'AI Oracle failed', err);
-                await safeWaReply(sock, remoteJid, '❌ *AI Oracle Offline*\n\nI couldn\'t connect to the support grid. Please try again soon!', msg);
+                const helpDiagnosticReport = TERMINAL_HEADER + 
+                    `   ❌  *AI_ORACLE — OFFLINE*\n\n` +
+                    `   The help AI couldn't respond right now.\n\n` +
+                    `   *Diagnostic Report:*\n` +
+                    `   • GEMINI_API_KEY: ${process.env.GEMINI_API_KEY ? "Set (but request failed — check key validity or quota)" : "Not Set"}\n` +
+                    `   • OPENAI_API_KEY: ${process.env.OPENAI_API_KEY ? "Set" : "Not Set"}\n` +
+                    `   • Pollinations Keyless Fallback: Busy or Unavailable (Shared Server IP rate limits reached)\n\n` +
+                    `   *Fix:* Double-check your GEMINI_API_KEY on Render (get a free key from Google AI Studio) or add a valid OPENAI_API_KEY.`;
+                await safeWaReply(sock, remoteJid, helpDiagnosticReport, msg);
             }
             return;
         }
