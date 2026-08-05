@@ -312,6 +312,7 @@ function resolveCommandReply(command, phoneNumber) {
     return COMMANDS[command] || `❌ Unknown command: "${command}"\n\nType .help`;
 }
 
+// Unwraps layered messages (like view-once, ephemeral, edited, etc.)
 function unwrapMessageContent(message) {
     let current = message;
     const wrapperChain = [];
@@ -519,29 +520,37 @@ async function createSocketForSession({ phoneNumber, tgId, authDir, version = nu
         markOnlineOnConnect: true
     });
 
-    // Wrap saveCreds to trigger Supabase sync
+    // Wrap saveCreds to trigger Supabase sync ONLY if authorized/connected for 10s
     const originalSaveCreds = saveCreds;
     const wrappedSaveCreds = async () => {
         await originalSaveCreds();
         if (isSupabaseEnabled()) {
-            debouncedSyncLocalToSupabase(phoneNumber, authDir);
+            const session = waSessions.get(phoneNumber);
+            if (session && session.allowSupabaseSync) {
+                debouncedSyncLocalToSupabase(phoneNumber, authDir);
+            }
         }
     };
     sock.ev.on('creds.update', wrappedSaveCreds);
 
-    // Wrap state.keys.set to trigger Supabase sync
+    // Wrap state.keys.set to trigger Supabase sync ONLY if authorized/connected for 10s
     if (isSupabaseEnabled()) {
         const originalKeysSet = state.keys.set;
         state.keys.set = async (data) => {
             await originalKeysSet(data);
-            debouncedSyncLocalToSupabase(phoneNumber, authDir);
+            const session = waSessions.get(phoneNumber);
+            if (session && session.allowSupabaseSync) {
+                debouncedSyncLocalToSupabase(phoneNumber, authDir);
+            }
         };
     }
 
+    // Set initial session state with allowSupabaseSync: false (won't backup until 10s after connection opens)
     waSessions.set(phoneNumber, {
         telegramChatId: tgId ?? null,
         sock,
-        authDir
+        authDir,
+        allowSupabaseSync: false
     });
 
     if (tgId !== null && typeof tgId !== 'undefined') {
@@ -668,11 +677,14 @@ function setupSocketEvents(sock, phoneNumber, tgId, authDir, version, isRestore)
             // Reset reconnection counter on successful open
             reconnectAttempts.set(phoneNumber, 0);
 
-            waSessions.set(phoneNumber, {
+            // Initialize the session in map, keep allowSupabaseSync as false
+            const sessionObj = {
                 telegramChatId: tgId ?? null,
                 sock,
-                authDir
-            });
+                authDir,
+                allowSupabaseSync: false
+            };
+            waSessions.set(phoneNumber, sessionObj);
 
             if (tgId !== null && typeof tgId !== 'undefined') {
                 setTelegramUserState(tgId, { phoneNumber, status: 'connected', sock });
@@ -682,6 +694,18 @@ function setupSocketEvents(sock, phoneNumber, tgId, authDir, version, isRestore)
                     `✅✅✅ *Connected!* ✅✅✅\n\n📱 ${phoneNumber}\n🤖 Bot active now.\n\nType .menu in WhatsApp.`
                 );
             }
+
+            // ⏱️ Delay initial Supabase sync until exactly 10 seconds after confirmed successful connection
+            setTimeout(async () => {
+                const currentSession = waSessions.get(phoneNumber);
+                if (currentSession) {
+                    currentSession.allowSupabaseSync = true;
+                    if (isSupabaseEnabled()) {
+                        log('SUPABASE', `${phoneNumber}: Connection has been open and verified for 10 seconds. Performing first complete cloud sync...`);
+                        debouncedSyncLocalToSupabase(phoneNumber, authDir, 100); // Trigger sync immediately
+                    }
+                }
+            }, 10000);
 
             setTimeout(async () => {
                 try {
@@ -952,7 +976,7 @@ tgBot.onText(/\/start/, async (msg) => {
 
     await safeTgSend(
         chatId,
-        `🤖 *WhatsApp Multi-Bot*\n\nSend your number to pair using country code without + sign.\nExample: 2348012345678\n\n/pair — Start pairing\n/status — Status\n/disconnect — Disconnect your session\n/help — Commands`
+        `🤖 *WhatsApp Multi-Bot*\n\nSend your number to pair using country code without + sign.\nExample: 2348012345678\n\n/pair — Start pairing\n/status — Show status\n/disconnect — Disconnect your session\n/help — Commands`
     );
 });
 
