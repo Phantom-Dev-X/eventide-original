@@ -10,8 +10,18 @@ import { createRequire } from 'module';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import archiver from 'archiver';
-import AdmZip from 'adm-zip';
+
+// Import Supabase Sync Service
+import {
+    isSupabaseEnabled,
+    downloadSessionFromSupabase,
+    debouncedSyncLocalToSupabase,
+    deleteSessionFromSupabase,
+    getAllSessionPhoneNumbers,
+    saveUserToSupabase,
+    deleteUserFromSupabase,
+    loadAllUsersFromSupabase
+} from './supabaseService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -23,7 +33,6 @@ const TelegramBot = require('node-telegram-bot-api');
 // 📋 CONFIG
 // ──────────────────────────────────────────────
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
-const TELEGRAM_CHANNEL_ID = process.env.TELEGRAM_CHANNEL_ID;
 const MAX_USERS = Math.max(1, parseInt(process.env.MAX_USERS || '10', 10) || 10);
 const DEV_IDS = (process.env.DEV_TELEGRAM_IDS || '')
     .split(',')
@@ -34,7 +43,6 @@ const DEV_IDS = (process.env.DEV_TELEGRAM_IDS || '')
 const PORT = parseInt(process.env.PORT || '3000', 10) || 3000;
 const AUTH_DIR = path.join(__dirname, 'sessions');
 const USER_MAP_FILE = path.join(__dirname, 'user_map.json');
-const BACKUP_ZIP_PATH = path.join(__dirname, 'sessions_backup.zip');
 const KEEP_ALIVE_INTERVAL = 4 * 60 * 1000;
 const RECENT_APPEND_WINDOW_SECONDS = 120;
 
@@ -72,8 +80,7 @@ I'm listening everywhere! 🚀`,
 // ──────────────────────────────────────────────
 const telegramUsers = new Map();
 const waSessions = new Map();
-let backupScheduled = false;
-let backupInProgress = false;
+const reconnectAttempts = new Map(); // Tracks reconnection retries per phone number (Max 3)
 let cachedBaileysVersion = null;
 let cachedBaileysVersionAt = 0;
 
@@ -99,11 +106,6 @@ function ensureDir(dirPath) {
 function safeRm(targetPath) {
     try { fs.rmSync(targetPath, { recursive: true, force: true }); }
     catch (err) { logError('FS', `Failed to remove ${targetPath}`, err); }
-}
-
-function safeUnlink(targetPath) {
-    try { fs.unlinkSync(targetPath); }
-    catch {}
 }
 
 function trimForLog(value, max = 200) {
@@ -182,11 +184,17 @@ function findTelegramChatIdByPhone(phoneNumber) {
 function setTelegramUserState(chatId, { phoneNumber = null, status = 'disconnected', sock = null }) {
     if (chatId === null || typeof chatId === 'undefined') return;
     telegramUsers.set(chatId, { phoneNumber, status, sock });
+    if (isSupabaseEnabled()) {
+        saveUserToSupabase(chatId, phoneNumber, status);
+    }
 }
 
 function clearTelegramUser(chatId) {
     if (chatId === null || typeof chatId === 'undefined') return;
     telegramUsers.set(chatId, { phoneNumber: null, status: 'disconnected', sock: null });
+    if (isSupabaseEnabled()) {
+        deleteUserFromSupabase(chatId);
+    }
 }
 
 function saveUserMap() {
@@ -208,8 +216,28 @@ function saveUserMap() {
     }
 }
 
-function loadUserMap({ clearExisting = false } = {}) {
+async function loadUserMap({ clearExisting = false } = {}) {
     if (clearExisting) telegramUsers.clear();
+
+    // Try Supabase first if enabled
+    if (isSupabaseEnabled()) {
+        const dbMap = await loadAllUsersFromSupabase();
+        if (dbMap) {
+            for (const [chatIdText, data] of Object.entries(dbMap)) {
+                const chatId = Number(chatIdText);
+                if (!Number.isFinite(chatId)) continue;
+                telegramUsers.set(chatId, {
+                    phoneNumber: data?.phoneNumber || null,
+                    status: data?.status || 'disconnected',
+                    sock: null
+                });
+            }
+            log('STATE', `Loaded ${telegramUsers.size} user(s) from Supabase.`);
+            return;
+        }
+    }
+
+    // Fallback to local user_map.json file
     if (!fs.existsSync(USER_MAP_FILE)) {
         log('STATE', 'user_map.json not found. Continuing without stored Telegram user map.');
         return;
@@ -238,10 +266,9 @@ function isDev(chatId) {
     return DEV_IDS.includes(Number(chatId));
 }
 
-function requireChannelConfigured() {
-    return Boolean(TELEGRAM_CHANNEL_ID);
-}
-
+// ──────────────────────────────────────────────
+// 🔧 BAILEYS HELPERS
+// ──────────────────────────────────────────────
 function getDisconnectCode(lastDisconnect) {
     return lastDisconnect?.error?.output?.statusCode
         ?? lastDisconnect?.error?.statusCode
@@ -431,215 +458,6 @@ async function requireAdminOrExplain(chatId) {
     return false;
 }
 
-// ──────────────────────────────────────────────
-// 📦 BACKUP / RESTORE
-// ──────────────────────────────────────────────
-function createBackupZip() {
-    return new Promise((resolve, reject) => {
-        try {
-            safeUnlink(BACKUP_ZIP_PATH);
-            const output = fs.createWriteStream(BACKUP_ZIP_PATH);
-            const archive = archiver('zip', { zlib: { level: 9 } });
-
-            output.on('close', () => {
-                log('BACKUP', `Backup zip created: ${(archive.pointer() / 1024).toFixed(2)} KB`);
-                resolve(BACKUP_ZIP_PATH);
-            });
-            output.on('error', reject);
-            archive.on('error', reject);
-
-            archive.pipe(output);
-
-            ensureDir(AUTH_DIR);
-            archive.directory(AUTH_DIR, 'sessions');
-            if (fs.existsSync(USER_MAP_FILE)) {
-                archive.file(USER_MAP_FILE, { name: 'user_map.json' });
-            }
-
-            archive.finalize();
-        } catch (err) {
-            reject(err);
-        }
-    });
-}
-
-async function downloadTelegramFile(fileId) {
-    const file = await tgBot.getFile(fileId);
-    const url = `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${file.file_path}`;
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`Telegram download failed with status ${response.status}`);
-    return Buffer.from(await response.arrayBuffer());
-}
-
-function resolveExtractedSessionsDir(tempDir) {
-    const directSessionsDir = path.join(tempDir, 'sessions');
-    if (fs.existsSync(directSessionsDir) && fs.statSync(directSessionsDir).isDirectory()) {
-        return { sessionsDir: directSessionsDir, userMapPath: path.join(tempDir, 'user_map.json') };
-    }
-
-    const directPhoneDirs = getStoredSessionDirectories(tempDir);
-    if (directPhoneDirs.length > 0) {
-        return { sessionsDir: tempDir, userMapPath: path.join(tempDir, 'user_map.json') };
-    }
-
-    const topLevelDirs = getStoredSessionDirectories(tempDir);
-    if (topLevelDirs.length === 1) {
-        const nestedRoot = path.join(tempDir, topLevelDirs[0]);
-        const nestedSessionsDir = path.join(nestedRoot, 'sessions');
-        if (fs.existsSync(nestedSessionsDir) && fs.statSync(nestedSessionsDir).isDirectory()) {
-            return { sessionsDir: nestedSessionsDir, userMapPath: path.join(nestedRoot, 'user_map.json') };
-        }
-    }
-
-    return { sessionsDir: null, userMapPath: null };
-}
-
-async function uploadBackupToTelegram(reason = 'manual') {
-    if (!requireChannelConfigured()) {
-        throw new Error('TELEGRAM_CHANNEL_ID is not set');
-    }
-    if (backupInProgress) {
-        log('BACKUP', `Backup already in progress, skipping new request (${reason})`);
-        return { skipped: true, reason: 'already_in_progress' };
-    }
-
-    backupInProgress = true;
-
-    try {
-        log('BACKUP', `Starting backup upload. Reason: ${reason}`);
-        await createBackupZip();
-
-        let oldPinnedMessageId = null;
-        try {
-            const chat = await tgBot.getChat(TELEGRAM_CHANNEL_ID);
-            oldPinnedMessageId = chat?.pinned_message?.message_id || null;
-        } catch (err) {
-            logError('BACKUP', 'Could not read current pinned backup message', err);
-        }
-
-        const sessionCount = countStoredSessions();
-        const sent = await tgBot.sendDocument(TELEGRAM_CHANNEL_ID, BACKUP_ZIP_PATH, {
-            caption: `🔄 Backup\n📅 ${new Date().toLocaleString()}\n👥 ${waSessions.size} active sockets\n📁 ${sessionCount} stored session folders\n📝 Reason: ${reason}`
-        });
-
-        try {
-            await tgBot.pinChatMessage(TELEGRAM_CHANNEL_ID, sent.message_id, { disable_notification: true });
-            log('BACKUP', `Backup uploaded and pinned successfully. Message ID: ${sent.message_id}`);
-        } catch (pinErr) {
-            logError('BACKUP', 'Backup uploaded but pinning failed', pinErr);
-        }
-
-        if (oldPinnedMessageId && oldPinnedMessageId !== sent.message_id) {
-            try {
-                await tgBot.deleteMessage(TELEGRAM_CHANNEL_ID, oldPinnedMessageId);
-                log('BACKUP', `Deleted previous pinned backup message ${oldPinnedMessageId}`);
-            } catch (deleteErr) {
-                logError('BACKUP', `Failed to delete previous pinned backup message ${oldPinnedMessageId}`, deleteErr);
-            }
-        }
-
-        return { skipped: false, messageId: sent.message_id };
-    } finally {
-        backupInProgress = false;
-        safeUnlink(BACKUP_ZIP_PATH);
-    }
-}
-
-function scheduleBackup(reason = 'unspecified') {
-    if (!requireChannelConfigured()) {
-        log('BACKUP', `Skipping scheduled backup because TELEGRAM_CHANNEL_ID is not configured. Reason: ${reason}`);
-        return;
-    }
-    if (backupScheduled || backupInProgress) {
-        log('BACKUP', `Backup already scheduled/in progress. Skipping schedule request. Reason: ${reason}`);
-        return;
-    }
-
-    backupScheduled = true;
-    log('BACKUP', `Backup scheduled in 3 seconds. Reason: ${reason}`);
-
-    setTimeout(async () => {
-        try {
-            await uploadBackupToTelegram(`scheduled: ${reason}`);
-        } catch (err) {
-            logError('BACKUP', 'Scheduled backup failed', err);
-        } finally {
-            backupScheduled = false;
-        }
-    }, 3000);
-}
-
-async function restoreFromTelegram() {
-    if (!requireChannelConfigured()) {
-        log('RESTORE', 'Skipping restore because TELEGRAM_CHANNEL_ID is not configured.');
-        return false;
-    }
-
-    const tempDir = path.join(__dirname, 'sessions_restore_temp');
-    safeRm(tempDir);
-    ensureDir(tempDir);
-
-    try {
-        log('RESTORE', 'Checking Telegram channel for pinned backup...');
-        const chat = await tgBot.getChat(TELEGRAM_CHANNEL_ID);
-        const pinned = chat?.pinned_message;
-
-        if (!pinned) {
-            log('RESTORE', 'No pinned backup message found in Telegram channel.');
-            return false;
-        }
-
-        const fileId = pinned?.document?.file_id
-            || pinned?.document?.thumbnail?.file_id
-            || (Array.isArray(pinned?.photo) ? pinned.photo[pinned.photo.length - 1]?.file_id : null);
-
-        if (!fileId) {
-            log('RESTORE', 'Pinned message exists but contains no downloadable backup document.');
-            return false;
-        }
-
-        log('RESTORE', `Downloading pinned backup from Telegram. Message ID: ${pinned.message_id}`);
-        const buffer = await downloadTelegramFile(fileId);
-
-        log('RESTORE', 'Extracting backup zip...');
-        const zip = new AdmZip(buffer);
-        zip.extractAllTo(tempDir, true);
-
-        const { sessionsDir, userMapPath } = resolveExtractedSessionsDir(tempDir);
-        if (!sessionsDir || !fs.existsSync(sessionsDir)) {
-            log('RESTORE', 'Backup extracted, but no sessions directory could be located.');
-            return false;
-        }
-
-        const restoredSessionDirs = getStoredSessionDirectories(sessionsDir);
-        if (restoredSessionDirs.length === 0) {
-            log('RESTORE', 'Backup extracted, but it contains zero session folders.');
-            return false;
-        }
-
-        safeRm(AUTH_DIR);
-        ensureDir(AUTH_DIR);
-        fs.cpSync(sessionsDir, AUTH_DIR, { recursive: true });
-
-        if (userMapPath && fs.existsSync(userMapPath)) {
-            fs.copyFileSync(userMapPath, USER_MAP_FILE);
-            log('RESTORE', 'Restored user_map.json from backup.');
-            loadUserMap({ clearExisting: true });
-        } else {
-            log('RESTORE', 'Backup had no user_map.json. Keeping current in-memory Telegram user map.');
-        }
-
-        normalizeAuthDirStructure();
-        log('RESTORE', `Restore completed successfully with ${restoredSessionDirs.length} session folder(s).`);
-        return true;
-    } catch (err) {
-        logError('RESTORE', 'Restore from Telegram failed', err);
-        return false;
-    } finally {
-        safeRm(tempDir);
-    }
-}
-
 async function stopAllSessions(reason = 'unspecified') {
     log('SESSION', `Stopping all active sockets. Reason: ${reason}`);
     for (const [phoneNumber, session] of waSessions.entries()) {
@@ -667,6 +485,17 @@ async function stopAllSessions(reason = 'unspecified') {
 async function createSocketForSession({ phoneNumber, tgId, authDir, version = null, isRestore = false }) {
     ensureDir(authDir);
 
+    // Download session files from Supabase if integration is active
+    if (isSupabaseEnabled()) {
+        log('SUPABASE', `${phoneNumber}: Fetching credentials from Supabase before initialization...`);
+        const restored = await downloadSessionFromSupabase(phoneNumber, authDir);
+        if (restored) {
+            log('SUPABASE', `${phoneNumber}: Credentials loaded from Supabase successfully.`);
+        } else {
+            log('SUPABASE', `${phoneNumber}: No credentials found on Supabase or failed to restore.`);
+        }
+    }
+
     const { state, saveCreds } = await useMultiFileAuthState(authDir);
     const resolvedVersion = version || await getBaileysVersion();
 
@@ -690,7 +519,24 @@ async function createSocketForSession({ phoneNumber, tgId, authDir, version = nu
         markOnlineOnConnect: true
     });
 
-    sock.ev.on('creds.update', saveCreds);
+    // Wrap saveCreds to trigger Supabase sync
+    const originalSaveCreds = saveCreds;
+    const wrappedSaveCreds = async () => {
+        await originalSaveCreds();
+        if (isSupabaseEnabled()) {
+            debouncedSyncLocalToSupabase(phoneNumber, authDir);
+        }
+    };
+    sock.ev.on('creds.update', wrappedSaveCreds);
+
+    // Wrap state.keys.set to trigger Supabase sync
+    if (isSupabaseEnabled()) {
+        const originalKeysSet = state.keys.set;
+        state.keys.set = async (data) => {
+            await originalKeysSet(data);
+            debouncedSyncLocalToSupabase(phoneNumber, authDir);
+        };
+    }
 
     waSessions.set(phoneNumber, {
         telegramChatId: tgId ?? null,
@@ -719,6 +565,9 @@ async function cleanupDisconnectedSession({ phoneNumber, tgId, authDir, notifyTe
 
     if (removeAuthDir) {
         safeRm(authDir);
+        if (isSupabaseEnabled()) {
+            await deleteSessionFromSupabase(phoneNumber);
+        }
     }
 
     if (tgId !== null && typeof tgId !== 'undefined') {
@@ -726,8 +575,6 @@ async function cleanupDisconnectedSession({ phoneNumber, tgId, authDir, notifyTe
         saveUserMap();
         if (notifyText) await safeTgSend(tgId, notifyText);
     }
-
-    scheduleBackup(`cleanup ${phoneNumber}: ${reason}`);
 }
 
 async function restartSocketAfterClose({ closingSock, phoneNumber, tgId, authDir, version, isRestore, reason, delayMs = 5000 }) {
@@ -738,6 +585,28 @@ async function restartSocketAfterClose({ closingSock, phoneNumber, tgId, authDir
     }
 
     waSessions.delete(phoneNumber);
+
+    // Track reconnect retries (Max 3)
+    const attempts = (reconnectAttempts.get(phoneNumber) || 0) + 1;
+    reconnectAttempts.set(phoneNumber, attempts);
+
+    log('SOCKET', `${phoneNumber}: Connection closed (Attempt ${attempts}/3). Reason: ${reason}`);
+
+    if (attempts > 3) {
+        log('SOCKET', `${phoneNumber}: Max reconnect attempts (3) exceeded. Cleaning up session.`);
+        reconnectAttempts.delete(phoneNumber);
+        
+        await cleanupDisconnectedSession({
+            phoneNumber,
+            tgId,
+            authDir,
+            removeAuthDir: true,
+            reason: 'Max reconnect attempts exceeded (3)',
+            notifyText: `⚠️ *Connection Lost Permanently!*\n\n📱 ${phoneNumber}\nWe failed to reconnect after 3 attempts. This login session has been flagged as stale and deleted from Supabase.\n\nPlease link your WhatsApp again using /pair.`
+        });
+        return;
+    }
+
     if (tgId !== null && typeof tgId !== 'undefined') {
         setTelegramUserState(tgId, { phoneNumber, status: 'connecting', sock: null });
         saveUserMap();
@@ -751,9 +620,6 @@ async function restartSocketAfterClose({ closingSock, phoneNumber, tgId, authDir
         log('SOCKET', `${phoneNumber}: socket rebuilt successfully after close.`);
     } catch (err) {
         logError('SOCKET', `${phoneNumber}: failed to rebuild socket`, err);
-        if (tgId !== null && typeof tgId !== 'undefined') {
-            await safeTgSend(tgId, `⚠️ *Reconnect Failed!*\n\n📱 ${phoneNumber}\nReason: ${reason}\n\nUse /pair to retry if this keeps happening.`);
-        }
     }
 }
 
@@ -799,6 +665,9 @@ function setupSocketEvents(sock, phoneNumber, tgId, authDir, version, isRestore)
         if (connection === 'open') {
             log('CONNECTION', `${phoneNumber}: connection opened successfully.`);
 
+            // Reset reconnection counter on successful open
+            reconnectAttempts.set(phoneNumber, 0);
+
             waSessions.set(phoneNumber, {
                 telegramChatId: tgId ?? null,
                 sock,
@@ -813,8 +682,6 @@ function setupSocketEvents(sock, phoneNumber, tgId, authDir, version, isRestore)
                     `✅✅✅ *Connected!* ✅✅✅\n\n📱 ${phoneNumber}\n🤖 Bot active now.\n\nType .menu in WhatsApp.`
                 );
             }
-
-            scheduleBackup(`connection opened for ${phoneNumber}`);
 
             setTimeout(async () => {
                 try {
@@ -840,7 +707,7 @@ function setupSocketEvents(sock, phoneNumber, tgId, authDir, version, isRestore)
                     authDir,
                     removeAuthDir: true,
                     reason: 'bad session (500)',
-                    notifyText: `⚠️ *Session Error!*\n\n📱 ${phoneNumber}\nThis session became invalid. Use /pair again.`
+                    notifyText: `⚠️ *Session Error!*\n\n📱 ${phoneNumber}\nThis session became invalid and has been deleted. Use /pair again.`
                 });
                 return;
             }
@@ -852,7 +719,7 @@ function setupSocketEvents(sock, phoneNumber, tgId, authDir, version, isRestore)
                     authDir,
                     removeAuthDir: true,
                     reason: 'logged out',
-                    notifyText: `📱 *Logged Out!*\n\n📱 ${phoneNumber}\nUse /pair again to reconnect.`
+                    notifyText: `📱 *Logged Out!*\n\n📱 ${phoneNumber}\nThis session was logged out from WhatsApp. Credentials have been removed from Supabase. Use /pair to reconnect.`
                 });
                 return;
             }
@@ -1027,9 +894,18 @@ async function restoreAllSessions() {
     normalizeAuthDirStructure();
     ensureDir(AUTH_DIR);
 
-    const sessionDirs = getStoredSessionDirectories(AUTH_DIR);
+    let sessionDirs = getStoredSessionDirectories(AUTH_DIR);
+
+    // Sync database-stored sessions if Supabase is active
+    if (isSupabaseEnabled()) {
+        log('RESTORE', 'Fetching session list from Supabase for startup recovery...');
+        const dbPhoneNumbers = await getAllSessionPhoneNumbers();
+        const combined = new Set([...sessionDirs, ...dbPhoneNumbers]);
+        sessionDirs = Array.from(combined);
+    }
+
     if (!sessionDirs.length) {
-        log('RESTORE', 'No local session folders found to reconnect.');
+        log('RESTORE', 'No local or database session folders found to reconnect.');
         return 0;
     }
 
@@ -1037,6 +913,11 @@ async function restoreAllSessions() {
     for (const phoneNumber of sessionDirs) {
         const authDir = path.join(AUTH_DIR, phoneNumber);
         try {
+            // Pre-download from Supabase if active
+            if (isSupabaseEnabled()) {
+                await downloadSessionFromSupabase(phoneNumber, authDir);
+            }
+
             const { state } = await useMultiFileAuthState(authDir);
             if (!state?.creds?.registered) {
                 log('RESTORE', `${phoneNumber}: credentials are not registered. Skipping this folder.`);
@@ -1048,7 +929,7 @@ async function restoreAllSessions() {
             restoredCount += 1;
             log('RESTORE', `${phoneNumber}: socket recreation queued successfully${tgId ? ` (TG ${tgId})` : ''}.`);
         } catch (err) {
-            logError('RESTORE', `${phoneNumber}: failed to restore local session`, err);
+            logError('RESTORE', `${phoneNumber}: failed to restore session`, err);
         }
     }
 
@@ -1071,7 +952,7 @@ tgBot.onText(/\/start/, async (msg) => {
 
     await safeTgSend(
         chatId,
-        `🤖 *WhatsApp Multi-Bot*\n\nSend your number to pair using country code without + sign.\nExample: 2348012345678\n\n/pair — Start pairing\n/status — Status\n/disconnect — Disconnect your session\n/backup — Force backup to Telegram\n/restore — Force restore from Telegram\n/help — Commands`
+        `🤖 *WhatsApp Multi-Bot*\n\nSend your number to pair using country code without + sign.\nExample: 2348012345678\n\n/pair — Start pairing\n/status — Status\n/disconnect — Disconnect your session\n/help — Commands`
     );
 });
 
@@ -1151,7 +1032,7 @@ tgBot.onText(/\/status/, async (msg) => {
     const sessionDirs = countStoredSessions();
     await safeTgSend(
         chatId,
-        `📊 *Status*\n\nYour state: ${statusMap[user?.status || 'disconnected'] || '❓ Unknown'}\nYour number: ${user?.phoneNumber || 'None'}\n\n👥 Active sockets: ${waSessions.size}\n📁 Stored sessions: ${sessionDirs}/${MAX_USERS}\n🧠 Loaded Telegram users: ${telegramUsers.size}\n⏱️ Uptime: ${formatUptime(process.uptime())}`
+        `📊 *Status*\n\nYour state: ${statusMap[user?.status || 'disconnected'] || '❓ Unknown'}\nYour number: ${user?.phoneNumber || 'None'}\n\n👥 Active sockets: ${waSessions.size}\n📁 Stored sessions: ${sessionDirs}/${MAX_USERS}\n🧠 Loaded Telegram users: ${telegramUsers.size}\n⏱️ Uptime: ${formatUptime(process.uptime())}\n☁️ Supabase Sync: ${isSupabaseEnabled() ? '✅ Enabled' : '❌ Disabled'}`
     );
 });
 
@@ -1177,64 +1058,13 @@ tgBot.onText(/\/disconnect/, async (msg) => {
 
     waSessions.delete(phoneNumber);
     safeRm(path.join(AUTH_DIR, phoneNumber));
+    if (isSupabaseEnabled()) {
+        await deleteSessionFromSupabase(phoneNumber);
+    }
     clearTelegramUser(chatId);
     saveUserMap();
-    scheduleBackup(`manual disconnect ${phoneNumber}`);
 
     await safeTgSend(chatId, `✅ Disconnected ${phoneNumber} successfully.`);
-});
-
-tgBot.onText(/\/backup/, async (msg) => {
-    const chatId = msg.chat.id;
-    log('TELEGRAM', `/backup from ${chatId}`);
-
-    if (!(await requireAdminOrExplain(chatId))) return;
-    if (!requireChannelConfigured()) {
-        await safeTgSend(chatId, '❌ TELEGRAM_CHANNEL_ID is not configured, so backup cannot run.');
-        return;
-    }
-
-    await safeTgSend(chatId, '⏳ *Creating backup now...*\n\nPlease wait. I will upload it to the Telegram channel and pin it.');
-
-    try {
-        const result = await uploadBackupToTelegram('/backup command');
-        if (result?.skipped) {
-            await safeTgSend(chatId, '⚠️ A backup is already running. Please wait a few seconds and try again.');
-            return;
-        }
-        await safeTgSend(chatId, `✅ *Backup Complete!*\n\nBackup uploaded to Telegram and pinned successfully.\nMessage ID: ${result.messageId}`);
-    } catch (err) {
-        logError('BACKUP', 'Manual /backup failed', err);
-        await safeTgSend(chatId, `❌ *Backup Failed!*\n\n${err.message}`);
-    }
-});
-
-tgBot.onText(/\/restore/, async (msg) => {
-    const chatId = msg.chat.id;
-    log('TELEGRAM', `/restore from ${chatId}`);
-
-    if (!(await requireAdminOrExplain(chatId))) return;
-    if (!requireChannelConfigured()) {
-        await safeTgSend(chatId, '❌ TELEGRAM_CHANNEL_ID is not configured, so restore cannot run.');
-        return;
-    }
-
-    await safeTgSend(chatId, '⏳ *Restoring from Telegram backup...*\n\nI will stop all current sockets, pull the pinned backup from Telegram, restore the files, and reconnect the sessions.');
-
-    try {
-        await stopAllSessions('manual /restore');
-        const restored = await restoreFromTelegram();
-        if (!restored) {
-            await safeTgSend(chatId, '⚠️ *Restore Failed!*\n\nNo valid pinned backup was found in the Telegram channel.');
-            return;
-        }
-
-        const restoredCount = await restoreAllSessions();
-        await safeTgSend(chatId, `✅ *Restore Complete!*\n\nRestored session folders: ${restoredCount}\nReconnection has started.`);
-    } catch (err) {
-        logError('RESTORE', 'Manual /restore failed', err);
-        await safeTgSend(chatId, `❌ *Restore Failed!*\n\n${err.message}`);
-    }
 });
 
 tgBot.onText(/\/help/, async (msg) => {
@@ -1243,7 +1073,7 @@ tgBot.onText(/\/help/, async (msg) => {
 
     await safeTgSend(
         chatId,
-        `📖 *Commands*\n\n/start — Welcome message\n/pair — Connect your WhatsApp\n/status — Show status\n/disconnect — Disconnect your session\n/backup — Force backup to Telegram\n/restore — Force restore from Telegram\n/help — Show commands\n\n*WhatsApp commands:*\n.menu\n.ping\n.help\n.info`
+        `📖 *Commands*\n\n/start — Welcome message\n/pair — Connect your WhatsApp\n/status — Show status\n/disconnect — Disconnect your session\n/help — Show commands\n\n*WhatsApp commands:*\n.menu\n.ping\n.help\n.info`
     );
 });
 
@@ -1259,7 +1089,8 @@ app.get('/', (req, res) => {
         storedSessions: countStoredSessions(),
         loadedTelegramUsers: telegramUsers.size,
         maxUsers: MAX_USERS,
-        uptime: process.uptime()
+        uptime: process.uptime(),
+        supabaseSync: isSupabaseEnabled() ? 'enabled' : 'disabled'
     });
 });
 
@@ -1269,7 +1100,8 @@ app.get('/health', (req, res) => {
         uptime: process.uptime(),
         memory: `${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)} MB`,
         activeSockets: waSessions.size,
-        storedSessions: countStoredSessions()
+        storedSessions: countStoredSessions(),
+        supabaseSync: isSupabaseEnabled() ? 'enabled' : 'disabled'
     });
 });
 
@@ -1283,34 +1115,24 @@ app.get('/ping', (req, res) => {
 async function main() {
     ensureDir(AUTH_DIR);
     normalizeAuthDirStructure();
-    loadUserMap({ clearExisting: true });
+    await loadUserMap({ clearExisting: true });
 
     log('BOOT', '🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷');
     log('BOOT', '🤖 WHATSAPP MULTI-BOT');
     log('BOOT', '📦 Baileys v7.0.0-rc13');
-    log('BOOT', '📱 Telegram Pairing + Backup + Restore');
+    log('BOOT', '📱 Telegram Pairing + Supabase Database Sync');
     log('BOOT', '🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷');
 
-    if (!requireChannelConfigured()) {
-        log('BOOT', '⚠️ TELEGRAM_CHANNEL_ID is not set. Automatic backup/restore will be disabled.');
-    }
     if (DEV_IDS.length === 0) {
         log('BOOT', '⚠️ DEV_TELEGRAM_IDS is empty. Admin commands are open to any Telegram private chat user.');
     } else {
         log('BOOT', `🔒 Dev Telegram IDs: ${DEV_IDS.join(', ')}`);
     }
 
-    let restoredFromTelegram = false;
-    try {
-        restoredFromTelegram = await restoreFromTelegram();
-    } catch (err) {
-        logError('BOOT', 'Startup Telegram restore failed', err);
-    }
-
-    if (restoredFromTelegram) {
-        log('BOOT', '✅ Telegram backup restored on startup. Reconnecting restored sessions...');
+    if (isSupabaseEnabled()) {
+        log('BOOT', '☁️ Supabase Cloud Sync integration is ENABLED.');
     } else {
-        log('BOOT', 'ℹ️ No Telegram restore performed on startup. Reconnecting local sessions if available...');
+        log('BOOT', '⚠️ Supabase integration is DISABLED. Local storage will act as primary.');
     }
 
     const restoredCount = await restoreAllSessions();
@@ -1323,7 +1145,6 @@ async function main() {
         log('HTTP', `GET /ping -> pong`);
         log('BOT', `Telegram bot polling is active.`);
         log('BOT', `Max users: ${MAX_USERS}`);
-        log('BOT', `Backup channel: ${TELEGRAM_CHANNEL_ID || 'NOT SET'}`);
     });
 }
 
