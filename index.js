@@ -47,58 +47,40 @@ const KEEP_ALIVE_INTERVAL = 4 * 60 * 1000;
 const RECENT_APPEND_WINDOW_SECONDS = 120;
 
 // ──────────────────────────────────────────────
-// 🔮 ANIMATION FRAMES & STAGES (PERFECT WHATSAPP SPACING)
+// 🔮 ANIMATION LOGIC & STAGES (PERFECT WHATSAPP SPACING)
 // ──────────────────────────────────────────────
 
-const STAGE1_FRAME1 = `╔═◈═════════════◈═╗
+const animSteps = [
+    { percent: 8,  bar: 1,  text: '◐ initiating umbral protocol', core: '◌', cipher: '◌', void: '◌' },
+    { percent: 16, bar: 2,  text: '◐ initiating umbral protocol', core: '◌', cipher: '◌', void: '◌' },
+    { percent: 25, bar: 3,  text: '◐ initiating umbral protocol', core: '◌', cipher: '◌', void: '◌' },
+    { percent: 33, bar: 4,  text: '◑ collapsing quantum states',  core: '✔', cipher: '◌', void: '◌' },
+    { percent: 41, bar: 5,  text: '◑ collapsing quantum states',  core: '✔', cipher: '◌', void: '◌' },
+    { percent: 50, bar: 6,  text: '◑ collapsing quantum states',  core: '✔', cipher: '◌', void: '◌' },
+    { percent: 58, bar: 7,  text: '◒ severing the last anchor',    core: '✔', cipher: '◌', void: '◌' },
+    { percent: 66, bar: 8,  text: '◒ severing the last anchor',    core: '✔', cipher: '✔', void: '◌' },
+    { percent: 75, bar: 9,  text: '◒ severing the last anchor',    core: '✔', cipher: '✔', void: '◌' },
+    { percent: 83, bar: 10, text: '◓ anchoring to the void',       core: '✔', cipher: '✔', void: '◌' },
+    { percent: 91, bar: 11, text: '◓ anchoring to the void',       core: '✔', cipher: '✔', void: '◌' },
+    { percent: 100, bar: 12, text: '✔ synchronization complete',    core: '✔', cipher: '✔', void: '✔' }
+];
+
+function generateLoadingFrame(step) {
+    const totalBlocks = 12;
+    const filled = '▰'.repeat(step.bar);
+    const empty = '▱'.repeat(totalBlocks - step.bar);
+    const pct = String(step.percent).padStart(2, '0') + '%';
+    
+    return `╔═◈═════════════◈═╗
    E V E N T I D E   O M E G A
         ⟁  *eclipse core*  ⟁
 ╚═◈═════════════◈═╗
 
-   ◐ initiating umbral protocol
-   ⟢ ▰▱▱▱▱▱▱▱▱▱▱▱ ⟣   08%
+   ${step.text}
+   ⟢ ${filled}${empty} ⟣   ${pct}
    ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
-   ◌ core    ◌ cipher    ◌ void`;
-
-const STAGE1_FRAME2 = `╔═◈═════════════◈═╗
-   E V E N T I D E   O M E G A
-        ⟁  *eclipse core*  ⟁
-╚═◈═════════════◈═╗
-
-   ◑ collapsing quantum states
-   ⟢ ▰▰▰▰▱▱▱▱▱▱▱▱ ⟣   33%
-   ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
-   ✔ core    ◌ cipher    ◌ void`;
-
-const STAGE1_FRAME3 = `╔═◈══════════════◈═╗
-   E V E N T I D E   O M E G A
-        ⟁  *eclipse core*  ⟁
-╚═◈══════════════◈═╗
-
-   ◒ severing the last anchor
-   ⟢ ▰▰▰▰▰▰▰▱▱▱▱▱ ⟣   58%
-   ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
-   ✔ core    ✔ cipher    ◌ void`;
-
-const STAGE1_FRAME4 = `╔═◈══════════════◈═╗
-   E V E N T I D E   O M E G A
-        ⟁  *eclipse core*  ⟁
-╚═◈══════════════◈═╗
-
-   ◓ anchoring to the void
-   ⟢ ▰▰▰▰▰▰▰▰▰▰▱▱ ⟣   83%
-   ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
-   ✔ core    ✔ cipher    ◌ void`;
-
-const STAGE1_FRAME5 = `╔═◈══════════════◈═╗
-   E V E N T I D E   O M E G A
-        ⟁  *eclipse core*  ⟁
-╚═◈══════════════◈═╗
-
-   ✔ synchronization complete
-   ⟢ ▰▰▰▰▰▰▰▰▰▰▰▰ ⟣  100%
-   ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
-   ✔ core    ✔ cipher    ✔ void`;
+   ${step.core} core    ${step.cipher} cipher    ${step.void} void`;
+}
 
 const STAGE2_TEXT = `.
         ◢██◣
@@ -139,6 +121,17 @@ const STAGE3_TEXT = `╔═════════╦════════�
 📡 Use *.help* to explore the codex.
 
 > _Developed by 【 亗 ᑭᗩTᖇIᑕK ᗪEᐯ 亗 】✧_`;
+
+// ──────────────────────────────────────────────
+// 📊 POLL DETAILS
+// ──────────────────────────────────────────────
+const POLL_QUESTION = `╔═════════╦══════════╗\n        ⚠ EVENTIDE OMEGA ⚠\n╚═════════╩══════════╝`;
+const POLL_OPTIONS = [
+    '╰&shy;┈➤ [ 1. OWNERS MENU ]',
+    '╰&shy;┈➤ [ 2. GROUP MENU ]',
+    '╰&shy;┈➤ [ 3. SYSTEM MENU ]',
+    '╰&shy;┈➤ [ 4. FUN MENU ]'
+];
 
 // ──────────────────────────────────────────────
 // 📋 WHATSAPP COMMANDS
@@ -922,42 +915,44 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     }
 
     // ──────────────────────────────────────────────
-    // 🌌 SPECIAL MULTI-STAGE LOADING MENU COMMAND
+    // 🌌 SPECIAL MULTI-STAGE GRANULAR LOADING MENU COMMAND
     // ──────────────────────────────────────────────
     if (token === '.menu') {
-        log('WA-CMD', `${phoneNumber}: Menu loading animation triggered.`);
+        log('WA-CMD', `${phoneNumber}: Granular menu loading animation triggered.`);
         try {
-            // Stage 1 - Frame 1 (08%)
-            const sentMsg = await sock.sendMessage(remoteJid, { text: STAGE1_FRAME1 });
+            // Send initial Step 1 (08%)
+            const firstFrame = generateLoadingFrame(animSteps[0]);
+            const sentMsg = await sock.sendMessage(remoteJid, { text: firstFrame });
             const messageKey = sentMsg.key;
 
-            // Stage 1 - Frame 2 (33%)
-            await delay(1200);
-            await sock.sendMessage(remoteJid, { text: STAGE1_FRAME2, edit: messageKey });
-
-            // Stage 1 - Frame 3 (58%)
-            await delay(1200);
-            await sock.sendMessage(remoteJid, { text: STAGE1_FRAME3, edit: messageKey });
-
-            // Stage 1 - Frame 4 (83%)
-            await delay(1200);
-            await sock.sendMessage(remoteJid, { text: STAGE1_FRAME4, edit: messageKey });
-
-            // Stage 1 - Frame 5 (100%)
-            await delay(1200);
-            await sock.sendMessage(remoteJid, { text: STAGE1_FRAME5, edit: messageKey });
+            // Step through frames 2 to 12 with a smooth 600ms transition
+            for (let i = 1; i < animSteps.length; i++) {
+                await delay(600);
+                const nextFrame = generateLoadingFrame(animSteps[i]);
+                await sock.sendMessage(remoteJid, { text: nextFrame, edit: messageKey });
+            }
 
             // Stage 2 (The Void Exists)
             await delay(1500);
             await sock.sendMessage(remoteJid, { text: STAGE2_TEXT, edit: messageKey });
 
-            // Stage 3 (Stay 3 seconds, then edit to Terminal Access)
+            // Stage 3 (Stay on screen for 3 seconds, then edit to Terminal Access)
             await delay(3000);
             await sock.sendMessage(remoteJid, { text: STAGE3_TEXT, edit: messageKey });
 
-            log('WA-CMD', `${phoneNumber}: Menu loading animation completed successfully.`);
+            // Send a beautiful native Poll Message containing the premium buttons look
+            await delay(1500);
+            await sock.sendMessage(remoteJid, {
+                poll: {
+                    name: POLL_QUESTION,
+                    values: POLL_OPTIONS,
+                    selectableCount: 1
+                }
+            });
+
+            log('WA-CMD', `${phoneNumber}: Menu animation & poll delivery completed successfully.`);
         } catch (err) {
-            logError('WA-CMD', `${phoneNumber}: Failed Menu loading animation`, err);
+            logError('WA-CMD', `${phoneNumber}: Failed executing granular Menu animation/poll`, err);
         }
         return;
     }
@@ -977,6 +972,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     }
 }
 
+// Attach event listeners
 function setupMessageHandler(sock, phoneNumber, tgId) {
     log('WA-HANDLER', `${phoneNumber}: attaching message handlers (tgId=${tgId ?? 'none'})`);
 
