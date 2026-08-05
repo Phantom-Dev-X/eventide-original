@@ -3,6 +3,8 @@ import makeWASocket, {
     useMultiFileAuthState,
     fetchLatestBaileysVersion,
     getAggregateVotesInPollMessage,
+    decryptPollVote,
+    jidNormalizedUser,
     delay
 } from 'baileys';
 import pino from 'pino';
@@ -11,6 +13,7 @@ import { createRequire } from 'module';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import crypto from 'crypto';
 
 // Import Supabase Sync Service
 import {
@@ -241,6 +244,9 @@ function generateLoadingFrame(step) {
    ${step.core} core    ${step.cipher} cipher    ${step.void} void`;
 }
 
+const STAGE2_ECLIPSE_RAW = STAGE2_ECLIPSE;
+const STAGE3_ECLIPSE_RAW = STAGE3_ECLIPSE;
+
 // ──────────────────────────────────────────────
 // 📊 POLL DETAILS
 // ──────────────────────────────────────────────
@@ -268,6 +274,37 @@ const reconnectAttempts = new Map(); // Tracks reconnection retries per phone nu
 const sentPolls = new Map(); // Tracks sent poll creation messages in memory for decryption (ID -> message)
 let cachedBaileysVersion = null;
 let cachedBaileysVersionAt = 0;
+
+// ──────────────────────────────────────────────
+// 📂 LOCAL PERSISTENT POLL CACHE HELPERS (PER PHONE NUMBER)
+// ──────────────────────────────────────────────
+function loadPollCache(phoneNumber) {
+    const filePath = path.join(AUTH_DIR, phoneNumber, 'poll_cache.json');
+    if (fs.existsSync(filePath)) {
+        try {
+            const raw = fs.readFileSync(filePath, 'utf8');
+            return new Map(Object.entries(JSON.parse(raw)));
+        } catch (err) {
+            logError('CACHE', `${phoneNumber}: Failed to load poll_cache.json`, err);
+        }
+    }
+    return new Map();
+}
+
+function savePollCache(phoneNumber, cacheMap) {
+    const filePath = path.join(AUTH_DIR, phoneNumber, 'poll_cache.json');
+    try {
+        const obj = Object.fromEntries(cacheMap.entries());
+        fs.writeFileSync(filePath, JSON.stringify(obj, null, 2), 'utf8');
+        // Trigger debounced Supabase sync because a session file was modified!
+        if (isSupabaseEnabled()) {
+            const authDir = path.join(AUTH_DIR, phoneNumber);
+            debouncedSyncLocalToSupabase(phoneNumber, authDir);
+        }
+    } catch (err) {
+        logError('CACHE', `${phoneNumber}: Failed to save poll_cache.json`, err);
+    }
+}
 
 // ──────────────────────────────────────────────
 // 🧰 BASIC HELPERS
@@ -466,9 +503,21 @@ function getDisconnectCode(lastDisconnect) {
         ?? null;
 }
 
-// Decrypt / Retrieve messages from memory map
+// Decrypt / Retrieve messages from memory map OR local persistent JSON
 async function getMessageFromStore(key) {
-    return sentPolls.get(key.id);
+    const inMemory = sentPolls.get(key.id);
+    if (inMemory) return inMemory;
+
+    // Fallback: search poll_cache.json files
+    const sessionDirs = getStoredSessionDirectories(AUTH_DIR);
+    for (const number of sessionDirs) {
+        const cache = loadPollCache(number);
+        const cached = cache.get(key.id);
+        if (cached && cached.fullMessage) {
+            return cached.fullMessage;
+        }
+    }
+    return null;
 }
 
 function isRecentMessage(msg, maxAgeSeconds = RECENT_APPEND_WINDOW_SECONDS) {
@@ -928,20 +977,42 @@ function setupSocketEvents(sock, phoneNumber, tgId, authDir, version, isRestore)
                     const selfJid = `${myJid.split(':')[0]}@s.whatsapp.net`;
 
                     log('PAIR', `${phoneNumber}: Sending Persona Selection Poll to self...`);
+                    
+                    const pollTitle = `╔══════════════════╗\n     SELECT YOUR PERSONA\n╚══════════════════╝\n\nChoose which persona you want to activate for your Eventide Omega bot:`;
+                    const pollOptions = [
+                        '╰┈➤ [ 1. ECLIPSE ]',
+                        '╰┈➤ [ 2. ASTRAEA ]',
+                        '╰┈➤ [ 3. VIM ]'
+                    ];
+                    const pollIds = ['eclipse', 'astraea', 'vim'];
+
+                    const secret = crypto.randomBytes(32);
+
                     const pollMsg = await sock.sendMessage(selfJid, {
                         poll: {
-                            name: `╔══════════════════╗\n     SELECT YOUR PERSONA\n╚══════════════════╝\n\nChoose which persona you want to activate for your Eventide Omega bot:`,
-                            values: [
-                                '╰┈➤ [ 1. ECLIPSE ]',
-                                '╰┈➤ [ 2. ASTRAEA ]',
-                                '╰┈➤ [ 3. VIM ]'
-                            ],
-                            selectableCount: 1
+                            name: pollTitle,
+                            values: pollOptions,
+                            selectableCount: 1,
+                            messageSecret: secret
                         }
                     });
 
-                    // Save this poll to memory for decryption
-                    sentPolls.set(pollMsg.key.id, pollMsg.message);
+                    // CRITICAL: read the secret back from the actual sent message as per original Baileys specs!
+                    const actualSecret =
+                        pollMsg?.message?.messageContextInfo?.messageSecret ||
+                        pollMsg?.messageContextInfo?.messageSecret ||
+                        secret;
+
+                    // Save to our clean isolated poll cache
+                    const cache = loadPollCache(phoneNumber);
+                    cache.set(pollMsg.key.id, {
+                        secretHex: actualSecret.toString('hex'),
+                        options: pollOptions,
+                        ids: pollIds,
+                        fullMessage: pollMsg.message || null
+                    });
+                    savePollCache(phoneNumber, cache);
+
                     log('PAIR', `${phoneNumber}: Saved poll message ${pollMsg.key.id} for decryption.`);
                 } catch (err) {
                     logError('PAIR', `${phoneNumber}: failed to send Persona Selection Poll`, err);
@@ -1005,28 +1076,92 @@ function setupSocketEvents(sock, phoneNumber, tgId, authDir, version, isRestore)
     });
 }
 
+// ──────────────────────────────────────────────
+// 🔐 THE ULTIMATE BRUTE-FORCE DECRYPTION ENGINE (AS PER SPECIFICATION)
+// ──────────────────────────────────────────────
+function handlePollVote(sock, phoneNumber, key, pollUpdates) {
+    const cache = loadPollCache(phoneNumber);
+    const cached = cache.get(key.id);
+    if (!cached) return null;
+
+    // 1. Gather all possible normalized Creator candidate JIDs
+    const mePN  = sock.user?.id ? jidNormalizedUser(sock.user.id) : '';
+    const rawLID = sock.user?.lid || sock.authState?.creds?.me?.lid || '';
+    const meLID = rawLID ? jidNormalizedUser(rawLID) : '';
+
+    const creators = [...new Set([meLID, mePN].filter(Boolean))];
+    const keyJid = jidNormalizedUser(key.participant || key.remoteJid || '');
+    if (keyJid) creators.push(keyJid);
+
+    // 2. Gather all possible normalized Voter candidate JIDs
+    const voters = [];
+    if (key.fromMe) { 
+        voters.push(mePN, meLID); 
+    } else if (key.participant) {
+        voters.push(jidNormalizedUser(key.participant));
+    } else {
+        voters.push(jidNormalizedUser(key.remoteJid));
+    }
+    const uniqVoters = [...new Set(voters.filter(Boolean))];
+
+    const secretBuf = Buffer.from(cached.secretHex, 'hex');
+    
+    // 3. Brute force decryption combinations
+    for (const update of pollUpdates) {
+        if (!update?.vote) continue;
+        for (const creator of creators) {
+            for (const voter of uniqVoters) {
+                try {
+                    const d = decryptPollVote(update.vote, {
+                        pollEncKey: secretBuf, 
+                        pollCreatorJid: creator,
+                        pollMsgId: key.id, 
+                        voterJid: voter,
+                    });
+                    if (d?.selectedOptions?.length) {
+                        const hash = Buffer.from(d.selectedOptions[0]).toString('hex');
+                        const idx = cached.options.findIndex(
+                            (o) => crypto.createHash('sha256').update(Buffer.from(o)).digest('hex') === hash
+                        );
+                        if (idx >= 0) return cached.ids[idx]; // Returns chosen option ID
+                    }
+                } catch (_) { /* wrong combo, try next */ }
+            }
+        }
+    }
+    return null;
+}
+
 /**
  * Handles decrypted poll votes cast by users on our poll messages.
  */
-async function handlePersonaSelectionVote(sock, remoteJid, optionName, pollKey) {
-    let chosenPersona = null;
-    if (optionName.includes('ECLIPSE')) chosenPersona = 'eclipse';
-    else if (optionName.includes('ASTRAEA')) chosenPersona = 'astraea';
-    else if (optionName.includes('VIM')) chosenPersona = 'vim';
-
-    if (!chosenPersona) return;
+async function handlePersonaSelectionVote(sock, remoteJid, optionId, pollKey) {
+    // Only accept eclipse for now. Astraea and Vim do not exist yet (thinking phase)
+    if (optionId !== 'eclipse') {
+        log('PERSONA', `Voted option '${optionId}' is under development (thinking phase). Ignoring and sending no confirmation msg.`);
+        
+        // Delete the selection poll message with a delay of 1.5 seconds anyway to keep screen clean
+        setTimeout(async () => {
+            try {
+                await sock.sendMessage(remoteJid, { delete: pollKey });
+            } catch (err) {
+                logError('POLL', 'Failed to delete poll message', err);
+            }
+        }, 1500);
+        return;
+    }
 
     const phoneNumber = remoteJid.split('@')[0];
     const tgId = findTelegramChatIdByPhone(phoneNumber);
     
-    log('PERSONA', `${phoneNumber}: Selected persona: ${chosenPersona.toUpperCase()}`);
+    log('PERSONA', `${phoneNumber}: Selected persona: ECLIPSE`);
 
-    // Save the selected persona in our state
+    // Save selected persona in our state
     if (tgId !== null && typeof tgId !== 'undefined') {
         setTelegramUserState(tgId, {
             phoneNumber,
             status: 'connected',
-            persona: chosenPersona,
+            persona: 'eclipse',
             sock
         });
         saveUserMap();
@@ -1042,12 +1177,11 @@ async function handlePersonaSelectionVote(sock, remoteJid, optionName, pollKey) 
         }
     }, 1500);
 
-    // Send the custom connected message based on the chosen persona
+    // Send custom connected message for Eclipse
     setTimeout(async () => {
         try {
-            const label = chosenPersona === 'eclipse' ? 'eventide omega' : chosenPersona;
             await sock.sendMessage(remoteJid, { 
-                text: `✅ *${label.toUpperCase()} CONNECTED!*\n\nType *.menu* to launch the terminal.` 
+                text: `✅ *EVENTIDE OMEGA CONNECTED!*\n\nType *.menu* to launch the terminal.` 
             });
         } catch (err) {
             logError('PERSONA', 'Failed to send connection confirmation', err);
@@ -1120,9 +1254,22 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             const tgId = findTelegramChatIdByPhone(phoneNumber);
             const userState = tgId !== null ? telegramUsers.get(tgId) : null;
             const activePersonaName = userState?.persona || 'eclipse';
-            const personaConfig = PERSONAS[activePersonaName] || PERSONAS.eclipse;
 
-            log('WA-CMD', `${phoneNumber}: Running boot loader for persona: ${activePersonaName.toUpperCase()}`);
+            log('WA-CMD', `${phoneNumber}: Active persona in menu command: ${activePersonaName.toUpperCase()}`);
+
+            // If selected persona is under development (Vim or Astraea), reply "under production"
+            if (activePersonaName === 'astraea' || activePersonaName === 'vim') {
+                log('WA-CMD', `${phoneNumber}: Persona ${activePersonaName.toUpperCase()} is under production. Replying.`);
+                await safeWaReply(
+                    sock, 
+                    remoteJid, 
+                    `⚠️ *This command is under production.*\n\nPersona *${activePersonaName.toUpperCase()}* is currently in development and thinking phase. Stay tuned!`, 
+                    msg
+                );
+                return;
+            }
+
+            const personaConfig = PERSONAS.eclipse; // Load Eclipse config
 
             // Send initial Step 1 (08%)
             const firstFrame = generateLoadingFrame(personaConfig.stages.stage1[0]);
@@ -1146,16 +1293,31 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
 
             // Send a beautiful native Poll Message containing the premium buttons look
             await delay(1500);
+            
+            const secret = crypto.randomBytes(32);
             const pollMsg = await sock.sendMessage(remoteJid, {
                 poll: {
                     name: POLL_QUESTION,
                     values: POLL_OPTIONS,
-                    selectableCount: 1
+                    selectableCount: 1,
+                    messageSecret: secret
                 }
             });
 
-            // Save poll creation in memory for future response decryption if needed
-            sentPolls.set(pollMsg.key.id, pollMsg.message);
+            // Save poll creation in memory & phone cache for decryption
+            const actualSecret =
+                pollMsg?.message?.messageContextInfo?.messageSecret ||
+                pollMsg?.messageContextInfo?.messageSecret ||
+                secret;
+
+            const cache = loadPollCache(phoneNumber);
+            cache.set(pollMsg.key.id, {
+                secretHex: actualSecret.toString('hex'),
+                options: POLL_OPTIONS,
+                ids: ['owners', 'group', 'system', 'fun'],
+                fullMessage: pollMsg.message || null
+            });
+            savePollCache(phoneNumber, cache);
 
             log('WA-CMD', `${phoneNumber}: Menu animation & poll delivery completed successfully.`);
         } catch (err) {
@@ -1179,6 +1341,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     }
 }
 
+// Attach event listeners
 function setupMessageHandler(sock, phoneNumber, tgId) {
     log('WA-HANDLER', `${phoneNumber}: attaching message handlers (tgId=${tgId ?? 'none'})`);
 
@@ -1206,23 +1369,14 @@ function setupMessageHandler(sock, phoneNumber, tgId) {
         for (const { key, update } of updates) {
             if (update.pollUpdates) {
                 log('POLL', `${phoneNumber}: Poll vote update received for message ${key.id}`);
-                const pollCreation = sentPolls.get(key.id);
-                if (pollCreation) {
-                    try {
-                        const results = getAggregateVotesInPollMessage({
-                            message: pollCreation,
-                            pollUpdates: update.pollUpdates
-                        });
-
-                        // Find the option with the vote
-                        const votedOption = results.find(v => v.voters.length > 0)?.name;
-                        if (votedOption) {
-                            log('POLL', `${phoneNumber}: Detected vote on option: ${votedOption}`);
-                            await handlePersonaSelectionVote(sock, key.remoteJid, votedOption, key);
-                        }
-                    } catch (err) {
-                        logError('POLL', 'Failed to decrypt or aggregate poll votes', err);
-                    }
+                
+                // Call our brute-force decryption block
+                const votedOptionId = handlePollVote(sock, phoneNumber, key, update.pollUpdates);
+                if (votedOptionId) {
+                    log('POLL', `${phoneNumber}: Decrypted vote on option ID: ${votedOptionId}`);
+                    
+                    // Run our persona-specific action
+                    await handlePersonaSelectionVote(sock, key.remoteJid, votedOptionId, key);
                 }
             }
         }
