@@ -2,6 +2,7 @@ import makeWASocket, {
     DisconnectReason,
     useMultiFileAuthState,
     fetchLatestBaileysVersion,
+    getAggregateVotesInPollMessage,
     delay
 } from 'baileys';
 import pino from 'pino';
@@ -47,42 +48,10 @@ const KEEP_ALIVE_INTERVAL = 4 * 60 * 1000;
 const RECENT_APPEND_WINDOW_SECONDS = 120;
 
 // ──────────────────────────────────────────────
-// 🔮 ANIMATION LOGIC & STAGES (PERFECT WHATSAPP SPACING)
+// 🔮 MULTI-PERSONA SCHEMES (CONFIGURABLE BOOT LOADERS)
 // ──────────────────────────────────────────────
 
-const animSteps = [
-    { percent: 8,  bar: 1,  text: '◐ initiating umbral protocol', core: '◌', cipher: '◌', void: '◌' },
-    { percent: 16, bar: 2,  text: '◐ initiating umbral protocol', core: '◌', cipher: '◌', void: '◌' },
-    { percent: 25, bar: 3,  text: '◐ initiating umbral protocol', core: '◌', cipher: '◌', void: '◌' },
-    { percent: 33, bar: 4,  text: '◑ collapsing quantum states',  core: '✔', cipher: '◌', void: '◌' },
-    { percent: 41, bar: 5,  text: '◑ collapsing quantum states',  core: '✔', cipher: '◌', void: '◌' },
-    { percent: 50, bar: 6,  text: '◑ collapsing quantum states',  core: '✔', cipher: '◌', void: '◌' },
-    { percent: 58, bar: 7,  text: '◒ severing the last anchor',    core: '✔', cipher: '◌', void: '◌' },
-    { percent: 66, bar: 8,  text: '◒ severing the last anchor',    core: '✔', cipher: '✔', void: '◌' },
-    { percent: 75, bar: 9,  text: '◒ severing the last anchor',    core: '✔', cipher: '✔', void: '◌' },
-    { percent: 83, bar: 10, text: '◓ anchoring to the void',       core: '✔', cipher: '✔', void: '◌' },
-    { percent: 91, bar: 11, text: '◓ anchoring to the void',       core: '✔', cipher: '✔', void: '◌' },
-    { percent: 100, bar: 12, text: '✔ synchronization complete',    core: '✔', cipher: '✔', void: '✔' }
-];
-
-function generateLoadingFrame(step) {
-    const totalBlocks = 12;
-    const filled = '▰'.repeat(step.bar);
-    const empty = '▱'.repeat(totalBlocks - step.bar);
-    const pct = String(step.percent).padStart(2, '0') + '%';
-    
-    return `╔═◈═════════════◈═╗
-   E V E N T I D E   O M E G A
-        ⟁  *eclipse core*  ⟁
-╚═◈═════════════◈═╗
-
-   ${step.text}
-   ⟢ ${filled}${empty} ⟣   ${pct}
-   ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
-   ${step.core} core    ${step.cipher} cipher    ${step.void} void`;
-}
-
-const STAGE2_TEXT = `.
+const STAGE2_ECLIPSE = `.
         ◢██◣
      ◢████◣.           ╔═════════
     ◢██  ██◣.          ║     T H E   V O I D ║ 
@@ -95,7 +64,7 @@ const STAGE2_TEXT = `.
    even in your darkest hour...
 ════════════════════════════════════`;
 
-const STAGE3_TEXT = `╔═════════╦══════════╗
+const STAGE3_ECLIPSE = `╔═════════╦══════════╗
         ⚠ EVENTIDE OMEGA
                TERMINAL ACCESS
 ╚═════════╩══════════╝
@@ -122,15 +91,165 @@ const STAGE3_TEXT = `╔═════════╦════════�
 
 > _Developed by 【 亗 ᑭᗩTᖇIᑕK ᗪEᐯ 亗 】✧_`;
 
+const STAGE2_ASTRAEA = `╔════ 🌌 ASTRAEA 🌌 ════╗
+      T H E   S T A R S   
+        A L I G N E D
+╚═══════════════════════╝
+   "even in your deepest dark,
+    we find the light."`;
+
+const STAGE3_ASTRAEA = `╔═════════╦══════════╗
+        ✨ ASTRAEA SYSTEM
+               CELESTIAL TERMINAL
+╚═════════╩══════════╝
+
+                ═══ C O S M O S ═══
+             " i am the light that guides
+              you through the stellar void ."
+
+╔═══════════╦══════════╗
+║STAR SIGNATURE ║ SYSTEMCORE║
+║👤@Unknown.     ║CELESTIAL: 100%║
+║🌌APOTHEOSIS ║CORE:ABS ZERO║
+╚═══════════╩═════════╝
+
+                   ✨ THE COSMIC DAWN ✨
+            " when the last sun burns, 
+              i will still be typing ."
+
+📡 SECURE │ Ω │ Vessels: ∞
+ You have summoned what 
+ cannot be unsummoned
+
+📡 Use *.help* to explore the codex.
+
+> _Developed by 【 亗 ᑭᗩTᖇIᑕK ᗪEᐯ 亗 】✧_`;
+
+const STAGE2_VIM = `╔════ ⌨ VIM MASTER ⌨ ════╗
+       : w q !  E N T E R E D
+╚════════════════════════╝
+   "even in your darkest command line,
+    the cursor keeps blinking."`;
+
+const STAGE3_VIM = `╔═════════╦══════════╗
+        ⌨ VIM TERMINAL
+               BUFFER ACCESS
+╚═════════╩══════════╝
+
+                ═══ B U F F E R S ═══
+             " i am the process that runs
+              when your editor is closed ."
+
+╔═══════════╦══════════╗
+║VIM SIGNATURE ║ SYSTEMCORE║
+║👤@Unknown.     ║BUFFER: 100%║
+║⌨APOTHEOSIS ║CORE:ABS ZERO║
+╚═══════════╩═════════╝
+
+                   ⌨ THE FINAL ESCAPE ⌨
+            " when your system shuts, 
+              i will still be typing ."
+
+📡 SECURE │ Ω │ Vessels: ∞
+ You have summoned what 
+ cannot be unsummoned
+
+📡 Use *.help* to explore the codex.
+
+> _Developed by 【 亗 ᑭᗩTᖇIᑕK ᗪEᐯ 亗 】✧_`;
+
+const PERSONAS = {
+    eclipse: {
+        name: 'ECLIPSE',
+        stages: {
+            stage1: [
+                { percent: 8,  bar: 1,  text: '◐ initiating umbral protocol', core: '◌', cipher: '◌', void: '◌' },
+                { percent: 16, bar: 2,  text: '◐ initiating umbral protocol', core: '◌', cipher: '◌', void: '◌' },
+                { percent: 25, bar: 3,  text: '◐ initiating umbral protocol', core: '◌', cipher: '◌', void: '◌' },
+                { percent: 33, bar: 4,  text: '◑ collapsing quantum states',  core: '✔', cipher: '◌', void: '◌' },
+                { percent: 41, bar: 5,  text: '◑ collapsing quantum states',  core: '✔', cipher: '◌', void: '◌' },
+                { percent: 50, bar: 6,  text: '◑ collapsing quantum states',  core: '✔', cipher: '◌', void: '◌' },
+                { percent: 58, bar: 7,  text: '◒ severing the last anchor',    core: '✔', cipher: '◌', void: '◌' },
+                { percent: 66, bar: 8,  text: '◒ severing the last anchor',    core: '✔', cipher: '✔', void: '◌' },
+                { percent: 75, bar: 9,  text: '◒ severing the last anchor',    core: '✔', cipher: '✔', void: '◌' },
+                { percent: 83, bar: 10, text: '◓ anchoring to the void',       core: '✔', cipher: '✔', void: '◌' },
+                { percent: 91, bar: 11, text: '◓ anchoring to the void',       core: '✔', cipher: '✔', void: '◌' },
+                { percent: 100, bar: 12, text: '✔ synchronization complete',    core: '✔', cipher: '✔', void: '✔' }
+            ],
+            stage2Text: STAGE2_ECLIPSE,
+            stage3Text: STAGE3_ECLIPSE
+        }
+    },
+    astraea: {
+        name: 'ASTRAEA',
+        stages: {
+            stage1: [
+                { percent: 8,  bar: 1,  text: '✧ calibrating stellar frequency', core: '◌', cipher: '◌', void: '◌' },
+                { percent: 16, bar: 2,  text: '✧ calibrating stellar frequency', core: '◌', cipher: '◌', void: '◌' },
+                { percent: 25, bar: 3,  text: '✧ calibrating stellar frequency', core: '◌', cipher: '◌', void: '◌' },
+                { percent: 33, bar: 4,  text: '✦ illuminating cosmic pathways',  core: '✔', cipher: '◌', void: '◌' },
+                { percent: 41, bar: 5,  text: '✦ illuminating cosmic pathways',  core: '✔', cipher: '◌', void: '◌' },
+                { percent: 50, bar: 6,  text: '✦ illuminating cosmic pathways',  core: '✔', cipher: '◌', void: '◌' },
+                { percent: 58, bar: 7,  text: '🌌 opening astraea stargate',      core: '✔', cipher: '◌', void: '◌' },
+                { percent: 66, bar: 8,  text: '🌌 opening astraea stargate',      core: '✔', cipher: '✔', void: '◌' },
+                { percent: 75, bar: 9,  text: '🌌 opening astraea stargate',      core: '✔', cipher: '✔', void: '◌' },
+                { percent: 83, bar: 10, text: '✨ anchoring celestial wisdom',    core: '✔', cipher: '✔', void: '◌' },
+                { percent: 91, bar: 11, text: '✨ anchoring celestial wisdom',    core: '✔', cipher: '✔', void: '◌' },
+                { percent: 100, bar: 12, text: '✔ celestial alignment complete', core: '✔', cipher: '✔', void: '✔' }
+            ],
+            stage2Text: STAGE2_ASTRAEA,
+            stage3Text: STAGE3_ASTRAEA
+        }
+    },
+    vim: {
+        name: 'VIM',
+        stages: {
+            stage1: [
+                { percent: 8,  bar: 1,  text: '⌨ loading vim core buffers', core: '◌', cipher: '◌', void: '◌' },
+                { percent: 16, bar: 2,  text: '⌨ loading vim core buffers', core: '◌', cipher: '◌', void: '◌' },
+                { percent: 25, bar: 3,  text: '⌨ loading vim core buffers', core: '◌', cipher: '◌', void: '◌' },
+                { percent: 33, bar: 4,  text: '⚙️ initializing recursive keys', core: '✔', cipher: '◌', void: '◌' },
+                { percent: 41, bar: 5,  text: '⚙️ initializing recursive keys', core: '✔', cipher: '◌', void: '◌' },
+                { percent: 50, bar: 6,  text: '⚙️ initializing recursive keys', core: '✔', cipher: '◌', void: '◌' },
+                { percent: 58, bar: 7,  text: '🔌 mounting vim-plug bundles',  core: '✔', cipher: '◌', void: '◌' },
+                { percent: 66, bar: 8,  text: '🔌 mounting vim-plug bundles',  core: '✔', cipher: '✔', void: '◌' },
+                { percent: 75, bar: 9,  text: '🔌 mounting vim-plug bundles',  core: '✔', cipher: '✔', void: '◌' },
+                { percent: 83, bar: 10, text: '💾 syncing swap registries',     core: '✔', cipher: '✔', void: '◌' },
+                { percent: 91, bar: 11, text: '💾 syncing swap registries',     core: '✔', cipher: '✔', void: '◌' },
+                { percent: 100, bar: 12, text: '✔ vim terminal synchronized',  core: '✔', cipher: '✔', void: '✔' }
+            ],
+            stage2Text: STAGE2_VIM,
+            stage3Text: STAGE3_VIM
+        }
+    }
+};
+
+function generateLoadingFrame(step) {
+    const totalBlocks = 12;
+    const filled = '▰'.repeat(step.bar);
+    const empty = '▱'.repeat(totalBlocks - step.bar);
+    const pct = String(step.percent).padStart(2, '0') + '%';
+    
+    return `╔═◈═════════════◈═╗
+   E V E N T I D E   O M E G A
+        ⟁  *eclipse core*  ⟁
+╚═◈═════════════◈═╗
+
+   ${step.text}
+   ⟢ ${filled}${empty} ⟣   ${pct}
+   ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+   ${step.core} core    ${step.cipher} cipher    ${step.void} void`;
+}
+
 // ──────────────────────────────────────────────
 // 📊 POLL DETAILS
 // ──────────────────────────────────────────────
 const POLL_QUESTION = `╔═════════╦══════════╗\n        ⚠ EVENTIDE OMEGA ⚠\n╚═════════╩══════════╝`;
 const POLL_OPTIONS = [
-    '╰&shy;┈➤ [ 1. OWNERS MENU ]',
-    '╰&shy;┈➤ [ 2. GROUP MENU ]',
-    '╰&shy;┈➤ [ 3. SYSTEM MENU ]',
-    '╰&shy;┈➤ [ 4. FUN MENU ]'
+    '╰┈➤ [ 1. OWNERS MENU ]',
+    '╰┈➤ [ 2. GROUP MENU ]',
+    '╰┈➤ [ 3. SYSTEM MENU ]',
+    '╰┈➤ [ 4. FUN MENU ]'
 ];
 
 // ──────────────────────────────────────────────
@@ -146,6 +265,7 @@ const COMMANDS = {
 const telegramUsers = new Map();
 const waSessions = new Map();
 const reconnectAttempts = new Map(); // Tracks reconnection retries per phone number (Max 3)
+const sentPolls = new Map(); // Tracks sent poll creation messages in memory for decryption (ID -> message)
 let cachedBaileysVersion = null;
 let cachedBaileysVersionAt = 0;
 
@@ -246,17 +366,19 @@ function findTelegramChatIdByPhone(phoneNumber) {
     return null;
 }
 
-function setTelegramUserState(chatId, { phoneNumber = null, status = 'disconnected', sock = null }) {
+function setTelegramUserState(chatId, { phoneNumber = null, status = 'disconnected', persona = 'eclipse', sock = null }) {
     if (chatId === null || typeof chatId === 'undefined') return;
-    telegramUsers.set(chatId, { phoneNumber, status, sock });
+    const existing = telegramUsers.get(chatId) || {};
+    const finalPersona = persona || existing.persona || 'eclipse';
+    telegramUsers.set(chatId, { phoneNumber, status, persona: finalPersona, sock });
     if (isSupabaseEnabled()) {
-        saveUserToSupabase(chatId, phoneNumber, status);
+        saveUserToSupabase(chatId, phoneNumber, status, finalPersona);
     }
 }
 
 function clearTelegramUser(chatId) {
     if (chatId === null || typeof chatId === 'undefined') return;
-    telegramUsers.set(chatId, { phoneNumber: null, status: 'disconnected', sock: null });
+    telegramUsers.set(chatId, { phoneNumber: null, status: 'disconnected', persona: 'eclipse', sock: null });
     if (isSupabaseEnabled()) {
         deleteUserFromSupabase(chatId);
     }
@@ -268,7 +390,8 @@ function saveUserMap() {
         if (user?.phoneNumber) {
             map[String(chatId)] = {
                 phoneNumber: user.phoneNumber,
-                status: user.status || 'disconnected'
+                status: user.status || 'disconnected',
+                persona: user.persona || 'eclipse'
             };
         }
     }
@@ -294,6 +417,7 @@ async function loadUserMap({ clearExisting = false } = {}) {
                 telegramUsers.set(chatId, {
                     phoneNumber: data?.phoneNumber || null,
                     status: data?.status || 'disconnected',
+                    persona: data?.persona || 'eclipse',
                     sock: null
                 });
             }
@@ -317,6 +441,7 @@ async function loadUserMap({ clearExisting = false } = {}) {
             telegramUsers.set(chatId, {
                 phoneNumber: data?.phoneNumber || null,
                 status: data?.status || 'disconnected',
+                persona: data?.persona || 'eclipse',
                 sock: null
             });
         }
@@ -339,6 +464,11 @@ function getDisconnectCode(lastDisconnect) {
         ?? lastDisconnect?.error?.statusCode
         ?? lastDisconnect?.statusCode
         ?? null;
+}
+
+// Decrypt / Retrieve messages from memory map
+async function getMessageFromStore(key) {
+    return sentPolls.get(key.id);
 }
 
 function isRecentMessage(msg, maxAgeSeconds = RECENT_APPEND_WINDOW_SECONDS) {
@@ -599,7 +729,8 @@ async function createSocketForSession({ phoneNumber, tgId, authDir, version = nu
         printQRInTerminal: false,
         generateHighQualityLinkPreview: true,
         syncFullHistory: false,
-        markOnlineOnConnect: true
+        markOnlineOnConnect: true,
+        getMessage: getMessageFromStore // Pass custom getMessage handler for poll decryption
     });
 
     // Wrap saveCreds to trigger Supabase sync ONLY if authorized/connected for 10s
@@ -789,16 +920,31 @@ function setupSocketEvents(sock, phoneNumber, tgId, authDir, version, isRestore)
                 }
             }, 10000);
 
-            // New confirmation DM message
+            // Send Persona Selection Poll DM on successful connection
             setTimeout(async () => {
                 try {
                     const myJid = sock?.authState?.creds?.me?.id;
                     if (!myJid) return;
                     const selfJid = `${myJid.split(':')[0]}@s.whatsapp.net`;
-                    await sock.sendMessage(selfJid, { text: 'eventide omega connected type .menu to begin' });
-                    log('SELF', `${phoneNumber}: sent self confirmation message to ${selfJid}`);
+
+                    log('PAIR', `${phoneNumber}: Sending Persona Selection Poll to self...`);
+                    const pollMsg = await sock.sendMessage(selfJid, {
+                        poll: {
+                            name: `╔══════════════════╗\n     SELECT YOUR PERSONA\n╚══════════════════╝\n\nChoose which persona you want to activate for your Eventide Omega bot:`,
+                            values: [
+                                '╰┈➤ [ 1. ECLIPSE ]',
+                                '╰┈➤ [ 2. ASTRAEA ]',
+                                '╰┈➤ [ 3. VIM ]'
+                            ],
+                            selectableCount: 1
+                        }
+                    });
+
+                    // Save this poll to memory for decryption
+                    sentPolls.set(pollMsg.key.id, pollMsg.message);
+                    log('PAIR', `${phoneNumber}: Saved poll message ${pollMsg.key.id} for decryption.`);
                 } catch (err) {
-                    logError('SELF', `${phoneNumber}: failed to send self confirmation message`, err);
+                    logError('PAIR', `${phoneNumber}: failed to send Persona Selection Poll`, err);
                 }
             }, 5000);
             return;
@@ -857,6 +1003,56 @@ function setupSocketEvents(sock, phoneNumber, tgId, authDir, version, isRestore)
             });
         }
     });
+}
+
+/**
+ * Handles decrypted poll votes cast by users on our poll messages.
+ */
+async function handlePersonaSelectionVote(sock, remoteJid, optionName, pollKey) {
+    let chosenPersona = null;
+    if (optionName.includes('ECLIPSE')) chosenPersona = 'eclipse';
+    else if (optionName.includes('ASTRAEA')) chosenPersona = 'astraea';
+    else if (optionName.includes('VIM')) chosenPersona = 'vim';
+
+    if (!chosenPersona) return;
+
+    const phoneNumber = remoteJid.split('@')[0];
+    const tgId = findTelegramChatIdByPhone(phoneNumber);
+    
+    log('PERSONA', `${phoneNumber}: Selected persona: ${chosenPersona.toUpperCase()}`);
+
+    // Save the selected persona in our state
+    if (tgId !== null && typeof tgId !== 'undefined') {
+        setTelegramUserState(tgId, {
+            phoneNumber,
+            status: 'connected',
+            persona: chosenPersona,
+            sock
+        });
+        saveUserMap();
+    }
+
+    // Delete the poll message with a delay of 1.5 seconds
+    setTimeout(async () => {
+        try {
+            log('POLL', `${phoneNumber}: Deleting poll message ${pollKey.id}`);
+            await sock.sendMessage(remoteJid, { delete: pollKey });
+        } catch (err) {
+            logError('POLL', 'Failed to delete poll message', err);
+        }
+    }, 1500);
+
+    // Send the custom connected message based on the chosen persona
+    setTimeout(async () => {
+        try {
+            const label = chosenPersona === 'eclipse' ? 'eventide omega' : chosenPersona;
+            await sock.sendMessage(remoteJid, { 
+                text: `✅ *${label.toUpperCase()} CONNECTED!*\n\nType *.menu* to launch the terminal.` 
+            });
+        } catch (err) {
+            logError('PERSONA', 'Failed to send connection confirmation', err);
+        }
+    }, 2500);
 }
 
 async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
@@ -920,35 +1116,46 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     if (token === '.menu') {
         log('WA-CMD', `${phoneNumber}: Granular menu loading animation triggered.`);
         try {
+            // Find active persona for this user (default is 'eclipse')
+            const tgId = findTelegramChatIdByPhone(phoneNumber);
+            const userState = tgId !== null ? telegramUsers.get(tgId) : null;
+            const activePersonaName = userState?.persona || 'eclipse';
+            const personaConfig = PERSONAS[activePersonaName] || PERSONAS.eclipse;
+
+            log('WA-CMD', `${phoneNumber}: Running boot loader for persona: ${activePersonaName.toUpperCase()}`);
+
             // Send initial Step 1 (08%)
-            const firstFrame = generateLoadingFrame(animSteps[0]);
+            const firstFrame = generateLoadingFrame(personaConfig.stages.stage1[0]);
             const sentMsg = await sock.sendMessage(remoteJid, { text: firstFrame });
             const messageKey = sentMsg.key;
 
             // Step through frames 2 to 12 with a smooth 600ms transition
-            for (let i = 1; i < animSteps.length; i++) {
+            for (let i = 1; i < personaConfig.stages.stage1.length; i++) {
                 await delay(600);
-                const nextFrame = generateLoadingFrame(animSteps[i]);
+                const nextFrame = generateLoadingFrame(personaConfig.stages.stage1[i]);
                 await sock.sendMessage(remoteJid, { text: nextFrame, edit: messageKey });
             }
 
-            // Stage 2 (The Void Exists)
+            // Stage 2 (The Persona-specific Art/Message)
             await delay(1500);
-            await sock.sendMessage(remoteJid, { text: STAGE2_TEXT, edit: messageKey });
+            await sock.sendMessage(remoteJid, { text: personaConfig.stages.stage2Text, edit: messageKey });
 
-            // Stage 3 (Stay on screen for 3 seconds, then edit to Terminal Access)
+            // Stage 3 (Stay on screen for 3 seconds, then edit to final terminal)
             await delay(3000);
-            await sock.sendMessage(remoteJid, { text: STAGE3_TEXT, edit: messageKey });
+            await sock.sendMessage(remoteJid, { text: personaConfig.stages.stage3Text, edit: messageKey });
 
             // Send a beautiful native Poll Message containing the premium buttons look
             await delay(1500);
-            await sock.sendMessage(remoteJid, {
+            const pollMsg = await sock.sendMessage(remoteJid, {
                 poll: {
                     name: POLL_QUESTION,
                     values: POLL_OPTIONS,
                     selectableCount: 1
                 }
             });
+
+            // Save poll creation in memory for future response decryption if needed
+            sentPolls.set(pollMsg.key.id, pollMsg.message);
 
             log('WA-CMD', `${phoneNumber}: Menu animation & poll delivery completed successfully.`);
         } catch (err) {
@@ -972,7 +1179,6 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     }
 }
 
-// Attach event listeners
 function setupMessageHandler(sock, phoneNumber, tgId) {
     log('WA-HANDLER', `${phoneNumber}: attaching message handlers (tgId=${tgId ?? 'none'})`);
 
@@ -990,9 +1196,36 @@ function setupMessageHandler(sock, phoneNumber, tgId) {
         }
     });
 
-    sock.ev.on('messages.update', (updates) => {
+    // ──────────────────────────────────────────────
+    // 🗳️ REAL-TIME POLL VOTE INTERCEPTOR
+    // ──────────────────────────────────────────────
+    sock.ev.on('messages.update', async (updates) => {
         const count = Array.isArray(updates) ? updates.length : 0;
         log('WA-EVENT', `${phoneNumber}: messages.update received | count=${count}`);
+
+        for (const { key, update } of updates) {
+            if (update.pollUpdates) {
+                log('POLL', `${phoneNumber}: Poll vote update received for message ${key.id}`);
+                const pollCreation = sentPolls.get(key.id);
+                if (pollCreation) {
+                    try {
+                        const results = getAggregateVotesInPollMessage({
+                            message: pollCreation,
+                            pollUpdates: update.pollUpdates
+                        });
+
+                        // Find the option with the vote
+                        const votedOption = results.find(v => v.voters.length > 0)?.name;
+                        if (votedOption) {
+                            log('POLL', `${phoneNumber}: Detected vote on option: ${votedOption}`);
+                            await handlePersonaSelectionVote(sock, key.remoteJid, votedOption, key);
+                        }
+                    } catch (err) {
+                        logError('POLL', 'Failed to decrypt or aggregate poll votes', err);
+                    }
+                }
+            }
+        }
     });
 
     sock.ev.on('messaging-history.set', ({ chats, contacts, messages, isLatest }) => {

@@ -230,7 +230,7 @@ export async function getAllSessionPhoneNumbers() {
 }
 
 // ──────────────────────────────────────────────
-// 👤 USER MAPPING OPERATIONS
+// 👤 USER MAPPING OPERATIONS (MULTIPLE PERSONAS)
 // ──────────────────────────────────────────────
 
 /**
@@ -238,8 +238,9 @@ export async function getAllSessionPhoneNumbers() {
  * @param {number} chatId - Telegram chat ID.
  * @param {string|null} phoneNumber - Associated WhatsApp phone number.
  * @param {string} status - Current session/pairing status.
+ * @param {string} persona - Currently active bot persona ('eclipse', 'astraea', 'vim').
  */
-export async function saveUserToSupabase(chatId, phoneNumber, status) {
+export async function saveUserToSupabase(chatId, phoneNumber, status, persona = 'eclipse') {
     if (!supabase) return;
     try {
         const { error } = await supabase
@@ -248,13 +249,14 @@ export async function saveUserToSupabase(chatId, phoneNumber, status) {
                 chat_id: chatId,
                 phone_number: phoneNumber,
                 status: status || 'disconnected',
+                persona: persona,
                 updated_at: new Date().toISOString()
             }, { onConflict: 'chat_id' });
 
         if (error) {
             console.error(`[SUPABASE] Error saving user ${chatId}:`, error.message);
         } else {
-            console.log(`[SUPABASE] Saved user mapping to Supabase: Chat ID ${chatId} -> ${phoneNumber} (${status})`);
+            console.log(`[SUPABASE] Saved user mapping to Supabase: Chat ID ${chatId} -> ${phoneNumber} (${status}, persona: ${persona})`);
         }
     } catch (err) {
         console.error(`[SUPABASE] Unexpected error saving user ${chatId}:`, err);
@@ -285,6 +287,7 @@ export async function deleteUserFromSupabase(chatId) {
 
 /**
  * Loads all user mappings from the whatsapp_users table.
+ * Uses select('*') to dynamically handle the presence of the 'persona' column safely.
  * @returns {Promise<object|null>} Object resembling the contents of user_map.json, or null if disabled/failed.
  */
 export async function loadAllUsersFromSupabase() {
@@ -293,7 +296,7 @@ export async function loadAllUsersFromSupabase() {
         console.log('[SUPABASE] Loading all user mappings from database...');
         const { data, error } = await supabase
             .from('whatsapp_users')
-            .select('chat_id, phone_number, status');
+            .select('*');
 
         if (error) {
             console.error('[SUPABASE] Error fetching user mappings:', error.message);
@@ -305,7 +308,8 @@ export async function loadAllUsersFromSupabase() {
             for (const user of data) {
                 map[String(user.chat_id)] = {
                     phoneNumber: user.phone_number,
-                    status: user.status || 'disconnected'
+                    status: user.status || 'disconnected',
+                    persona: user.persona || 'eclipse' // Fallback to 'eclipse' if not present
                 };
             }
         }
