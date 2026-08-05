@@ -131,17 +131,17 @@ const STAGE3_TEXT = `╔═════════╦════════�
 // ──────────────────────────────────────────────
 const POLL_QUESTION = `╔═════════╦══════════╗\n        ⚠ EVENTIDE OMEGA ⚠\n╚═════════╩══════════╝`;
 const POLL_OPTIONS = [
-    '╰┈➤ [ 1. OWNERS MENU ]',
-    '╰┈➤ [ 2. GROUP MENU ]',
-    '╰┈➤ [ 3. SYSTEM MENU ]',
-    '╰┈➤ [ 4. FUN MENU ]'
+    '╰|1┈➤ [ 1. OWNERS MENU ]',
+    '╰|1┈➤ [ 2. GROUP MENU ]',
+    '╰|1┈➤ [ 3. SYSTEM MENU ]',
+    '╰|1┈➤ [ 4. FUN MENU ]'
 ];
 
 // ──────────────────────────────────────────────
 // 📋 WHATSAPP COMMANDS
 // ──────────────────────────────────────────────
 const COMMANDS = {
-    // Add your new commands here!
+    // Add your normal text commands here!
 };
 
 // ──────────────────────────────────────────────
@@ -1007,6 +1007,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
 
     const normalized = text.trim();
     const token = normalized.split(/\s+/)[0].toLowerCase();
+    const args = normalized.split(/\s+/).slice(1);
     const startsWithDot = normalized.startsWith('.');
 
     log(
@@ -1058,7 +1059,6 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
                 }
             });
 
-            // Save poll creation in memory & phone cache for decryption
             const actualSecret =
                 pollMsg?.message?.messageContextInfo?.messageSecret ||
                 pollMsg?.messageContextInfo?.messageSecret ||
@@ -1076,6 +1076,164 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             log('WA-CMD', `${phoneNumber}: Menu animation & poll delivery completed successfully.`);
         } catch (err) {
             logError('WA-CMD', `${phoneNumber}: Failed executing Menu animation/poll`, err);
+        }
+        return;
+    }
+
+    // ──────────────────────────────────────────────
+    // 👥 GROUP COMMANDS (NEW!)
+    // ──────────────────────────────────────────────
+
+    // 1. .join <invite-link> (Join a group via link)
+    if (token === '.join') {
+        const link = args[0];
+        if (!link) {
+            await safeWaReply(sock, remoteJid, '❌ Please provide a valid WhatsApp group invite link.\n\n*Example*: .join https://chat.whatsapp.com/L2mX...', msg);
+            return;
+        }
+        try {
+            const code = link.split('chat.whatsapp.com/')[1];
+            if (!code) {
+                await safeWaReply(sock, remoteJid, '❌ Invalid group invite link format.', msg);
+                return;
+            }
+            await sock.groupAcceptInvite(code);
+            await safeWaReply(sock, remoteJid, '✅ Successfully requested/joined the group!', msg);
+        } catch (err) {
+            logError('GROUP-JOIN', 'Failed to join group', err);
+            await safeWaReply(sock, remoteJid, `❌ Failed to join group. Error: ${err.message || err}`, msg);
+        }
+        return;
+    }
+
+    // 2. .add <phone-number> (Add member to group)
+    if (token === '.add') {
+        if (!remoteJid.endsWith('@g.us')) {
+            await safeWaReply(sock, remoteJid, '❌ This command can only be used inside groups.', msg);
+            return;
+        }
+        const targetNumber = args[0]?.replace(/\D/g, '');
+        if (!targetNumber) {
+            await safeWaReply(sock, remoteJid, '❌ Please provide a valid phone number with country code.\n\n*Example*: .add 2348012345678', msg);
+            return;
+        }
+        const targetJid = `${targetNumber}@s.whatsapp.net`;
+        try {
+            const metadata = await sock.groupMetadata(remoteJid);
+            const senderJid = msg.key.participant || msg.key.remoteJid;
+            
+            const isSenderAdmin = metadata.participants.find(p => jidNormalizedUser(p.id) === jidNormalizedUser(senderJid))?.admin;
+            const isBotAdmin = metadata.participants.find(p => jidNormalizedUser(p.id) === jidNormalizedUser(sock.user.id))?.admin;
+
+            if (!isSenderAdmin) {
+                await safeWaReply(sock, remoteJid, '⛔ You must be a Group Admin to use this command.', msg);
+                return;
+            }
+            if (!isBotAdmin) {
+                await safeWaReply(sock, remoteJid, '⚠️ I need Admin permissions in this group to add members.', msg);
+                return;
+            }
+
+            await sock.groupParticipantsUpdate(remoteJid, [targetJid], 'add');
+            await safeWaReply(sock, remoteJid, `✅ Successfully added @${targetNumber} to the group!`, msg);
+        } catch (err) {
+            logError('GROUP-ADD', 'Failed to add participant', err);
+            await safeWaReply(sock, remoteJid, `❌ Failed to add member. Error: ${err.message || err}`, msg);
+        }
+        return;
+    }
+
+    // 3. .kick <phone-number | @mention | reply> (Kick participant)
+    if (token === '.kick') {
+        if (!remoteJid.endsWith('@g.us')) {
+            await safeWaReply(sock, remoteJid, '❌ This command can only be used inside groups.', msg);
+            return;
+        }
+
+        let targetJid = null;
+        let targetNumber = null;
+
+        // Method A: Check quoted message participant
+        const quotedParticipant = msg.message?.extendedTextMessage?.contextInfo?.participant;
+        if (quotedParticipant) {
+            targetJid = jidNormalizedUser(quotedParticipant);
+            targetNumber = targetJid.split('@')[0];
+        }
+
+        // Method B: Check mentions
+        const mentionedJid = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid?.[0];
+        if (!targetJid && mentionedJid) {
+            targetJid = jidNormalizedUser(mentionedJid);
+            targetNumber = targetJid.split('@')[0];
+        }
+
+        // Method C: Check phone number argument
+        if (!targetJid && args[0]) {
+            const numClean = args[0].replace(/\D/g, '');
+            if (numClean.length >= 10) {
+                targetJid = `${numClean}@s.whatsapp.net`;
+                targetNumber = numClean;
+            }
+        }
+
+        if (!targetJid) {
+            await safeWaReply(sock, remoteJid, '❌ Please reply to a message, mention (@user) or provide a phone number with country code.\n\n*Example*: .kick @user\n*Example*: .kick 2348012345678', msg);
+            return;
+        }
+
+        try {
+            const metadata = await sock.groupMetadata(remoteJid);
+            const senderJid = msg.key.participant || msg.key.remoteJid;
+            
+            const isSenderAdmin = metadata.participants.find(p => jidNormalizedUser(p.id) === jidNormalizedUser(senderJid))?.admin;
+            const isBotAdmin = metadata.participants.find(p => jidNormalizedUser(p.id) === jidNormalizedUser(sock.user.id))?.admin;
+
+            if (!isSenderAdmin) {
+                await safeWaReply(sock, remoteJid, '⛔ You must be a Group Admin to kick members.', msg);
+                return;
+            }
+            if (!isBotAdmin) {
+                await safeWaReply(sock, remoteJid, '⚠️ I need Admin permissions in this group to kick members.', msg);
+                return;
+            }
+
+            await sock.groupParticipantsUpdate(remoteJid, [targetJid], 'remove');
+            await safeWaReply(sock, remoteJid, `👢 Successfully kicked @${targetNumber} from the group!`, msg);
+        } catch (err) {
+            logError('GROUP-KICK', 'Failed to kick participant', err);
+            await safeWaReply(sock, remoteJid, `❌ Failed to kick member. Error: ${err.message || err}`, msg);
+        }
+        return;
+    }
+
+    // 4. .link (Fetch group invite link)
+    if (token === '.link') {
+        if (!remoteJid.endsWith('@g.us')) {
+            await safeWaReply(sock, remoteJid, '❌ This command can only be used inside groups.', msg);
+            return;
+        }
+        try {
+            const metadata = await sock.groupMetadata(remoteJid);
+            const senderJid = msg.key.participant || msg.key.remoteJid;
+            
+            const isSenderAdmin = metadata.participants.find(p => jidNormalizedUser(p.id) === jidNormalizedUser(senderJid))?.admin;
+            const isBotAdmin = metadata.participants.find(p => jidNormalizedUser(p.id) === jidNormalizedUser(sock.user.id))?.admin;
+
+            if (!isSenderAdmin) {
+                await safeWaReply(sock, remoteJid, '⛔ You must be a Group Admin to fetch the group link.', msg);
+                return;
+            }
+            if (!isBotAdmin) {
+                await safeWaReply(sock, remoteJid, '⚠️ I need Admin permissions in this group to fetch the invite link.', msg);
+                return;
+            }
+
+            const code = await sock.groupInviteCode(remoteJid);
+            const inviteLink = `https://chat.whatsapp.com/${code}`;
+            await safeWaReply(sock, remoteJid, `🔗 *Group Invite Link*:\n\n${inviteLink}`, msg);
+        } catch (err) {
+            logError('GROUP-LINK', 'Failed to fetch invite link', err);
+            await safeWaReply(sock, remoteJid, `❌ Failed to fetch invite link. Error: ${err.message || err}`, msg);
         }
         return;
     }
