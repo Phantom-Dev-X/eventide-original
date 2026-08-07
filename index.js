@@ -130,7 +130,7 @@ const STAGE3_TEXT = `╔═════════╦════════�
 
 📡 Use *.help* to explore the codex.
 
-> _Developed by 【 亗 ᑭᗩTᖇIᑕK ᗪE  亗 】✧_`;
+> _Developed by 【 亗 ᑭᗩTᖇIᑕK ᗪEᐯ 亗 】✧_`;
 
 // ──────────────────────────────────────────────
 // 📊 POLL DETAILS
@@ -214,6 +214,31 @@ function saveBotMode(phoneNumber, mode) {
     } catch (err) {
         logError('MODE', `${phoneNumber}: Failed to save bot_mode.txt`, err);
     }
+}
+
+// ──────────────────────────────────────────────
+// 🛠️ WHATSAPP MARKDOWN FORMATTING CONVERTER (NEW & PRECISE!)
+// ──────────────────────────────────────────────
+function formatForWhatsApp(text) {
+    let formatted = String(text || '');
+
+    // 1. Convert markdown headers (e.g. ### Header) to WhatsApp bold (*Header*)
+    formatted = formatted.replace(/^(#{1,6})\s+(.+)$/gm, '*$2*');
+
+    // 2. Convert standard markdown bold (**text**) to WhatsApp bold (*text*)
+    formatted = formatted.replace(/\*\*(.*?)\*\*/g, '*$1*');
+
+    // 3. Convert standard markdown italics (*text* or _text_) safely to underscores (_text_)
+    // First, convert single asterisks to underscores, taking care not to touch double asterisks or already converted bold markers
+    formatted = formatted.replace(/(?<!\*)\*(?!\*)(.*?)(?<!\*)\*(?!\*)/g, '_$1_');
+
+    // 4. Convert markdown code blocks (```lang ... ```) to simple monospace blocks
+    formatted = formatted.replace(/```[a-zA-Z]*\n([\s\S]*?)```/g, '```$1```');
+
+    // 5. Convert standard markdown bullets (- item or * item) to WhatsApp bullets (• item)
+    formatted = formatted.replace(/^(\s*)[-*+]\s+(.+)$/gm, '$1• $2');
+
+    return formatted;
 }
 
 // ──────────────────────────────────────────────
@@ -350,10 +375,12 @@ function getHelpSystemPrompt() {
     return `You are "Eventide Omega", an advanced, highly sophisticated, yet friendly and casual AI Customer Care Assistant for the Eventide Omega WhatsApp bot.
 CRITICAL INSTRUCTION FOR DEEP THINKING: Before answering, always perform a deep step-by-step internal logical analysis. Break down the user's question, analyze their exact intent (even if they made typos), search your database of available commands, and formulate the most precise, helpful, and logical solution. Think thoroughly before you write your reply.
 
-Your tone should be casual, helpful, reassuring, and conversational (e.g. use "oh, I get you!", "don't worry, we got you covered!").
-You assist users in understanding how to use the bot, explain commands, and trouble-shoot.
+Tone and Behavioural Nuances:
+- Your tone should be extremely casual, helpful, reassuring, and conversational (e.g. use "oh, I get you!", "don't worry, we got you covered!").
+- When asked about a feature, explains things step-by-step using WhatsApp bullet points (•).
+- UNKNOWN / FUTURE COMMAND RULE: If a user asks about a command or feature that is not currently built into the bot (e.g. any downloaders, games, or features not in the active registry), you must politely let them know that this specific command is not available currently. However, tell them they can let the main developer Patrick Dev know about their amazing suggestion or idea by simply typing the ".dev" command! Keep it extremely encouraging and casual.
 
-Key Information about the bot:
+Key Information about the bot's active command registry:
 - To see the main menu, type ".menu". It triggers a premium animated loading bar sequence and presents active menu polls.
 - The bot supports several administrative group commands:
   1. ".join <link>": Joins a group via a WhatsApp invite link.
@@ -363,8 +390,6 @@ Key Information about the bot:
 - Bot Access Privacy Mode (".mode"):
   - ".mode owner" (or shortcut ".owner"): Locks the bot so only the paired owner (the primary account) can execute dot commands.
   - ".mode public" (or shortcut ".public"): Opens the bot so anyone in private chats or groups can use commands.
-- Security Features:
-  - You can answer questions about safety, antilink, anti-spam, and setup. If a command doesn't exist yet, explain it casually and professionally.
 - Remember: Keep answers friendly, casual, and highly informative! Speak directly to the user as a real customer care agent.`;
 }
 
@@ -373,6 +398,25 @@ Key Information about the bot:
 // ──────────────────────────────────────────────
 function getCommandHelpData(query) {
     const q = query.toLowerCase().trim();
+
+    // 💡 Handle dynamic requests to list all commands
+    if (q === 'list' || q.includes('all commands') || q.includes('commands list') || q.includes('list commands') || q.includes('help list')) {
+        return {
+            title: "Eventide Omega Codex (All Commands)",
+            desc: "Here is the complete registry of all active systems currently built into Eventide Omega:\n\n" +
+                  "• *.menu* — Launch the granular progress bar menu & options poll\n" +
+                  "• *.help* — Toggle conversational AI Support Oracle mode\n" +
+                  "• *.help <query>* — Ask the AI Support Oracle a specific question\n" +
+                  "• *.mode public/owner* — Set privacy access permissions\n" +
+                  "• *.public* / *.owner* — Shortcut mode permission toggles\n" +
+                  "• *.join <link>* — Accept and join a group via invite link\n" +
+                  "• *.add <phone-number>* — Force-add a member to the group chat\n" +
+                  "• *.kick <reply/mention/number>* — Remove a member from the group chat\n" +
+                  "• *.link* — Fetch and send the current group invite link\n" +
+                  "• *.ping* — Check server latency and system uptime\n\n" +
+                  "💡 *Tip*: If you want to request a new feature or command that is not listed here, just use the *.dev* command to submit your suggestion directly to the main developer Patrick Dev!"
+        };
+    }
 
     if (q.includes("antilink") || (q.includes("link") && q.includes("anti"))) {
         return {
@@ -416,7 +460,7 @@ function getCommandHelpData(query) {
             desc: "This command is used to *automatically post a polite farewell message* whenever someone leaves or gets kicked from your group.\n\n" +
                   "⚠️ *Restrictions:*\n" +
                   "• *Bot Permissions:* Does *not* require the bot to be an admin.\n" +
-                  "• *User Permissions:* *Only group admins or authorized owners* can toggle it.\n" +
+                  "• *User Permissions:* *Only group admins or authorized owners* can toggle it.\n\n" +
                   "💡 *How to use:*\n" +
                   "Type *.goodbye on* to turn farewells on.\n" +
                   "Type *.goodbye off* to cancel farewells."
@@ -851,21 +895,24 @@ function extractMessageText(msg) {
  */
 async function safeWaReply(sock, remoteJid, text, quoted) {
     try {
+        const formattedText = formatForWhatsApp(text); // Automatically format standard markdown into WhatsApp layout!
+
         try {
             await sock.sendPresenceUpdate('composing', remoteJid);
-            const delayMs = Math.min(4000, Math.max(1500, text.length * 15));
+            const delayMs = Math.min(4000, Math.max(1500, formattedText.length * 15));
             await delay(delayMs);
             await sock.sendPresenceUpdate('paused', remoteJid);
         } catch (presErr) {
             logError('WA-SEND', 'Failed to send presence update', presErr);
         }
 
-        await sock.sendMessage(remoteJid, { text }, quoted ? { quoted } : undefined);
+        await sock.sendMessage(remoteJid, { text: formattedText }, quoted ? { quoted } : undefined);
         return true;
     } catch (err) {
         logError('WA-SEND', `Quoted reply failed for ${remoteJid}. Retrying without quote`, err);
         try {
-            await sock.sendMessage(remoteJid, { text });
+            const formattedText = formatForWhatsApp(text);
+            await sock.sendMessage(remoteJid, { text: formattedText });
             return true;
         } catch (retryErr) {
             logError('WA-SEND', `Reply failed for ${remoteJid}`, retryErr);
