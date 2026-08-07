@@ -132,6 +132,28 @@ const STAGE3_TEXT = `╔═════════╦════════�
 
 > _Developed by 【 亗 ᑭᗩTᖇIᑕK ᗪEᐯ 亗 】✧_`;
 
+// The animated loading message edits into this once it points down to the
+// banner image (the full STAGE3_TEXT is then sent as the image caption).
+const STAGE3_ARROWS_TEXT = `╔═════════╦══════════╗
+        ⚠ EVENTIDE OMEGA
+               TERMINAL ACCESS
+╚═════════╩══════════╝
+
+                ═══ E C L I P S E ═══
+
+                 ▾
+                ▾ ▾
+               ▾ ▾ ▾
+         gaze below, keeper...
+               ▾ ▾ ▾
+                ▾ ▾
+                 ▾
+
+📡 SECURE │ Ω │ VESSEL: ∞`;
+
+// Absolute path to the .menu banner image (lives next to this script).
+const MENU_BANNER_PATH = path.join(__dirname, 'assets', 'eventide_banner.png');
+
 // ──────────────────────────────────────────────
 // 📊 POLL DETAILS
 // ──────────────────────────────────────────────
@@ -1743,9 +1765,17 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             await delay(1500);
             await sock.sendMessage(remoteJid, { text: personaConfig.stages.stage2Text, edit: messageKey });
 
-            // Stage 3 (Stay on screen for 3 seconds, then edit to final terminal)
+            // Edit the animated message to point down to the banner image below
             await delay(3000);
-            await sock.sendMessage(remoteJid, { text: personaConfig.stages.stage3Text, edit: messageKey });
+            await sock.sendMessage(remoteJid, { text: STAGE3_ARROWS_TEXT, edit: messageKey });
+
+            // Send the banner image as a NEW message, with the full terminal
+            // text as its caption.
+            await delay(1000);
+            await sock.sendMessage(remoteJid, {
+                image: { url: MENU_BANNER_PATH },
+                caption: STAGE3_TEXT
+            });
 
             // Send native Poll Menu (Owners / Group / Fun / Bug)
             await delay(1500);
