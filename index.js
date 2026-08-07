@@ -130,17 +130,17 @@ const STAGE3_TEXT = `╔═════════╦════════�
 
 📡 Use *.help* to explore the codex.
 
-> _Developed by 【 亗 ᑭᗩTᖇIᑕK ᗪEᐯ 亗 】✧_`;
+> _Developed by 【 亗 ᑭᗩTᖇIᑕK ᗪE  亗 】✧_`;
 
 // ──────────────────────────────────────────────
 // 📊 POLL DETAILS
 // ──────────────────────────────────────────────
 const POLL_QUESTION = `╔═════════╦══════════╗\n        ⚠ EVENTIDE OMEGA ⚠\n╚═════════╩══════════╝`;
 const POLL_OPTIONS = [
-    '╰|1...┈➤ [ 1. OWNERS MENU ]',
-    '╰|1...┈➤ [ 2. GROUP MENU ]',
-    '╰|1...┈➤ [ 3. SYSTEM MENU ]',
-    '╰|1...┈➤ [ 4. FUN MENU ]'
+    '╰|1...2➤ [ 1. OWNERS MENU ]',
+    '╰|1...2➤ [ 2. GROUP MENU ]',
+    '╰|1...2➤ [ 3. SYSTEM MENU ]',
+    '╰|1...2➤ [ 4. FUN MENU ]'
 ];
 
 // ──────────────────────────────────────────────
@@ -416,7 +416,7 @@ function getCommandHelpData(query) {
             desc: "This command is used to *automatically post a polite farewell message* whenever someone leaves or gets kicked from your group.\n\n" +
                   "⚠️ *Restrictions:*\n" +
                   "• *Bot Permissions:* Does *not* require the bot to be an admin.\n" +
-                  "• *User Permissions:* *Only group admins or authorized owners* can toggle it.\n\n" +
+                  "• *User Permissions:* *Only group admins or authorized owners* can toggle it.\n" +
                   "💡 *How to use:*\n" +
                   "Type *.goodbye on* to turn farewells on.\n" +
                   "Type *.goodbye off* to cancel farewells."
@@ -1343,25 +1343,17 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     // AI Help mode interceptor (runs on normal text without dots)
     if (!startsWithDot) {
         if (helpModeUsers.has(remoteJid)) {
-            // 🛡️ ANTI-LOOP SAFETY PATH: Ignore all self-generated bot responses to prevent infinite looping!
-            const selfJid = jidNormalizedUser(sock.user.id);
-            if (fromMe && remoteJid !== selfJid) {
-                log('LOOP-PREVENTION', `${phoneNumber}: Blocked group/chat self-reflection response.`);
-                return; 
-            }
-            if (remoteJid === selfJid) {
-                // In self-chat, check if the message matches our bot's signature outputs
-                if (
-                    text.startsWith('🤖') || 
-                    text.startsWith('╔') || 
-                    text.startsWith('✅') || 
-                    text.startsWith('eventide omega connected') ||
-                    text.startsWith('📌') ||
-                    text.startsWith('⚠️')
-                ) {
-                    log('LOOP-PREVENTION', `${phoneNumber}: Blocked self-chat recursive response loop.`);
-                    return;
-                }
+            // 🛡️ ANTI-LOOP SAFETY PATH: Ignore all automated bot responses!
+            if (
+                text.startsWith('🤖') || 
+                text.startsWith('╔') || 
+                text.startsWith('✅') || 
+                text.startsWith('eventide omega connected') ||
+                text.startsWith('📌') ||
+                text.startsWith('⚠️')
+            ) {
+                log('LOOP-PREVENTION', `${phoneNumber}: Blocked automated response.`);
+                return;
             }
 
             log('HELP-MODE', `${phoneNumber}: Intercepting conversation message in help mode.`);
