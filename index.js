@@ -1406,6 +1406,35 @@ function setupSocketEvents(sock, phoneNumber, tgId, authDir, version, isRestore)
 // ──────────────────────────────────────────────
 // 🔐 BRUTE-FORCE POLL DECRYPTION
 // ──────────────────────────────────────────────
+
+// Try to decrypt an encrypted poll vote against a set of creator/voter JID
+// candidates (PN + LID) and, if it matches, return the selected option index.
+function decryptVoteOption(secretHex, options, pollMsgId, creatorJids, voterJids, encVote) {
+    const secretBuf = Buffer.from(secretHex, 'hex');
+    for (const creator of creatorJids) {
+        for (const voter of voterJids) {
+            try {
+                const d = decryptPollVote(encVote, {
+                    pollEncKey: secretBuf,
+                    pollCreatorJid: creator,
+                    pollMsgId,
+                    voterJid: voter,
+                });
+                if (d?.selectedOptions?.length) {
+                    const hash = Buffer.from(d.selectedOptions[0]).toString('hex');
+                    const idx = options.findIndex(
+                        (o) => crypto.createHash('sha256').update(Buffer.from(o)).digest('hex') === hash
+                    );
+                    if (idx >= 0) return idx;
+                }
+            } catch (_) { /* wrong combo */ }
+        }
+    }
+    return -1;
+}
+
+// Handles a decrypted vote arriving via a `messages.update` `pollUpdates` event.
+// (Some Baileys builds emit this; harmless if it never fires.)
 function handlePollVote(sock, phoneNumber, key, pollUpdates) {
     const cache = loadPollCache(phoneNumber);
     const cached = cache.get(key.id);
@@ -1429,30 +1458,63 @@ function handlePollVote(sock, phoneNumber, key, pollUpdates) {
     }
     const uniqVoters = [...new Set(voters.filter(Boolean))];
 
-    const secretBuf = Buffer.from(cached.secretHex, 'hex');
-    
     for (const update of pollUpdates) {
         if (!update?.vote) continue;
-        for (const creator of creators) {
-            for (const voter of uniqVoters) {
-                try {
-                    const d = decryptPollVote(update.vote, {
-                        pollEncKey: secretBuf, 
-                        pollCreatorJid: creator,
-                        pollMsgId: key.id, 
-                        voterJid: voter,
-                    });
-                    if (d?.selectedOptions?.length) {
-                        const hash = Buffer.from(d.selectedOptions[0]).toString('hex');
-                        const idx = cached.options.findIndex(
-                            (o) => crypto.createHash('sha256').update(Buffer.from(o)).digest('hex') === hash
-                        );
-                        if (idx >= 0) return cached.ids[idx];
-                    }
-                } catch (_) { /* wrong combo */ }
-            }
-        }
+        const idx = decryptVoteOption(cached.secretHex, cached.options, key.id, creators, uniqVoters, update.vote);
+        if (idx >= 0 && cached.ids && cached.ids[idx]) return cached.ids[idx];
     }
+    return null;
+}
+
+// In Baileys 7.0.0-rc13 the built-in poll vote decryption is commented out, so
+// votes arrive as raw `pollUpdateMessage` upserts (NOT via `messages.update`).
+// This decrypts them manually and returns the selected menu id (or null).
+function handlePollUpdateMessage(sock, phoneNumber, msg) {
+    const content = msg?.message?.pollUpdateMessage;
+    if (!content) return null;
+
+    const creationKey = content.pollCreationMessageKey;
+    if (!creationKey?.id) return null;
+
+    const pollId = creationKey.id;
+    if (handledPollVotes.has(pollId)) return null; // Already answered this poll
+
+    const cache = loadPollCache(phoneNumber);
+    const cached = cache.get(pollId);
+    if (!cached) {
+        log('POLL', `${phoneNumber}: poll update for unknown poll ${pollId}`);
+        return null;
+    }
+
+    const encVote = content.vote;
+    if (!encVote) return null;
+
+    const mePN  = sock.user?.id ? jidNormalizedUser(sock.user.id) : '';
+    const rawLID = sock.user?.lid || sock.authState?.creds?.me?.lid || '';
+    const meLID = rawLID ? jidNormalizedUser(rawLID) : '';
+
+    // Poll creator = author of the poll creation message (LID + PN combos)
+    const creators = [...new Set([meLID, mePN].filter(Boolean))];
+    const ckeyJid = jidNormalizedUser(creationKey.participant || creationKey.remoteJid || '');
+    if (ckeyJid) creators.push(ckeyJid);
+
+    // Voter = author of the poll update message (LID + PN combos)
+    const voters = [];
+    if (msg.key?.fromMe) {
+        voters.push(mePN, meLID);
+    } else if (msg.key?.participant) {
+        voters.push(jidNormalizedUser(msg.key.participant));
+    } else {
+        voters.push(jidNormalizedUser(msg.key.remoteJid));
+    }
+    const uniqVoters = [...new Set(voters.filter(Boolean))];
+
+    const idx = decryptVoteOption(cached.secretHex, cached.options, pollId, creators, uniqVoters, encVote);
+    if (idx >= 0 && cached.ids && cached.ids[idx]) {
+        handledPollVotes.add(pollId);
+        return cached.ids[idx];
+    }
+    log('POLL', `${phoneNumber}: decrypt failed for poll ${pollId} (creators=[${creators.join(',')}] voters=[${uniqVoters.join(',')}])`);
     return null;
 }
 
@@ -2022,6 +2084,21 @@ function setupMessageHandler(sock, phoneNumber, tgId) {
 
         for (const msg of messages) {
             try {
+                // 🔐 Baileys rc13 ships with poll vote decryption commented out.
+                // Poll votes arrive as pollUpdateMessage upserts — decrypt manually.
+                if (msg?.message?.pollUpdateMessage) {
+                    log('POLL', `${phoneNumber}: pollUpdateMessage upsert received for ${msg.key?.id}`);
+                    const votedOptionId = handlePollUpdateMessage(sock, phoneNumber, msg);
+                    if (votedOptionId) {
+                        log('POLL', `${phoneNumber}: Decrypted poll vote on option ID: ${votedOptionId}`);
+                        const pollRemoteJid = msg.key?.remoteJid || msg.key?.participant || null;
+                        if (pollRemoteJid) {
+                            await handleMenuVote(sock, pollRemoteJid, phoneNumber, votedOptionId);
+                        }
+                        continue; // Already handled — skip normal message flow
+                    }
+                }
+
                 await handleWhatsAppMessage(sock, msg, phoneNumber, tgId, type);
             } catch (err) {
                 logError('WA-HANDLER', `${phoneNumber}: error while handling message`, err);
