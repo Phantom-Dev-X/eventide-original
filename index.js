@@ -139,9 +139,133 @@ const POLL_QUESTION = `╔═════════╦════════
 const POLL_OPTIONS = [
     '╰|1...2➤ [ 1. OWNERS MENU ]',
     '╰|1...2➤ [ 2. GROUP MENU ]',
-    '╰|1...2➤ [ 3. SYSTEM MENU ]',
-    '╰|1...2➤ [ 4. FUN MENU ]'
+    '╰|1...2➤ [ 3. FUN MENU ]',
+    '╰|1...2➤ [ 4. BUG MENU ]'
 ];
+const MENU_POLL_IDS = ['owners', 'group', 'fun', 'bug'];
+
+// ──────────────────────────────────────────────
+// 🗂️ SUB-MENU / DOMAIN POLLS
+// ──────────────────────────────────────────────
+const DOMAIN_POLL_QUESTION = `╔═════════╦══════════╗\n     CHOOSE YOUR DOMAIN ⚠\n╚═════════╩══════════╝`;
+const DOMAIN_POLL_OPTIONS = [
+    '╰|1...2➤ [ 1. SYSTEM MENU ]',
+    '╰|1...2➤ [ 2. CONFIG MENU ]'
+];
+const DOMAIN_POLL_IDS = ['system', 'config'];
+
+const OWNERS_WELCOME_TEXT = `╔═════════╦══════════╗
+        ⚠ EVENTIDE OMEGA
+               TERMINAL ACCESS
+╚═════════╩══════════╝
+
+            ◈ ── A P O T H E O S I S ── ◈
+
+      " the ones who carved the night
+        are the only ones fit to rule
+        the stars they left burning ."
+
+   *WELCOME, KEEPER OF THE OMEGA TERMINAL.*
+
+   You now stand at the root of the eclipse —
+   the throne from which this machine breathes.
+
+   This domain grants you the keys to:
+
+   • *Survey the System* — pulse, uptime & core vitals
+   • *Tune the Core* — reshape how the bot behaves
+   • *Command the Vessel* — admin & group dominion
+   • *Hunt the Faults* — report the cracks, patch the void
+
+   Choose your *domain* below, and the terminal
+   shall open its gates to you.
+
+📡 SECURE │ Ω │ VESSEL: ∞
+        🌑 THE FINAL DUSK 🌑`;
+
+const GROUP_MENU_TEXT = `╔═════════╦══════════╗
+        ⚠ EVENTIDE OMEGA
+               GROUP DOMAIN
+╚═════════╩══════════╝
+
+   *GROUP DOMAIN*
+   Dominion over the vessel's gatherings.
+
+   • *.join*    — enter a new group via link
+   • *.add*     — add a member to the circle
+   • *.kick*    — sever a member from the circle
+   • *.link*    — fetch the group's invite link
+
+   ⚠ *Note:* .add, .kick & .link require
+   Group Admin + the bot to be Admin.
+
+📡 SECURE │ Ω │ GROUP: ARMED`;
+
+const SYSTEM_MENU_TEXT = `╔═════════╦══════════╗
+        ⚠ EVENTIDE OMEGA
+               SYSTEM DOMAIN
+╚═════════╩══════════╝
+
+   *SYSTEM DOMAIN*
+   Core vitals & vessel telemetry.
+
+   • *.ping*        — pulse check (latency)
+   • *.uptime*      — time since last sync
+   • *.getpp*       — fetch a profile picture
+   • *.getgroup pp* — fetch the group's picture
+   • *.help*        — explore the codex
+
+   (more instruments being wired in...)
+
+📡 SECURE │ Ω │ CORE: ONLINE`;
+
+const CONFIG_MENU_TEXT = `╔═════════╦══════════╗
+        ⚠ EVENTIDE OMEGA
+               CONFIG DOMAIN
+╚═════════╩══════════╝
+
+   *CONFIG DOMAIN*
+   Reshape the machine to your will.
+
+   • *.mode*      — set access lock (public / owner)
+   • *.public*    — open the gates
+   • *.owner*     — seal the throne
+   • *.setalias*  — bind custom names (coming soon)
+
+   (more config modules in development...)
+
+📡 SECURE │ Ω │ CONFIG: UNLOCKED`;
+
+const FUN_PLACEHOLDER_TEXT = `╔═════════╦══════════╗
+        ⚠ EVENTIDE OMEGA
+                FUN DOMAIN
+╚═════════╩══════════╝
+
+   *FUN DOMAIN*
+   The playground is still being wired.
+
+   🎲 This domain is *under development*.
+   The toys are almost ready — check back soon.
+
+   " even the void needs to laugh sometimes ."
+
+📡 SECURE │ Ω │ PLAYGROUND: BUILDING`;
+
+const BUG_PLACEHOLDER_TEXT = `╔═════════╦══════════╗
+        ⚠ EVENTIDE OMEGA
+                BUG DOMAIN
+╚═════════╩══════════╝
+
+   *BUG DOMAIN*
+   The fault-line is being sealed.
+
+   🐞 This domain is *under processing*.
+   The report pipeline is still being wired.
+
+   " every crack is just the void
+     reaching for your attention ."
+
+📡 SECURE │ Ω │ FAULTS: MONITORED`;
 
 // ──────────────────────────────────────────────
 // 📋 WHATSAPP COMMANDS
@@ -157,6 +281,7 @@ const telegramUsers = new Map();
 const waSessions = new Map();
 const reconnectAttempts = new Map(); // Tracks reconnection retries per phone number (Max 3)
 const sentPolls = new Map(); // Tracks sent poll creation messages in memory for decryption (ID -> message)
+const handledPollVotes = new Set(); // Tracks already-handled poll messages to avoid duplicate menu replies
 const helpModeUsers = new Map(); // Tracks active AI Help Mode chats (JID -> timeoutTimer)
 let cachedBaileysVersion = null;
 let cachedBaileysVersionAt = 0;
@@ -1331,6 +1456,71 @@ function handlePollVote(sock, phoneNumber, key, pollUpdates) {
     return null;
 }
 
+// Sends a native WhatsApp poll and stores its decryption details in cache.
+// Used for the main .menu poll and the "Choose Your Domain" sub-poll.
+async function sendMenuPoll(sock, remoteJid, phoneNumber, question, options, ids) {
+    const secret = crypto.randomBytes(32);
+    const pollMsg = await sock.sendMessage(remoteJid, {
+        poll: {
+            name: question,
+            values: options,
+            selectableCount: 1,
+            messageSecret: secret
+        }
+    });
+
+    const actualSecret =
+        pollMsg?.message?.messageContextInfo?.messageSecret ||
+        pollMsg?.messageContextInfo?.messageSecret ||
+        secret;
+
+    const cache = loadPollCache(phoneNumber);
+    cache.set(pollMsg.key.id, {
+        secretHex: actualSecret.toString('hex'),
+        options,
+        ids,
+        fullMessage: pollMsg.message || null
+    });
+    savePollCache(phoneNumber, cache);
+
+    return pollMsg;
+}
+
+// Routes a decrypted poll vote to the correct menu flow.
+async function handleMenuVote(sock, remoteJid, phoneNumber, votedOptionId) {
+    log('POLL-MENU', `${phoneNumber}: handling vote -> ${votedOptionId} for ${remoteJid}`);
+    try {
+        switch (votedOptionId) {
+            case 'owners':
+                // Welcome + briefing + quote, then "Choose Your Domain" poll
+                await safeWaReply(sock, remoteJid, OWNERS_WELCOME_TEXT);
+                await delay(1500);
+                await sendMenuPoll(sock, remoteJid, phoneNumber, DOMAIN_POLL_QUESTION, DOMAIN_POLL_OPTIONS, DOMAIN_POLL_IDS);
+                break;
+            case 'group':
+                await safeWaReply(sock, remoteJid, GROUP_MENU_TEXT);
+                break;
+            case 'fun':
+                await safeWaReply(sock, remoteJid, FUN_PLACEHOLDER_TEXT);
+                break;
+            case 'bug':
+                await safeWaReply(sock, remoteJid, BUG_PLACEHOLDER_TEXT);
+                break;
+            case 'system':
+                await safeWaReply(sock, remoteJid, SYSTEM_MENU_TEXT);
+                break;
+            case 'config':
+                await safeWaReply(sock, remoteJid, CONFIG_MENU_TEXT);
+                break;
+            default:
+                log('POLL-MENU', `${phoneNumber}: unhandled vote id ${votedOptionId}`);
+                break;
+        }
+    } catch (err) {
+        logError('POLL-MENU', `${phoneNumber}: failed handling menu vote ${votedOptionId}`, err);
+    }
+}
+
 async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     const remoteJid = msg?.key?.remoteJid || 'unknown';
     const msgId = msg?.key?.id || 'unknown';
@@ -1480,33 +1670,9 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             await delay(3000);
             await sock.sendMessage(remoteJid, { text: personaConfig.stages.stage3Text, edit: messageKey });
 
-            // Send native Poll Menu
+            // Send native Poll Menu (Owners / Group / Fun / Bug)
             await delay(1500);
-            
-            const secret = crypto.randomBytes(32);
-            const pollMsg = await sock.sendMessage(remoteJid, {
-                poll: {
-                    name: POLL_QUESTION,
-                    values: POLL_OPTIONS,
-                    selectableCount: 1,
-                    messageSecret: secret
-                }
-            });
-
-            // Save poll creation in memory & phone cache for decryption
-            const actualSecret =
-                pollMsg?.message?.messageContextInfo?.messageSecret ||
-                pollMsg?.messageContextInfo?.messageSecret ||
-                secret;
-
-            const cache = loadPollCache(phoneNumber);
-            cache.set(pollMsg.key.id, {
-                secretHex: actualSecret.toString('hex'),
-                options: POLL_OPTIONS,
-                ids: ['owners', 'group', 'system', 'fun'],
-                fullMessage: pollMsg.message || null
-            });
-            savePollCache(phoneNumber, cache);
+            await sendMenuPoll(sock, remoteJid, phoneNumber, POLL_QUESTION, POLL_OPTIONS, MENU_POLL_IDS);
 
             log('WA-CMD', `${phoneNumber}: Menu animation & poll delivery completed successfully.`);
         } catch (err) {
@@ -1871,10 +2037,17 @@ function setupMessageHandler(sock, phoneNumber, tgId) {
         for (const { key, update } of updates) {
             if (update.pollUpdates) {
                 log('POLL', `${phoneNumber}: Poll vote update received for message ${key.id}`);
-                
+
+                if (handledPollVotes.has(key.id)) continue; // Already answered this poll
+
                 const votedOptionId = handlePollVote(sock, phoneNumber, key, update.pollUpdates);
                 if (votedOptionId) {
                     log('POLL', `${phoneNumber}: Decrypted vote on option ID: ${votedOptionId}`);
+                    handledPollVotes.add(key.id);
+                    const pollRemoteJid = key.remoteJid || key.participant || null;
+                    if (pollRemoteJid) {
+                        await handleMenuVote(sock, pollRemoteJid, phoneNumber, votedOptionId);
+                    }
                 }
             }
         }
