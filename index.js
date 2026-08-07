@@ -1341,6 +1341,27 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     // AI Help mode interceptor (runs on normal text without dots)
     if (!startsWithDot) {
         if (helpModeUsers.has(remoteJid)) {
+            // 🛡️ ANTI-LOOP SAFETA PATH: Ignore all self-generated bot responses to prevent infinite looping!
+            const selfJid = jidNormalizedUser(sock.user.id);
+            if (fromMe && remoteJid !== selfJid) {
+                log('LOOP-PREVENTION', `${phoneNumber}: Blocked group/chat self-reflection response.`);
+                return; 
+            }
+            if (remoteJid === selfJid) {
+                // In self-chat, check if the message matches our bot's signature outputs
+                if (
+                    text.startsWith('🤖') || 
+                    text.startsWith('╔══════') || 
+                    text.startsWith('✅') || 
+                    text.startsWith('eventide omega connected') ||
+                    text.startsWith('📌') ||
+                    text.startsWith('⚠️')
+                ) {
+                    log('LOOP-PREVENTION', `${phoneNumber}: Blocked self-chat recursive response loop.`);
+                    return;
+                }
+            }
+
             log('HELP-MODE', `${phoneNumber}: Intercepting conversation message in help mode.`);
             
             // Reset 10m timer
