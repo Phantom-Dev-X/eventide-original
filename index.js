@@ -1307,7 +1307,9 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         return;
     }
 
-    const shouldProcessEvent = eventType === 'notify' || (eventType === 'append' && recent);
+    // 🛡️ ACCURATE 'APPEND' NOTIFICATION PARSING AS DISCOVERED:
+    // Sync-append events from owner's secondary devices should always be parsed!
+    const shouldProcessEvent = eventType === 'notify' || eventType === 'append';
     if (!shouldProcessEvent) {
         log('WA-MSG', `${phoneNumber}: skipping eventType=${eventType} for message ${msgId} because it is not processable.`);
         return;
