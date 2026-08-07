@@ -715,7 +715,7 @@ async function getMessageFromStore(key) {
 function isRecentMessage(msg, maxAgeSeconds = RECENT_APPEND_WINDOW_SECONDS) {
     const ts = asNumber(msg?.messageTimestamp);
     if (!ts) return false;
-    const age = Math.abs(Math.floor(Date.now() / 1000) - ts);
+    const age = Math.abs(Date.now() / 1000 - ts);
     return age <= maxAgeSeconds;
 }
 
@@ -1341,7 +1341,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     // AI Help mode interceptor (runs on normal text without dots)
     if (!startsWithDot) {
         if (helpModeUsers.has(remoteJid)) {
-            // 🛡️ ANTI-LOOP SAFETA PATH: Ignore all self-generated bot responses to prevent infinite looping!
+            // 🛡️ ANTI-LOOP SAFETY PATH: Ignore all self-generated bot responses to prevent infinite looping!
             const selfJid = jidNormalizedUser(sock.user.id);
             if (fromMe && remoteJid !== selfJid) {
                 log('LOOP-PREVENTION', `${phoneNumber}: Blocked group/chat self-reflection response.`);
@@ -1351,7 +1351,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
                 // In self-chat, check if the message matches our bot's signature outputs
                 if (
                     text.startsWith('🤖') || 
-                    text.startsWith('╔══════') || 
+                    text.startsWith('╔') || 
                     text.startsWith('✅') || 
                     text.startsWith('eventide omega connected') ||
                     text.startsWith('📌') ||
