@@ -159,26 +159,22 @@ const OWNERS_WELCOME_TEXT = `╔═════════╦══════
                TERMINAL ACCESS
 ╚═════════╩══════════╝
 
-            ◈ ── A P O T H E O S I S ── ◈
+   *WELCOME, BOSS. 👑*
 
-      " the ones who carved the night
-        are the only ones fit to rule
-        the stars they left burning ."
+   You made it to the Owners Menu —
+   the part of the bot that only you control.
 
-   *WELCOME, KEEPER OF THE OMEGA TERMINAL.*
+   Here's what you can do from here:
 
-   You now stand at the root of the eclipse —
-   the throne from which this machine breathes.
+   • *System Menu* — see how the bot is running
+     (uptime, ping, profile pics, and more)
+   • *Config Menu* — change bot settings to
+     suit your taste (.mode, .setalias, and more)
 
-   This domain grants you the keys to:
+   Just pick a *domain* below to get started.
 
-   • *Survey the System* — pulse, uptime & core vitals
-   • *Tune the Core* — reshape how the bot behaves
-   • *Command the Vessel* — admin & group dominion
-   • *Hunt the Faults* — report the cracks, patch the void
-
-   Choose your *domain* below, and the terminal
-   shall open its gates to you.
+   " you built this night —
+     you get to rule its stars. "
 
 📡 SECURE │ Ω │ VESSEL: ∞
         🌑 THE FINAL DUSK 🌑`;
@@ -281,7 +277,7 @@ const telegramUsers = new Map();
 const waSessions = new Map();
 const reconnectAttempts = new Map(); // Tracks reconnection retries per phone number (Max 3)
 const sentPolls = new Map(); // Tracks sent poll creation messages in memory for decryption (ID -> message)
-const handledPollVotes = new Set(); // Tracks already-handled poll messages to avoid duplicate menu replies
+const lastPollVotes = new Map(); // pollId:voterJid -> last voted option id (lets changed votes trigger a new reply)
 const helpModeUsers = new Map(); // Tracks active AI Help Mode chats (JID -> timeoutTimer)
 let cachedBaileysVersion = null;
 let cachedBaileysVersionAt = 0;
@@ -1477,7 +1473,6 @@ function handlePollUpdateMessage(sock, phoneNumber, msg) {
     if (!creationKey?.id) return null;
 
     const pollId = creationKey.id;
-    if (handledPollVotes.has(pollId)) return null; // Already answered this poll
 
     const cache = loadPollCache(phoneNumber);
     const cached = cache.get(pollId);
@@ -1511,8 +1506,17 @@ function handlePollUpdateMessage(sock, phoneNumber, msg) {
 
     const idx = decryptVoteOption(cached.secretHex, cached.options, pollId, creators, uniqVoters, encVote);
     if (idx >= 0 && cached.ids && cached.ids[idx]) {
-        handledPollVotes.add(pollId);
-        return cached.ids[idx];
+        const optionId = cached.ids[idx];
+        // Only reply when the voter actually changes their selection (or votes a
+        // new option), so re-selecting the same option doesn't re-trigger.
+        const voterJid = uniqVoters[0] || 'me';
+        const voteKey = `${pollId}:${voterJid}`;
+        if (lastPollVotes.get(voteKey) === optionId) {
+            log('POLL', `${phoneNumber}: duplicate vote on ${optionId} ignored for ${voteKey}`);
+            return null;
+        }
+        lastPollVotes.set(voteKey, optionId);
+        return optionId;
     }
     log('POLL', `${phoneNumber}: decrypt failed for poll ${pollId} (creators=[${creators.join(',')}] voters=[${uniqVoters.join(',')}])`);
     return null;
@@ -2115,15 +2119,20 @@ function setupMessageHandler(sock, phoneNumber, tgId) {
             if (update.pollUpdates) {
                 log('POLL', `${phoneNumber}: Poll vote update received for message ${key.id}`);
 
-                if (handledPollVotes.has(key.id)) continue; // Already answered this poll
-
                 const votedOptionId = handlePollVote(sock, phoneNumber, key, update.pollUpdates);
                 if (votedOptionId) {
-                    log('POLL', `${phoneNumber}: Decrypted vote on option ID: ${votedOptionId}`);
-                    handledPollVotes.add(key.id);
-                    const pollRemoteJid = key.remoteJid || key.participant || null;
-                    if (pollRemoteJid) {
-                        await handleMenuVote(sock, pollRemoteJid, phoneNumber, votedOptionId);
+                    // Only reply when the voter changes their selection.
+                    const voterJid = jidNormalizedUser(key.participant || key.remoteJid || '') || 'me';
+                    const voteKey = `${key.id}:${voterJid}`;
+                    if (lastPollVotes.get(voteKey) !== votedOptionId) {
+                        lastPollVotes.set(voteKey, votedOptionId);
+                        log('POLL', `${phoneNumber}: Decrypted vote on option ID: ${votedOptionId}`);
+                        const pollRemoteJid = key.remoteJid || key.participant || null;
+                        if (pollRemoteJid) {
+                            await handleMenuVote(sock, pollRemoteJid, phoneNumber, votedOptionId);
+                        }
+                    } else {
+                        log('POLL', `${phoneNumber}: duplicate vote on ${votedOptionId} ignored`);
                     }
                 }
             }
