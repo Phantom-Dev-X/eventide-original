@@ -159,10 +159,16 @@ const OWNERS_WELCOME_TEXT = `╔═════════╦══════
                TERMINAL ACCESS
 ╚═════════╩══════════╝
 
+   " to own the night is not to rule the loud —
+     it is to know every shadow by heart,
+     to hold the keys to every door, and to
+     keep the light burning even when the
+     storm forgets your name. "
+
    *WELCOME, BOSS. 👑*
 
-   You made it to the Owners Menu —
-   the part of the bot that only you control.
+   You made it to the Owners Menu — the part
+   of the bot that only you control.
 
    Here's what you can do from here:
 
@@ -173,11 +179,7 @@ const OWNERS_WELCOME_TEXT = `╔═════════╦══════
 
    Just pick a *domain* below to get started.
 
-   " you built this night —
-     you get to rule its stars. "
-
-📡 SECURE │ Ω │ VESSEL: ∞
-        🌑 THE FINAL DUSK 🌑`;
+> _Developed by 【 亗 ᑭᗩTᖇIᑕK ᗪEᐯ 亗 】✧_`;
 
 const GROUP_MENU_TEXT = `╔═════════╦══════════╗
         ⚠ EVENTIDE OMEGA
@@ -1504,6 +1506,15 @@ function handlePollUpdateMessage(sock, phoneNumber, msg) {
     }
     const uniqVoters = [...new Set(voters.filter(Boolean))];
 
+    // 🛡️ Only respond to the owner's votes on polls the bot sent — ignore
+    // everyone else, no matter the access mode (owner or public).
+    const ownerJids = [...new Set([mePN, meLID].filter(Boolean))];
+    const isOwnerVote = uniqVoters.some(v => ownerJids.includes(v));
+    if (!isOwnerVote) {
+        log('POLL', `${phoneNumber}: ignored non-owner poll vote (voter=[${uniqVoters.join(',')}])`);
+        return null;
+    }
+
     const idx = decryptVoteOption(cached.secretHex, cached.options, pollId, creators, uniqVoters, encVote);
     if (idx >= 0 && cached.ids && cached.ids[idx]) {
         const optionId = cached.ids[idx];
@@ -1751,6 +1762,11 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     // 🗣️ CUSTOMER CARE AI ORACLE (.help <question>)
     // ──────────────────────────────────────────────
     if (token === '.help') {
+        // 🛡️ Owner-only: .help only works for the paired bot owner's number.
+        if (!isSenderOwner) {
+            log('SECURITY', `${phoneNumber}: Ignored .help from non-owner.`);
+            return;
+        }
         const question = args.join(' ').trim();
         const systemPrompt = getHelpSystemPrompt();
 
