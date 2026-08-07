@@ -151,8 +151,13 @@ const STAGE3_ARROWS_TEXT = `╔═════════╦══════�
 
 📡 SECURE │ Ω │ VESSEL: ∞`;
 
-// Absolute path to the .menu banner image (lives next to this script).
-const MENU_BANNER_PATH = path.join(__dirname, 'assets', 'eventide_banner.png');
+// Absolute paths to the menu banner images (live in ./assets next to the script).
+const MENU_BANNER_PATH      = path.join(__dirname, 'assets', 'eventide_banner.png');
+const OWNERS_MENU_PATH      = path.join(__dirname, 'assets', 'owners_menu.png');
+const GROUP_MENU_PATH       = path.join(__dirname, 'assets', 'group_menu.png');
+const FUN_MENU_PATH         = path.join(__dirname, 'assets', 'fun_menu.png');
+const SYSTEM_MENU_PATH      = path.join(__dirname, 'assets', 'system_menu.png');
+const CONFIG_MENU_PATH      = path.join(__dirname, 'assets', 'config_menu.png');
 
 // ──────────────────────────────────────────────
 // 📊 POLL DETAILS
@@ -1586,30 +1591,46 @@ async function sendMenuPoll(sock, remoteJid, phoneNumber, question, options, ids
 }
 
 // Routes a decrypted poll vote to the correct menu flow.
+// Sends the matching menu banner image with the menu text as its caption.
+async function sendMenuBanner(sock, remoteJid, imagePath, caption) {
+    try {
+        await sock.sendMessage(remoteJid, {
+            image: { url: imagePath },
+            caption: formatForWhatsApp(caption)
+        });
+        return true;
+    } catch (err) {
+        logError('WA-BANNER', `Failed to send banner for ${remoteJid}`, err);
+        // Fall back to sending the caption as a plain text reply.
+        try { await safeWaReply(sock, remoteJid, caption); return true; }
+        catch (_) { return false; }
+    }
+}
+
 async function handleMenuVote(sock, remoteJid, phoneNumber, votedOptionId) {
     log('POLL-MENU', `${phoneNumber}: handling vote -> ${votedOptionId} for ${remoteJid}`);
     try {
         switch (votedOptionId) {
             case 'owners':
-                // Welcome + briefing + quote, then "Choose Your Domain" poll
-                await safeWaReply(sock, remoteJid, OWNERS_WELCOME_TEXT);
+                // Owners banner + welcome, then "Choose Your Domain" poll
+                await sendMenuBanner(sock, remoteJid, OWNERS_MENU_PATH, OWNERS_WELCOME_TEXT);
                 await delay(1500);
                 await sendMenuPoll(sock, remoteJid, phoneNumber, DOMAIN_POLL_QUESTION, DOMAIN_POLL_OPTIONS, DOMAIN_POLL_IDS);
                 break;
             case 'group':
-                await safeWaReply(sock, remoteJid, GROUP_MENU_TEXT);
+                await sendMenuBanner(sock, remoteJid, GROUP_MENU_PATH, GROUP_MENU_TEXT);
                 break;
             case 'fun':
-                await safeWaReply(sock, remoteJid, FUN_PLACEHOLDER_TEXT);
+                await sendMenuBanner(sock, remoteJid, FUN_MENU_PATH, FUN_PLACEHOLDER_TEXT);
                 break;
             case 'bug':
                 await safeWaReply(sock, remoteJid, BUG_PLACEHOLDER_TEXT);
                 break;
             case 'system':
-                await safeWaReply(sock, remoteJid, SYSTEM_MENU_TEXT);
+                await sendMenuBanner(sock, remoteJid, SYSTEM_MENU_PATH, SYSTEM_MENU_TEXT);
                 break;
             case 'config':
-                await safeWaReply(sock, remoteJid, CONFIG_MENU_TEXT);
+                await sendMenuBanner(sock, remoteJid, CONFIG_MENU_PATH, CONFIG_MENU_TEXT);
                 break;
             default:
                 log('POLL-MENU', `${phoneNumber}: unhandled vote id ${votedOptionId}`);
