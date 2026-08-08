@@ -837,6 +837,40 @@ function formatUptime(totalSeconds) {
     return `${hrs}h ${mins}m ${secs}s`;
 }
 
+// No-arg uptime formatter (mirrors phantom-x) using process.uptime().
+function runtimeUptime() {
+    return formatUptime(process.uptime());
+}
+
+// Shared terminal wrapper — exactly matches phantom-x's buildOmegaTerminal.
+function buildOmegaTerminal(body) {
+    return (
+        `╔══════════╦══════════════╗\n` +
+        `║       ⚠ *EVENTIDE OMEGA TERMINAL*\n` +
+        `║                           *ACCESS*\n` +
+        `╚═══════════╩═════════════╝\n\n` +
+        body + `\n\n` +
+        `— *EVENTIDE OMEGA* · 👁`
+    );
+}
+
+// Fetch a remote URL as a Buffer (for .gpp / .ggpp profile picture downloads).
+function fetchBuffer(url) {
+    return new Promise((resolve, reject) => {
+        const req = https.get(url, (res) => {
+            if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
+                res.resume();
+                return reject(new Error(`HTTP ${res.statusCode}`));
+            }
+            const chunks = [];
+            res.on('data', c => chunks.push(c));
+            res.on('end', () => resolve(Buffer.concat(chunks)));
+        });
+        req.on('error', reject);
+        req.setTimeout(15000, () => { req.destroy(new Error('Timeout')); });
+    });
+}
+
 function getStoredSessionDirectories(dirPath = AUTH_DIR) {
     if (!fs.existsSync(dirPath)) return [];
     return fs.readdirSync(dirPath).filter(name => {
@@ -1025,9 +1059,6 @@ async function getBaileysVersion() {
 }
 
 function resolveCommandReply(command, phoneNumber) {
-    if (command === '.ping') {
-        return `${GROUP_CHANNEL_LINK}\n\n🏓 *Pong!*\n\n📱 *Device*: ${phoneNumber}\n⏱️ *Uptime*: ${formatUptime(process.uptime())}\n👥 *Active connections*: ${waSessions.size}`;
-    }
     return COMMANDS[command] || null;
 }
 
@@ -2122,16 +2153,9 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         const currentMode = loadBotMode(phoneNumber);
 
         if (!targetMode || !['public', 'owner'].includes(targetMode)) {
-            await safeWaReply(
-                sock, 
-                remoteJid, 
-                TERMINAL_HEADER +
-                `📌 *Bot Access Privacy Mode*\n━━━━━━━━━━━━━━━━━━━━\n\n` +
-                `👤 *Current Mode*: ${currentMode === 'owner' ? 'OWNER ONLY 🔒' : 'PUBLIC 🔓'}\n\n` +
-                `💡 *Usage*:\n` +
-                `• *.mode public* — Open commands to everyone\n` +
-                `• *.mode owner* — Restrict commands to owner only`, 
-                msg
+            await safeWaReply(sock, remoteJid,
+                `now: ${currentMode === "owner" ? "owner only" : "public"}\n` +
+                `use: .mode public  |  .mode owner`, msg
             );
             return;
         }
@@ -2142,19 +2166,19 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             return;
         }
 
+        const prevMode = currentMode;
         saveBotMode(phoneNumber, targetMode);
 
-        const bannerText = TERMINAL_HEADER + (targetMode === 'owner'
-            ? `   ░▒▓█ *SYSTEM_MODAL_SHIFT* █▓▒░\n\n` +
-              `   [ 💠 ] *PREVIOUS* : ${currentMode.toUpperCase()}\n` +
-              `   [ ⚡ ] *CURRENT* : OWNER_ONLY\n` +
-              `   [ 🛠️ ] *STATUS* : RECONFIGURED\n\n` +
-              `   " *I choose who breathes in*\n     *this space. The gates are*\n     *sealed at my command.* "`
-            : `   ░▒▓█ *SYSTEM_MODAL_SHIFT* █▓▒░\n\n` +
-              `   [ 💠 ] *PREVIOUS* : ${currentMode.toUpperCase()}\n` +
-              `   [ ⚡ ] *CURRENT* : PUBLIC\n` +
-              `   [ 🛠️ ] *STATUS* : RECONFIGURED\n\n` +
-              `   " *The gates have opened.*\n     *All who enter are seen.*\n     *Step carefully.* "`);
+        const bannerText = buildOmegaTerminal(
+            `   ░▒▓█ *SYSTEM_MODAL_SHIFT* █▓▒░\n\n` +
+            `   [ 💠 ] *PREVIOUS* : ${prevMode === "owner" ? "OWNER_ONLY" : "PUBLIC"}\n` +
+            `   [ ⚡ ] *CURRENT* : ${targetMode === "owner" ? "OWNER_ONLY" : "PUBLIC"}\n` +
+            `   [ 🛠️ ] *STATUS* : RECONFIGURED\n\n` +
+            (targetMode === "owner"
+                ? `   " *I choose who breathes in*\n     *this space. The gates are*\n     *sealed at my command.* "`
+                : `   " *The gates have opened.*\n     *All who enter are seen.*\n     *Step carefully.* "`
+            )
+        );
 
         await safeWaReply(sock, remoteJid, bannerText, msg);
         return;
@@ -2349,6 +2373,134 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         } catch (err) {
             logError('GROUP-LINK', 'Failed to fetch invite link', err);
             await safeWaReply(sock, remoteJid, `❌ Failed to fetch invite link. Error: ${err.message || err}`, msg);
+        }
+        return;
+    }
+
+    // ──────────────────────────────────────────────
+    // 🖥️ SYSTEM COMMANDS (replies match phantom-x)
+    // ──────────────────────────────────────────────
+
+    // .ping — signal check
+    if (token === '.ping') {
+        const start = Date.now();
+        try {
+            await sock.sendMessage(remoteJid, { text: "⚡ _scanning signal..._" }, { quoted: msg });
+        } catch (_) {}
+        const latency = Date.now() - start;
+        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+            `            — *S I G N A L* —\n\n` +
+            `   ⚡ *LATENCY* ──╼  [ ${latency}ms ]\n` +
+            `   📡 *RESONANCE* ──╼  [ ${latency < 300 ? "STABLE" : latency < 800 ? "MODERATE" : "DEGRADED"} ]\n` +
+            `   ⏱️ *UPTIME* ──╼  [ ${runtimeUptime()} ]\n\n` +
+            `   " *An echo in the void is*\n     *the only proof you exist* ."`
+        ), msg);
+        return;
+    }
+
+    // .dev / .devnumber / .devcontact — the architect
+    if (token === '.dev' || token === '.devnumber' || token === '.devcontact') {
+        const devNum = (process.env.DEV_NUMBERS || "2348102756072").split(",")[0].trim();
+        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+            `      ◢◤ *THE ARCHITECT* ◢◤\n\n` +
+            `      [ 👤 ] : Phantom dev x\n` +
+            `      [ 🌐 ] : wa.me/${devNum}\n` +
+            `      [ 🏮 ] : *PRIMARY_VESSEL_01*\n\n` +
+            `   " *Creation is the first step*\n     *toward destruction* ."`
+        ), msg);
+        return;
+    }
+
+    // .uptime — temporal logs
+    if (token === '.uptime') {
+        const mu = process.memoryUsage();
+        const heapU = (mu.heapUsed / 1024 / 1024).toFixed(0);
+        const heapT = (mu.heapTotal / 1024 / 1024).toFixed(0);
+        const rss   = (mu.rss / 1024 / 1024).toFixed(0);
+        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+            `   ┌── *TEMPORAL LOGS* ──┐\n` +
+            `   ╿\n` +
+            `   ┝  *ACTIVE* : ${runtimeUptime()}\n` +
+            `   ┝  *HEAP* : ${heapU}MB / ${heapT}MB\n` +
+            `   ┝  *RSS* : ${rss}MB\n` +
+            `   ┝  *PID* : ${process.pid}\n` +
+            `   ╿\n` +
+            `   └── *STABILITY: OPERATIONAL* ──┘\n\n` +
+            `   " *I have survived the collapse.*\n     *My pulse keeps this realm*\n     *from drifting into the void.* "`
+        ), msg);
+        return;
+    }
+
+    // .info — core manifest
+    if (token === '.info') {
+        const mu = process.memoryUsage();
+        const heapUsed = (mu.heapUsed / 1024 / 1024).toFixed(0);
+        const heapTotal = (mu.heapTotal / 1024 / 1024).toFixed(0);
+        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+            `   ░▒▓█ *CORE_MANIFEST* █▓▒░\n\n` +
+            `   ⧓ *VERSION* :: v1.0.0_STABLE\n` +
+            `   ⧓ *RUNTIME* :: NODE_JS v${process.version.slice(1)}\n` +
+            `   ⧓ *UPTIME* :: ${runtimeUptime()}\n` +
+            `   ⧓ *MEMORY* :: ${heapUsed}MB / ${heapTotal}MB\n` +
+            `   ⧓ *SHIELD* :: BUG_SHIELD: ACTIVE\n\n` +
+            `   " *The machine does not sleep* .\n     *The machine only waits* ."`
+        ), msg);
+        return;
+    }
+
+    // .gpp / .getpp / .pfp — get a person's profile picture
+    if (token === '.gpp' || token === '.getpp' || token === '.pfp') {
+        let ppTarget = null;
+        const quotedParticipant = msg.message?.extendedTextMessage?.contextInfo?.participant;
+        if (quotedParticipant) ppTarget = jidNormalizedUser(quotedParticipant);
+        else {
+            const mentionedJid = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid?.[0];
+            if (mentionedJid) ppTarget = jidNormalizedUser(mentionedJid);
+        }
+        if (!ppTarget && args[0]) {
+            const digits = args[0].replace(/\D/g, "");
+            if (digits.length >= 7) ppTarget = `${digits}@s.whatsapp.net`;
+        }
+        if (!ppTarget) ppTarget = jidNormalizedUser(senderJid);
+        try {
+            const ppUrl = await sock.profilePictureUrl(ppTarget, "image");
+            const ppBuf = await fetchBuffer(ppUrl);
+            const ppNum = ppTarget.split("@")[0];
+            const caption = `${GROUP_CHANNEL_LINK}\n\n` + buildOmegaTerminal(
+                `   ░▒▓█ *VISUAL_EXTRACT* █▓▒░\n\n` +
+                `   [ 👁️ ] *TARGET* : +${ppNum}\n` +
+                `   [ 📸 ] *ACTION* : PROFILE_PIC_PULL\n` +
+                `   [ ✅ ] *RESULT* : ACQUIRED\n\n` +
+                `   " *No face is hidden*\n     *from the all-seeing eye.* "`
+            );
+            await sock.sendMessage(remoteJid, { image: ppBuf, caption }, { quoted: msg });
+        } catch (e) {
+            await safeWaReply(sock, remoteJid, `❌ Could not fetch profile picture. They may have privacy settings on, or the number is invalid.\n\nError: ${e?.message}`, msg);
+        }
+        return;
+    }
+
+    // .ggpp / .grouppic — get a group's profile picture
+    if (token === '.ggpp' || token === '.grouppic') {
+        if (!remoteJid.endsWith('@g.us')) {
+            await safeWaReply(sock, remoteJid, '❌ Only works inside a group.', msg);
+            return;
+        }
+        try {
+            const gpUrl = await sock.profilePictureUrl(remoteJid, "image");
+            const gpBuf = await fetchBuffer(gpUrl);
+            let gpName = remoteJid;
+            try { const gpMeta = await sock.groupMetadata(remoteJid); gpName = gpMeta.subject; } catch (_) {}
+            const caption = `${GROUP_CHANNEL_LINK}\n\n` + buildOmegaTerminal(
+                `   ░▒▓█ *GROUP_VISUAL_EXTRACT* █▓▒░\n\n` +
+                `   [ 👁️ ] *GROUP* : ${gpName}\n` +
+                `   [ 📸 ] *ACTION* : GROUP_PIC_PULL\n` +
+                `   [ ✅ ] *RESULT* : ACQUIRED\n\n` +
+                `   " *Every domain has a face.*\n     *This one belongs to us.* "`
+            );
+            await sock.sendMessage(remoteJid, { image: gpBuf, caption }, { quoted: msg });
+        } catch (e) {
+            await safeWaReply(sock, remoteJid, `❌ Could not fetch group picture. The group may not have one set.\n\nError: ${e?.message}`, msg);
         }
         return;
     }
