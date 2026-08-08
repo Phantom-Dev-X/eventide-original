@@ -303,6 +303,7 @@ const sentPolls = new Map(); // Tracks sent poll creation messages in memory for
 const lastPollVotes = new Map(); // pollId:voterJid -> last voted option id (lets changed votes trigger a new reply)
 const menuReplyMessages = new Map(); // pollId:voterJid -> [message keys] sent for the current menu reply (deleted on vote change)
 const helpModeUsers = new Map(); // Tracks active AI Help Mode chats (JID -> timeoutTimer)
+const presenceFlashTimers = new Map(); // phoneNumber -> timer for returning bot to "offline" after a command
 let cachedBaileysVersion = null;
 let cachedBaileysVersionAt = 0;
 
@@ -1038,6 +1039,32 @@ function extractMessageText(msg) {
  * Sends a reply with simulated typing ("composing" state) and organic delay.
  * Helps protect against WhatsApp anti-spam automated bot scanners.
  */
+// Briefly sets the bot to "online" for a command response, then returns it to
+// "offline" after a short delay. This lets the bot appear offline most of the
+// time and only "wake up" when a command is used (reduces ban/flag risk).
+function flashPresenceOnline(sock, phoneNumber) {
+    if (!sock) return;
+    try {
+        sock.sendPresenceUpdate('available').catch(() => {});
+        log('PRESENCE', `${phoneNumber}: flashed online for command`);
+    } catch (err) {
+        logError('PRESENCE', `${phoneNumber}: failed to flash online`, err);
+    }
+    // Clear any pending offline timer for this session
+    const existing = presenceFlashTimers.get(phoneNumber);
+    if (existing) clearTimeout(existing);
+    // Return to offline after ~5s
+    const timer = setTimeout(() => {
+        try {
+            sock.sendPresenceUpdate('unavailable').catch(() => {});
+            log('PRESENCE', `${phoneNumber}: returned to offline`);
+        } catch (err) {
+            logError('PRESENCE', `${phoneNumber}: failed to return offline`, err);
+        }
+    }, 5000);
+    presenceFlashTimers.set(phoneNumber, timer);
+}
+
 async function safeWaReply(sock, remoteJid, text, quoted) {
     try {
         const formattedText = formatForWhatsApp(text); // Automatically format standard markdown into WhatsApp layout!
@@ -1324,15 +1351,15 @@ function setupSocketEvents(sock, phoneNumber, tgId, authDir, version, isRestore)
             };
             waSessions.set(phoneNumber, sessionObj);
 
-            // 🎭 Sporadic presence: randomly appear online / offline so the bot
-            // doesn't look permanently "online" (less likely to be flagged).
+            // 🎭 Keep the bot offline by default. It only flashes online briefly
+            // when a command is used (see flashPresenceOnline), then goes back
+            // to offline — so it rarely appears "online" (reduces ban risk).
             const presenceTimer = setTimeout(async () => {
                 try {
-                    const isAvail = Math.random() < 0.35; // ~35% online bursts
-                    await sock.sendPresenceUpdate(isAvail ? 'available' : 'unavailable');
-                    log('PRESENCE', `${phoneNumber}: set presence to ${isAvail ? 'available' : 'unavailable'}`);
+                    await sock.sendPresenceUpdate('unavailable');
+                    log('PRESENCE', `${phoneNumber}: started offline by default`);
                 } catch (err) {
-                    logError('PRESENCE', `${phoneNumber}: failed to update presence`, err);
+                    logError('PRESENCE', `${phoneNumber}: failed to set offline presence`, err);
                 }
             }, 4000);
 
@@ -1802,6 +1829,9 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         'WA-CMD',
         `${phoneNumber}: command flow | raw=${JSON.stringify(trimForLog(text, 250))} normalized=${JSON.stringify(trimForLog(normalized, 250))} token=${JSON.stringify(token)}`
     );
+
+    // Wake the bot online for this command, then back offline shortly after.
+    flashPresenceOnline(sock, phoneNumber);
 
     // ──────────────────────────────────────────────
     // 🌌 GRANULAR LOADING MENU COMMAND
