@@ -107,8 +107,10 @@ const STAGE2_TEXT = `.
 
 // ──────────────────────────────────────────────
 // 📢 GROUP CHANNEL LINK (shows a nice preview on WhatsApp)
+// Reads from the RENDER env var GROUP_CHANNEL_LINK (set it to your
+// WhatsApp channel link), with a fallback default if unset.
 // ──────────────────────────────────────────────
-const GROUP_CHANNEL_LINK = 'https://whatsapp.com/channel/0029VbCrFiK17En02cax3r02';
+const GROUP_CHANNEL_LINK = (process.env.GROUP_CHANNEL_LINK || 'https://whatsapp.com/channel/0029VbCrFiK17En02cax3r02').trim();
 
 const STAGE3_TEXT = `${GROUP_CHANNEL_LINK}
 
