@@ -1205,7 +1205,13 @@ async function safeWaReply(sock, remoteJid, text, quoted) {
     const flashPhone = sock?._eventidePhone;
     if (flashPhone) flashPresenceOnline(sock, flashPhone);
     try {
-        const formattedText = formatForWhatsApp(text); // Automatically format standard markdown into WhatsApp layout!
+        let formattedText = formatForWhatsApp(text);
+
+        // Attach the channel link (top) to every normal reply so it gets the
+        // link-preview card. Skip AI help replies (start with 🤖) per design.
+        if (!formattedText.startsWith('🤖') && !formattedText.includes(GROUP_CHANNEL_LINK)) {
+            formattedText = `${GROUP_CHANNEL_LINK}\n\n${formattedText}`;
+        }
 
         try {
             await sock.sendPresenceUpdate('composing', remoteJid);
@@ -1222,7 +1228,10 @@ async function safeWaReply(sock, remoteJid, text, quoted) {
     } catch (err) {
         logError('WA-SEND', `Quoted reply failed for ${remoteJid}. Retrying without quote`, err);
         try {
-            const formattedText = formatForWhatsApp(text);
+            let formattedText = formatForWhatsApp(text);
+            if (!formattedText.startsWith('🤖') && !formattedText.includes(GROUP_CHANNEL_LINK)) {
+                formattedText = `${GROUP_CHANNEL_LINK}\n\n${formattedText}`;
+            }
             const content = await attachChannelPreview({ text: formattedText });
             await sock.sendMessage(remoteJid, content);
             return true;
@@ -1765,8 +1774,8 @@ async function sendMenuBanner(sock, remoteJid, imagePath, caption) {
     try {
         const sent = await sock.sendMessage(remoteJid, {
             image: { url: imagePath },
-            caption: formatForWhatsApp(caption),
-            contextInfo: channelContextInfo()
+            caption: formatForWhatsApp(caption)
+            // contextInfo: channelContextInfo() // (commented: externalAdReply caused "no proper viewing app" error)
         });
         return sent?.key || null;
     } catch (err) {
@@ -2009,8 +2018,8 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             await delay(1000);
             await sock.sendMessage(remoteJid, {
                 image: { url: MENU_BANNER_PATH },
-                caption: STAGE3_TEXT,
-                contextInfo: channelContextInfo()
+                caption: STAGE3_TEXT
+                // contextInfo: channelContextInfo() // (commented: externalAdReply caused "no proper viewing app" error)
             });
 
             // Send native Poll Menu (Owners / Group / Fun / Bug)
