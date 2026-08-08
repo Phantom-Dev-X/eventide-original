@@ -186,25 +186,19 @@ const OWNERS_WELCOME_TEXT = `╔═════════╦══════
                TERMINAL ACCESS
 ╚═════════╩══════════╝
 
-   " to own the night is not to rule the loud —
-     it is to know every shadow by heart,
-     to hold the keys to every door, and to
-     keep the light burning even when the
-     storm forgets your name. "
+" you built this night —
+  you rule its stars. "
 
-   *WELCOME, BOSS. 👑*
+*WELCOME, BOSS. 👑*
 
-   You made it to the Owners Menu — the part
-   of the bot that only you control.
+This is the Owners Menu — yours alone.
 
-   Here's what you can do from here:
+• *System Menu* — see how the bot is running
+  (uptime, ping, profile pics & more)
+• *Config Menu* — change bot settings to your
+  taste (.mode, .setalias & more)
 
-   • *System Menu* — see how the bot is running
-     (uptime, ping, profile pics, and more)
-   • *Config Menu* — change bot settings to
-     suit your taste (.mode, .setalias, and more)
-
-   Just pick a *domain* below to get started.
+Pick a domain below to begin.
 
 > _Developed by 【 亗 ᑭᗩTᖇIᑕK ᗪEᐯ 亗 】✧_`;
 
