@@ -5,7 +5,8 @@ import makeWASocket, {
     getAggregateVotesInPollMessage,
     decryptPollVote,
     jidNormalizedUser,
-    delay
+    delay,
+    downloadMediaMessage
 } from 'baileys';
 import pino from 'pino';
 import express from 'express';
@@ -352,17 +353,40 @@ const CONFIG_MENU_TEXT = `${GROUP_CHANNEL_LINK}
                CONFIG DOMAIN
 ╚═════════╩══════════╝
 
-   *CONFIG DOMAIN*
-   Reshape the machine to your will.
+      ◈ ── C O N F I G ── ◈
+   shape the vessel itself
 
-   • *.mode*      — set access lock (public / owner)
-   • *.public*    — open the gates
-   • *.owner*     — seal the throne
-   • *.setalias*  — bind custom names (coming soon)
+┏━ ✦ ACCESS ━┓
+  • .mode         lock the gates
+  • .public       open to all
+  • .owner        seal to owner
+┗━━━━━━━━━━━━━┛
 
-   (more config modules in development...)
+┏━ ✦ COMMANDS ━┓
+  • .setprefix    change the sigil
+  • .setalias     bind a new command
+  • .delalias     unbind a command
+  • .aliases      list bindings
+┗━━━━━━━━━━━━━┛
 
-📡 SECURE │ Ω │ CONFIG: UNLOCKED`;
+┏━ ✦ IDENTITY ━┓
+  • .setname      rename the vessel
+  • .setbio       set the about text
+  • .setpp        change the avatar
+┗━━━━━━━━━━━━━┛
+
+┏━ ✦ STATE ━┓
+  • .settings     view config matrix
+  • .reset        restore defaults
+┗━━━━━━━━━━━━━┛
+
+   " the machine bends to
+     the hand that shapes it ."
+
+📡 type *_.help_* to learn how
+   to use any command.
+
+> _Developed by 【 亗 ᑭᗩTᖇIᑕK ᗪEᐯ 亗 】✧_`;
 
 const FUN_PLACEHOLDER_TEXT = `${GROUP_CHANNEL_LINK}
 
@@ -472,6 +496,51 @@ function saveBotMode(phoneNumber, mode) {
         }
     } catch (err) {
         logError('MODE', `${phoneNumber}: Failed to save bot_mode.txt`, err);
+    }
+}
+
+// ──────────────────────────────────────────────
+// ⚙️ BOT CONFIG STORE (persistent, synced to Supabase)
+// Per-phone config: prefix, aliases, identity, toggles. Stored as JSON in the
+// session folder so it survives redeploys (the folder is synced to Supabase).
+// ──────────────────────────────────────────────
+const DEFAULT_BOT_CONFIG = {
+    prefix: '.',
+    aliases: {},            // trigger (lowercase, no prefix) -> target command (with prefix)
+    name: '',               // display name override ('' = leave account name)
+    bio: '',                // about/bio override ('' = leave as is)
+    autoreact: {
+        enabled: false,
+        endpoints: { groups: [], channels: [], contacts: [] }
+    },
+    settings: {}            // generic future toggles
+};
+
+function loadBotConfig(phoneNumber) {
+    const filePath = path.join(AUTH_DIR, phoneNumber, 'bot_config.json');
+    try {
+        if (fs.existsSync(filePath)) {
+            const raw = fs.readFileSync(filePath, 'utf8');
+            const parsed = JSON.parse(raw);
+            return { ...structuredClone(DEFAULT_BOT_CONFIG), ...(parsed || {}), aliases: { ...(parsed?.aliases || {}) }, autoreact: { ...DEFAULT_BOT_CONFIG.autoreact, ...(parsed?.autoreact || {}), endpoints: { ...DEFAULT_BOT_CONFIG.autoreact.endpoints, ...(parsed?.autoreact?.endpoints || {}) } } };
+        }
+    } catch (err) {
+        logError('CONFIG', `${phoneNumber}: Failed to load bot_config.json`, err);
+    }
+    return structuredClone(DEFAULT_BOT_CONFIG);
+}
+
+function saveBotConfig(phoneNumber, config) {
+    const filePath = path.join(AUTH_DIR, phoneNumber, 'bot_config.json');
+    try {
+        ensureDir(path.dirname(filePath));
+        fs.writeFileSync(filePath, JSON.stringify(config, null, 2), 'utf8');
+        if (isSupabaseEnabled()) {
+            const authDir = path.join(AUTH_DIR, phoneNumber);
+            debouncedSyncLocalToSupabase(phoneNumber, authDir);
+        }
+    } catch (err) {
+        logError('CONFIG', `${phoneNumber}: Failed to save bot_config.json`, err);
     }
 }
 
@@ -1962,9 +2031,20 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
 
     const text = parsed.text.trim();
     const normalized = text.trim();
-    const token = normalized.split(/\s+/)[0].toLowerCase();
+    const firstWord = normalized.split(/\s+/)[0];
     const args = normalized.split(/\s+/).slice(1);
-    const startsWithDot = normalized.startsWith('.');
+
+    // ⚙️ Dynamic prefix support: load this bot's configured prefix (default ".").
+    // Normalize the token so all command checks (which use ".cmd") keep working
+    // even when the prefix is custom (e.g. ">ping" -> ".ping").
+    const botConfig = loadBotConfig(phoneNumber);
+    const prefix = botConfig.prefix || '.';
+    let token = firstWord.toLowerCase();
+    let startsWithDot = normalized.startsWith('.');
+    if (prefix !== '.' && firstWord.toLowerCase().startsWith(prefix.toLowerCase())) {
+        token = '.' + firstWord.slice(prefix.length).toLowerCase();
+        startsWithDot = true;
+    }
 
     // ──────────────────────────────────────────────
     // 🔒 BOT ACCESS PRIVACY MODE ENFORCEMENT & CONVERSATIONAL INTERCEPTOR
@@ -2040,6 +2120,16 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
 
     // Wake the bot online for this command, then back offline shortly after.
     flashPresenceOnline(sock, phoneNumber);
+
+    // ⚙️ Alias resolution: if the token isn't a native command but matches a
+    // configured alias, swap it for the target command so the normal handlers run.
+    if (botConfig.aliases && token.startsWith('.')) {
+        const aliasKey = token.slice(1).toLowerCase();
+        if (botConfig.aliases[aliasKey]) {
+            token = botConfig.aliases[aliasKey];
+            log('ALIAS', `${phoneNumber}: alias "${aliasKey}" -> ${token}`);
+        }
+    }
 
     // ──────────────────────────────────────────────
     // 🌌 GRANULAR LOADING MENU COMMAND
@@ -2173,6 +2263,180 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
                 `   " The oracle is listening. "`;
             await safeWaReply(sock, remoteJid, onMsg, msg);
         }
+        return;
+    }
+
+    // ──────────────────────────────────────────────
+    // ⚙️ CONFIG COMMANDS (change the bot / host account)
+    // ──────────────────────────────────────────────
+
+    // .setprefix <char> — change the bot command prefix (persists)
+    if (token === '.setprefix' || token === '.changeprefix') {
+        if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Owner/Dev only.', msg); return; }
+        const p = args[0];
+        if (!p || p.length > 2) {
+            await safeWaReply(sock, remoteJid, '❌ Provide a 1-character prefix.\n\nuse: .setprefix !   (or .setprefix . to reset)', msg);
+            return;
+        }
+        botConfig.prefix = p;
+        saveBotConfig(phoneNumber, botConfig);
+        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+            `   ░▒▓█ *PREFIX_CALIBRATION* █▓▒░\n\n` +
+            `   ✦ *OLD* :: ${prefix}\n` +
+            `   ✦ *NEW* :: "${p}"\n` +
+            `   🔄 *APPLIED* :: IMMEDIATELY\n\n` +
+            `   " The sigil is rewritten.\n     Command now bends to\n     your tongue. "`
+        ), msg);
+        return;
+    }
+
+    // .setalias <trigger> <cmd> — bind an alias to run another command
+    if (token === '.setalias') {
+        if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Owner/Dev only.', msg); return; }
+        const trigger = (args[0] || '').replace(/^\./, '').toLowerCase();
+        const target = (args[1] || '').toLowerCase();
+        if (!trigger || !target.startsWith('.')) {
+            await safeWaReply(sock, remoteJid, '❌ use: .setalias <trigger> <command>\n\nExample: .setalias p .ping', msg);
+            return;
+        }
+        botConfig.aliases = botConfig.aliases || {};
+        botConfig.aliases[trigger] = target;
+        saveBotConfig(phoneNumber, botConfig);
+        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+            `   ░▒▓█ *ALIAS_FORGED* █▓▒░\n\n` +
+            `   ✦ *TRIGGER* :: ${prefix}${trigger}\n` +
+            `   ✦ *CASTS* :: ${target}\n\n` +
+            `   " A new name is bound.\n     Speak it and the void\n     answers. "`
+        ), msg);
+        return;
+    }
+
+    // .delalias <trigger> — remove an alias
+    if (token === '.delalias') {
+        if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Owner/Dev only.', msg); return; }
+        const trigger = (args[0] || '').replace(/^\./, '').toLowerCase();
+        if (!trigger || !(botConfig.aliases || {})[trigger]) {
+            await safeWaReply(sock, remoteJid, `❌ No alias named "${trigger}". Use .aliases to see them.`, msg);
+            return;
+        }
+        delete botConfig.aliases[trigger];
+        saveBotConfig(phoneNumber, botConfig);
+        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+            `   ░▒▓█ *ALIAS_SEVERED* █▓▒░\n\n` +
+            `   ✦ *TRIGGER* :: ${prefix}${trigger}\n` +
+            `   ✦ *STATUS* :: UNBOUND\n\n` +
+            `   " The name returns to\n     the silence. "`
+        ), msg);
+        return;
+    }
+
+    // .aliases — list all aliases
+    if (token === '.aliases') {
+        const aliases = botConfig.aliases || {};
+        const keys = Object.keys(aliases);
+        const list = keys.length ? keys.map(k => `   • ${prefix}${k}  →  ${aliases[k]}`).join('\n') : '   • _none bound_';
+        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+            `   ░▒▓█ *ALIAS_REGISTRY* █▓▒░\n\n` +
+            `   🔢 *COUNT* :: ${keys.length}\n\n` +
+            `${list}\n\n` +
+            `   " Names are power.\n     Guard them well. "`
+        ), msg);
+        return;
+    }
+
+    // .setname <name> — change the host account's display name
+    if (token === '.setname') {
+        if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Owner/Dev only.', msg); return; }
+        const name = args.join(' ').trim();
+        if (!name) { await safeWaReply(sock, remoteJid, '❌ use: .setname <name>', msg); return; }
+        try {
+            await sock.updateProfileName(name);
+            botConfig.name = name;
+            saveBotConfig(phoneNumber, botConfig);
+            await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                `   ░▒▓█ *IDENTITY_ALIGNED* █▓▒░\n\n` +
+                `   ✦ *NAME* :: ${name}\n` +
+                `   ✦ *STATUS* :: ACCOUNT_RENAMED\n\n` +
+                `   " The vessel wears a\n     new name in the void. "`
+            ), msg);
+        } catch (e) {
+            await safeWaReply(sock, remoteJid, `❌ Could not set name. Error: ${e?.message}`, msg);
+        }
+        return;
+    }
+
+    // .setbio <text> — change the host account's about/bio
+    if (token === '.setbio' || token === '.setstatus') {
+        if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Owner/Dev only.', msg); return; }
+        const bio = args.join(' ').trim();
+        if (!bio) { await safeWaReply(sock, remoteJid, '❌ use: .setbio <text>', msg); return; }
+        try {
+            await sock.updateProfileStatus(bio);
+            botConfig.bio = bio;
+            saveBotConfig(phoneNumber, botConfig);
+            await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                `   ░▒▓█ *BIO_INSCRIBED* █▓▒░\n\n` +
+                `   ✦ *ABOUT* :: ${bio}\n` +
+                `   ✦ *STATUS* :: ACCOUNT_UPDATED\n\n` +
+                `   " The void now reads\n     what you will it to say. "`
+            ), msg);
+        } catch (e) {
+            await safeWaReply(sock, remoteJid, `❌ Could not set bio. Error: ${e?.message}`, msg);
+        }
+        return;
+    }
+
+    // .setpp — reply to an image to set the host account's profile pic
+    if (token === '.setpp') {
+        if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Owner/Dev only.', msg); return; }
+        const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+        const qimg = quoted?.imageMessage || quoted?.stickerMessage;
+        if (!qimg) {
+            await safeWaReply(sock, remoteJid, '❌ Reply to an image with .setpp to change the profile picture.', msg);
+            return;
+        }
+        try {
+            const media = await downloadMediaMessage({ message: { imageMessage: qimg } }, 'buffer', {}, { logger: pino({ level: 'silent' }) });
+            await sock.updateProfilePicture(sock.user?.id, media);
+            await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                `   ░▒▓█ *AVATAR_SWAPPED* █▓▒░\n\n` +
+                `   ✦ *ACTION* :: PROFILE_PIC_SET\n` +
+                `   ✦ *STATUS* :: ACCOUNT_UPDATED\n\n` +
+                `   " The face of the vessel\n     is rewritten. "`
+            ), msg);
+        } catch (e) {
+            logError('CONFIG', 'setpp failed', e);
+            await safeWaReply(sock, remoteJid, `❌ Could not set profile pic. Error: ${e?.message}`, msg);
+        }
+        return;
+    }
+
+    // .settings — show current config
+    if (token === '.settings') {
+        const aliases = Object.keys(botConfig.aliases || {});
+        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+            `   ░▒▓█ *CONFIG_MATRIX* █▓▒░\n\n` +
+            `   ✦ *PREFIX* :: ${prefix}\n` +
+            `   ✦ *MODE* :: ${loadBotMode(phoneNumber) === 'owner' ? 'OWNER_ONLY' : 'PUBLIC'}\n` +
+            `   ✦ *ALIASES* :: ${aliases.length}\n` +
+            `   ✦ *NAME* :: ${botConfig.name || '(account default)'}\n` +
+            `   ✦ *BIO* :: ${botConfig.bio || '(account default)'}\n\n` +
+            `   " You are the architect\n     of these settings. "`
+        ), msg);
+        return;
+    }
+
+    // .reset — reset config to defaults
+    if (token === '.reset') {
+        if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Owner/Dev only.', msg); return; }
+        saveBotConfig(phoneNumber, structuredClone(DEFAULT_BOT_CONFIG));
+        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+            `   ░▒▓█ *CONFIG_WIPED* █▓▒░\n\n` +
+            `   ✦ *PREFIX* :: .\n` +
+            `   ✦ *ALIASES* :: 0\n` +
+            `   ✦ *STATUS* :: FACTORY_RESET\n\n` +
+            `   " The machine forgets\n     your shaping. It is\n     pristine once more. "`
+        ), msg);
         return;
     }
 
