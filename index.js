@@ -2596,7 +2596,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
 
     // .restart — owner-only reboot
     if (token === '.restart') {
-        if (!isSenderOwner) { await safeWaReply(sock, remoteJid, '❌ Owner only.', msg); return; }
+        if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Dev only.', msg); return; }
         await safeWaReply(sock, remoteJid, buildOmegaTerminal(
             `   ░▒▓█ *CORE_REBOOT* █▓▒░\n\n` +
             `   ⚡ *STATUS* :: RESTARTING\n` +
@@ -2609,7 +2609,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
 
     // .shutdown — owner-only power down
     if (token === '.shutdown') {
-        if (!isSenderOwner) { await safeWaReply(sock, remoteJid, '❌ Owner only.', msg); return; }
+        if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Dev only.', msg); return; }
         await safeWaReply(sock, remoteJid, buildOmegaTerminal(
             `   ░▒▓█ *CORE_POWER_DOWN* █▓▒░\n\n` +
             `   ⚡ *STATUS* :: SHUTDOWN\n` +
