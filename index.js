@@ -3176,10 +3176,10 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
                 await safeWaReply(sock, remoteJid, buildOmegaTerminal(`   ✦ *STATUS_POSTED* :: image\n\n   " The image is\n     cast into the void. "`), msg);
                 return;
             }
-            // Case 3: a link -> attempt to download (basic; requires a downloader)
-            if (/https?:\/\//i.test(argText) && (/(youtube|youtu\.be|tiktok)/i.test(argText))) {
+            // Case 3: a link -> downloading is not supported; tell them we can't
+            if (/https?:\/\//i.test(argText)) {
                 await safeWaReply(sock, remoteJid, buildOmegaTerminal(
-                    `   ✦ *LINK_RECEIVED*\n\n   Auto-download for social links\n   requires a downloader integration\n   (yt-dlp). For now, reply to a video\n   with .post, or send text.`
+                    `   ✦ *LINK_REJECTED*\n\n   I can't download & post links.\n\n   Reply to a video/image with\n   *.post*, or send plain text.`
                 ), msg);
                 return;
             }
