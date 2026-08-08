@@ -112,6 +112,47 @@ const STAGE2_TEXT = `.
 // ──────────────────────────────────────────────
 const GROUP_CHANNEL_LINK = (process.env.GROUP_CHANNEL_LINK || 'https://whatsapp.com/channel/0029VbCrFiK17En02cax3r02').trim();
 
+// 🧠 Cached channel link-preview. We fetch the URL metadata ONCE and reuse it,
+// so we don't make an HTTPS request on every message (cuts the ~1.5s delay and
+// avoids hammering WhatsApp's URL server). Attached as `linkPreview` so Baileys
+// skips its own fetch.
+let channelPreviewCache = null;
+let channelPreviewPromise = null;
+
+async function getCachedChannelPreview() {
+    if (channelPreviewCache) return channelPreviewCache;
+    if (!channelPreviewPromise) {
+        channelPreviewPromise = (async () => {
+            try {
+                const { getUrlInfo } = await import('./node_modules/baileys/lib/Utils/link-preview.js');
+                const info = await getUrlInfo(GROUP_CHANNEL_LINK, {
+                    thumbnailWidth: 192,
+                    fetchOpts: { timeout: 5000 }
+                });
+                channelPreviewCache = info || null;
+            } catch (err) {
+                logError('PREVIEW', 'Failed to build channel link preview', err);
+                channelPreviewCache = null;
+            }
+            return channelPreviewCache;
+        })();
+    }
+    return channelPreviewPromise;
+}
+
+// Attaches the cached channel preview to a text content object if the text
+// contains the channel link (so Baileys doesn't re-fetch on every send).
+async function attachChannelPreview(content) {
+    if (!content?.text || !String(content.text).includes(GROUP_CHANNEL_LINK)) return content;
+    try {
+        const preview = await getCachedChannelPreview();
+        if (preview) content.linkPreview = preview;
+    } catch (err) {
+        logError('PREVIEW', 'attachChannelPreview failed', err);
+    }
+    return content;
+}
+
 const STAGE3_TEXT = `${GROUP_CHANNEL_LINK}
 
 ╔═════════╦══════════╗
@@ -1145,13 +1186,15 @@ async function safeWaReply(sock, remoteJid, text, quoted) {
             logError('WA-SEND', 'Failed to send presence update', presErr);
         }
 
-        await sock.sendMessage(remoteJid, { text: formattedText }, quoted ? { quoted } : undefined);
+        const content = await attachChannelPreview({ text: formattedText });
+        await sock.sendMessage(remoteJid, content, quoted ? { quoted } : undefined);
         return true;
     } catch (err) {
         logError('WA-SEND', `Quoted reply failed for ${remoteJid}. Retrying without quote`, err);
         try {
             const formattedText = formatForWhatsApp(text);
-            await sock.sendMessage(remoteJid, { text: formattedText });
+            const content = await attachChannelPreview({ text: formattedText });
+            await sock.sendMessage(remoteJid, content);
             return true;
         } catch (retryErr) {
             logError('WA-SEND', `Reply failed for ${remoteJid}`, retryErr);
@@ -1754,7 +1797,8 @@ async function handleMenuVote(sock, remoteJid, phoneNumber, votedOptionId, pollI
                 break;
             }
             case 'bug': {
-                const sent = await sock.sendMessage(remoteJid, { text: formatForWhatsApp(BUG_PLACEHOLDER_TEXT) });
+                const bugContent = await attachChannelPreview({ text: formatForWhatsApp(BUG_PLACEHOLDER_TEXT) });
+                const sent = await sock.sendMessage(remoteJid, bugContent);
                 if (sent?.key) recordMenuMessage(replyKey, sent.key);
                 break;
             }
