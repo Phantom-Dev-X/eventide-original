@@ -166,6 +166,23 @@ function attachChannelPreview(content) {
     return content;
 }
 
+// Builds a contextInfo with an externalAdReply card (thumbnail + title + link).
+// This works on ANY message type — including image+caption menu messages, where
+// Baileys would otherwise never generate a URL preview for the caption.
+function channelContextInfo() {
+    return {
+        externalAdReply: {
+            title: CHANNEL_PREVIEW_TITLE,
+            body: CHANNEL_PREVIEW_DESC,
+            thumbnail: CHANNEL_LINK_PREVIEW.jpegThumbnail,
+            mediaType: 1,
+            sourceUrl: GROUP_CHANNEL_LINK,
+            renderLargerThumbnail: true,
+            showAdAttribution: false
+        }
+    };
+}
+
 const STAGE3_TEXT = `${GROUP_CHANNEL_LINK}
 
 ╔═════════╦══════════╗
@@ -1748,7 +1765,8 @@ async function sendMenuBanner(sock, remoteJid, imagePath, caption) {
     try {
         const sent = await sock.sendMessage(remoteJid, {
             image: { url: imagePath },
-            caption: formatForWhatsApp(caption)
+            caption: formatForWhatsApp(caption),
+            contextInfo: channelContextInfo()
         });
         return sent?.key || null;
     } catch (err) {
@@ -1991,7 +2009,8 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             await delay(1000);
             await sock.sendMessage(remoteJid, {
                 image: { url: MENU_BANNER_PATH },
-                caption: STAGE3_TEXT
+                caption: STAGE3_TEXT,
+                contextInfo: channelContextInfo()
             });
 
             // Send native Poll Menu (Owners / Group / Fun / Bug)
