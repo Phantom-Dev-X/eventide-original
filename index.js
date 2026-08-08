@@ -105,10 +105,17 @@ const STAGE2_TEXT = `.
    even in your darkest hour...
 ════════════════════════════════════`;
 
+// ──────────────────────────────────────────────
+// 📢 GROUP CHANNEL LINK (shows a nice preview on WhatsApp)
+// ──────────────────────────────────────────────
+const GROUP_CHANNEL_LINK = 'https://whatsapp.com/channel/0029VbCrFiK17En02cax3r02';
+
 const STAGE3_TEXT = `╔═════════╦══════════╗
         ⚠ EVENTIDE OMEGA
                TERMINAL ACCESS
 ╚═════════╩══════════╝
+
+${GROUP_CHANNEL_LINK}
 
                 ═══ E C L I P S E ═══
              " i am what remains when 
@@ -186,6 +193,8 @@ const OWNERS_WELCOME_TEXT = `╔═════════╦══════
                TERMINAL ACCESS
 ╚═════════╩══════════╝
 
+${GROUP_CHANNEL_LINK}
+
 " you built this night —
   you rule its stars. "
 
@@ -207,6 +216,8 @@ const GROUP_MENU_TEXT = `╔═════════╦═══════�
                GROUP DOMAIN
 ╚═════════╩══════════╝
 
+${GROUP_CHANNEL_LINK}
+
    *GROUP DOMAIN*
    Dominion over the vessel's gatherings.
 
@@ -224,6 +235,8 @@ const SYSTEM_MENU_TEXT = `╔═════════╦═══════
         ⚠ EVENTIDE OMEGA
                SYSTEM DOMAIN
 ╚═════════╩══════════╝
+
+${GROUP_CHANNEL_LINK}
 
    *SYSTEM DOMAIN*
    Core vitals & vessel telemetry.
@@ -243,6 +256,8 @@ const CONFIG_MENU_TEXT = `╔═════════╦═══════
                CONFIG DOMAIN
 ╚═════════╩══════════╝
 
+${GROUP_CHANNEL_LINK}
+
    *CONFIG DOMAIN*
    Reshape the machine to your will.
 
@@ -260,6 +275,8 @@ const FUN_PLACEHOLDER_TEXT = `╔═════════╦═════�
                 FUN DOMAIN
 ╚═════════╩══════════╝
 
+${GROUP_CHANNEL_LINK}
+
    *FUN DOMAIN*
    The playground is still being wired.
 
@@ -274,6 +291,8 @@ const BUG_PLACEHOLDER_TEXT = `╔═════════╦═════�
         ⚠ EVENTIDE OMEGA
                 BUG DOMAIN
 ╚═════════╩══════════╝
+
+${GROUP_CHANNEL_LINK}
 
    *BUG DOMAIN*
    The fault-line is being sealed.
