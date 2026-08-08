@@ -2526,11 +2526,12 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     if (token === '.status') {
         const mu = process.memoryUsage();
         const heapUsed = (mu.heapUsed / 1024 / 1024).toFixed(0);
+        const isDevOrOwner = isSenderOwner || isDevNumber(senderJid);
         await safeWaReply(sock, remoteJid, buildOmegaTerminal(
             `   ░▒▓█ *SYSTEM_STATUS* █▓▒░\n\n` +
             `   🔋 *MODE* :: ${loadBotMode(phoneNumber) === 'owner' ? 'OWNER_ONLY' : 'PUBLIC'}\n` +
             `   ⏱️ *UPTIME* :: ${runtimeUptime()}\n` +
-            `   👥 *SESSIONS* :: ${waSessions.size}\n` +
+            (isDevOrOwner ? `   👥 *SESSIONS* :: ${waSessions.size}\n` : ``) +
             `   💾 *MEMORY* :: ${heapUsed}MB\n\n` +
             `   " *The machine does not sleep.*\n     *The machine only waits.* "`
         ), msg);
@@ -2539,11 +2540,12 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
 
     // .session — current session info
     if (token === '.session') {
+        const isDevOrOwner = isSenderOwner || isDevNumber(senderJid);
         await safeWaReply(sock, remoteJid, buildOmegaTerminal(
             `   ░▒▓█ *ACTIVE_SESSION* █▓▒░\n\n` +
             `   📱 *PHONE* :: ${phoneNumber}\n` +
             `   📡 *JID* :: ${sock.user?.id || 'unknown'}\n` +
-            `   🔗 *SOCKETS* :: ${waSessions.size}\n\n` +
+            (isDevOrOwner ? `   🔗 *SOCKETS* :: ${waSessions.size}\n` : ``) +
             `   " *This is but one of many*\n     *eyes in the void.* "`
         ), msg);
         return;
