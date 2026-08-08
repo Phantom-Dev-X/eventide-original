@@ -994,7 +994,7 @@ async function postToStatus(sock, phoneNumber, content) {
     else if (content?.image) mb = (content.image.length || 0) / (1024*1024);
     const budget = getStatusBudget(phoneNumber);
     if (budget.usedMB + mb > 50) {
-        throw new Error(`Daily status upload cap reached (50MB). Used ${budget.usedMB.toFixed(1)}MB. Try again tomorrow.`);
+        throw new Error(`Daily status upload cap reached (10MB). Used ${budget.usedMB.toFixed(1)}MB. Try again tomorrow.`);
     }
     // Build statusJidList from tracked contacts so the status is visible.
     // Baileys requires statusJidList (the people who will see the status).
@@ -3164,7 +3164,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             // Case 1: reply to a video -> post video to status
             if (quoted?.videoMessage) {
                 const media = await downloadMediaMessage({ message: { videoMessage: quoted.videoMessage } }, 'buffer', {}, { logger: pino({ level: 'silent' }) });
-                if (media.length > 50*1024*1024) { await safeWaReply(sock, remoteJid, '❌ Video too large (max 50MB).', msg); return; }
+                if (media.length > 10*1024*1024) { await safeWaReply(sock, remoteJid, '❌ Video too large (max 10MB).', msg); return; }
                 await postToStatus(sock, phoneNumber, { video: media, mimetype: quoted.videoMessage.mimetype || 'video/mp4' });
                 await safeWaReply(sock, remoteJid, buildOmegaTerminal(`   ✦ *STATUS_POSTED* :: video\n\n   " The moment is\n     broadcast to the void. "`), msg);
                 return;
@@ -3172,6 +3172,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             // Case 2: reply to an image -> post image to status
             if (quoted?.imageMessage) {
                 const media = await downloadMediaMessage({ message: { imageMessage: quoted.imageMessage } }, 'buffer', {}, { logger: pino({ level: 'silent' }) });
+                if (media.length > 10*1024*1024) { await safeWaReply(sock, remoteJid, '❌ Image too large (max 10MB).', msg); return; }
                 await postToStatus(sock, phoneNumber, { image: media, mimetype: quoted.imageMessage.mimetype || 'image/jpeg' });
                 await safeWaReply(sock, remoteJid, buildOmegaTerminal(`   ✦ *STATUS_POSTED* :: image\n\n   " The image is\n     cast into the void. "`), msg);
                 return;
