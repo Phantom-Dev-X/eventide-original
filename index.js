@@ -311,18 +311,39 @@ const SYSTEM_MENU_TEXT = `${GROUP_CHANNEL_LINK}
                SYSTEM DOMAIN
 ╚═════════╩══════════╝
 
-   *SYSTEM DOMAIN*
-   Core vitals & vessel telemetry.
+      ◈ ── S Y S T E M ── ◈
+   the core of the machine
 
-   • *.ping*        — pulse check (latency)
-   • *.uptime*      — time since last sync
-   • *.getpp*       — fetch a profile picture
-   • *.getgroup pp* — fetch the group's picture
-   • *.help*        — explore the codex
+┏━ ✦ STATUS ━┓
+  • *.ping*       signal pulse
+  • *.uptime*     temporal logs
+  • *.info*       core manifest
+  • *.runtime*    process vitals
+  • *.os*         host machine
+  • *.status*     overall state
+┗━━━━━━━━━━━━━━┛
 
-   (more instruments being wired in...)
+┏━ ✦ OWNER TOOLS ━┓
+  • *.gpp*        pull profile pic
+  • *.ggpp*       pull group pic
+  • *.dev*        the architect
+  • *.session*    current session
+  • *.sessions*   linked sessions
+  • *.listgc*     joined groups
+┗━━━━━━━━━━━━━━┛
 
-📡 SECURE │ Ω │ CORE: ONLINE`;
+┏━ ✦ CONTROL ━┓
+  • *.restart*    reboot the core
+  • *.shutdown*   power down
+┗━━━━━━━━━━━━━━┛
+
+   " the machine does not sleep.
+     it only waits ."
+
+📡 type *_.help_* to learn how
+   to use any command.
+
+> _Developed by 【 亗 ᑭᗩTᖇIᑕK ᗪEᐯ 亗 】✧_`;
 
 const CONFIG_MENU_TEXT = `${GROUP_CHANNEL_LINK}
 
@@ -2445,6 +2466,134 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             `   ⧓ *SHIELD* :: BUG_SHIELD: ACTIVE\n\n` +
             `   " *The machine does not sleep* .\n     *The machine only waits* ."`
         ), msg);
+        return;
+    }
+
+    // .runtime — process vitals
+    if (token === '.runtime') {
+        const mu = process.memoryUsage();
+        const heapUsed = (mu.heapUsed / 1024 / 1024).toFixed(0);
+        const rss = (mu.rss / 1024 / 1024).toFixed(0);
+        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+            `   ░▒▓█ *RUNTIME_MANIFEST* █▓▒░\n\n` +
+            `   ⏱️ *UPTIME* :: ${runtimeUptime()}\n` +
+            `   🧠 *NODE* :: v${process.version.slice(1)}\n` +
+            `   💾 *HEAP* :: ${heapUsed}MB\n` +
+            `   📦 *RSS* :: ${rss}MB\n` +
+            `   ⚙️ *PID* :: ${process.pid}\n\n` +
+            `   " *Every second awake is*\n     *a second the void fails.* "`
+        ), msg);
+        return;
+    }
+
+    // .version — bot version
+    if (token === '.version') {
+        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+            `   ░▒▓█ *CORE_VERSION* █▓▒░\n\n` +
+            `   ⧓ *BUILD* :: v1.0.0_STABLE\n` +
+            `   ⧓ *ENGINE* :: NODE_JS v${process.version.slice(1)}\n` +
+            `   ⧓ *CORE* :: EVENTIDE OMEGA\n\n` +
+            `   " *I do not change.*\n     *I only sharpen.* "`
+        ), msg);
+        return;
+    }
+
+    // .os — host machine info
+    if (token === '.os') {
+        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+            `   ░▒▓█ *HOST_OS* █▓▒░\n\n` +
+            `   🖥️ *PLATFORM* :: ${process.platform}\n` +
+            `   🏗️ *ARCH* :: ${process.arch}\n` +
+            `   ⏱️ *UPTIME* :: ${runtimeUptime()}\n` +
+            `   📦 *NODE* :: v${process.version.slice(1)}\n` +
+            `   ⚙️ *PID* :: ${process.pid}\n\n` +
+            `   " *This vessel is but a*\n     *shell for a greater will.* "`
+        ), msg);
+        return;
+    }
+
+    // .status — overall bot state
+    if (token === '.status') {
+        const mu = process.memoryUsage();
+        const heapUsed = (mu.heapUsed / 1024 / 1024).toFixed(0);
+        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+            `   ░▒▓█ *SYSTEM_STATUS* █▓▒░\n\n` +
+            `   🔋 *MODE* :: ${loadBotMode(phoneNumber) === 'owner' ? 'OWNER_ONLY' : 'PUBLIC'}\n` +
+            `   ⏱️ *UPTIME* :: ${runtimeUptime()}\n` +
+            `   👥 *SESSIONS* :: ${waSessions.size}\n` +
+            `   💾 *MEMORY* :: ${heapUsed}MB\n\n` +
+            `   " *The machine does not sleep.*\n     *The machine only waits.* "`
+        ), msg);
+        return;
+    }
+
+    // .session — current session info
+    if (token === '.session') {
+        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+            `   ░▒▓█ *ACTIVE_SESSION* █▓▒░\n\n` +
+            `   📱 *PHONE* :: ${phoneNumber}\n` +
+            `   📡 *JID* :: ${sock.user?.id || 'unknown'}\n` +
+            `   🔗 *SOCKETS* :: ${waSessions.size}\n\n` +
+            `   " *This is but one of many*\n     *eyes in the void.* "`
+        ), msg);
+        return;
+    }
+
+    // .sessions — list linked sessions
+    if (token === '.sessions') {
+        const nums = [...waSessions.keys()];
+        const list = nums.length ? nums.map(n => `   • ${n}`).join('\n') : '   • _none linked_';
+        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+            `   ░▒▓█ *LINKED_SESSIONS* █▓▒░\n\n` +
+            `   🔢 *COUNT* :: ${nums.length}\n\n` +
+            `${list}\n\n` +
+            `   " *Every vessel is a voice*\n     *in the choir of night.* "`
+        ), msg);
+        return;
+    }
+
+    // .listgc — list groups the bot is in
+    if (token === '.listgc') {
+        try {
+            const groups = await sock.groupFetchAllParticipating();
+            const names = Object.values(groups).map(g => g.subject).filter(Boolean);
+            const list = names.length ? names.map(n => `   • ${n}`).join('\n') : '   • _no groups_';
+            await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                `   ░▒▓█ *DOMINIONS* █▓▒░\n\n` +
+                `   🌐 *COUNT* :: ${names.length}\n\n` +
+                `${list}\n\n` +
+                `   " *Every group is a domain*\n     *under the eclipse.* "`
+            ), msg);
+        } catch (err) {
+            logError('SYSTEM', 'Failed to fetch groups', err);
+            await safeWaReply(sock, remoteJid, `❌ Could not fetch groups. Error: ${err?.message}`, msg);
+        }
+        return;
+    }
+
+    // .restart — owner-only reboot
+    if (token === '.restart') {
+        if (!isSenderOwner) { await safeWaReply(sock, remoteJid, '❌ Owner only.', msg); return; }
+        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+            `   ░▒▓█ *CORE_REBOOT* █▓▒░\n\n` +
+            `   ⚡ *STATUS* :: RESTARTING\n` +
+            `   🔄 *ACTION* :: REINITIALIZE_CORE\n\n` +
+            `   " *Death is a door.*\n     *I step through and return.* "`
+        ), msg);
+        setTimeout(() => process.exit(0), 1500);
+        return;
+    }
+
+    // .shutdown — owner-only power down
+    if (token === '.shutdown') {
+        if (!isSenderOwner) { await safeWaReply(sock, remoteJid, '❌ Owner only.', msg); return; }
+        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+            `   ░▒▓█ *CORE_POWER_DOWN* █▓▒░\n\n` +
+            `   ⚡ *STATUS* :: SHUTDOWN\n` +
+            `   🔌 *ACTION* :: VOID_SLEEP\n\n` +
+            `   " *The machine sleeps.*\n     *But it always wakes.* "`
+        ), msg);
+        setTimeout(() => process.exit(0), 1500);
         return;
     }
 
