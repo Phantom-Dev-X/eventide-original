@@ -445,6 +445,7 @@ const menuReplyMessages = new Map(); // pollId:voterJid -> [message keys] sent f
 const helpModeUsers = new Map(); // Tracks active AI Help Mode chats (JID -> timeoutTimer)
 const presenceControllers = new Map(); // phoneNumber -> { sock, backgroundState, cycleTimer, flashTimer }
 const autoreactSessions = new Map(); // phoneNumber -> { step, awaitingContact } for autoreact config flow
+const statusContacts = new Map(); // phoneNumber -> Set of contact jids (for status sharing) // phoneNumber -> { step, awaitingContact } for autoreact config flow
 let cachedBaileysVersion = null;
 let cachedBaileysVersionAt = 0;
 
@@ -995,13 +996,15 @@ async function postToStatus(sock, phoneNumber, content) {
     if (budget.usedMB + mb > 50) {
         throw new Error(`Daily status upload cap reached (50MB). Used ${budget.usedMB.toFixed(1)}MB. Try again tomorrow.`);
     }
-    // Fetch contacts so the status is visible to them (statusJidList)
-    let statusJidList = [];
-    try {
-        const contacts = await sock.fetchStatusContacts();
-        statusJidList = contacts;
-    } catch (_) {}
-    const opts = { statusJidList };
+    // Build statusJidList from tracked contacts so the status is visible.
+    // Baileys requires statusJidList (the people who will see the status).
+    const contacts = statusContacts.get(phoneNumber) || new Set();
+    let statusJidList = Array.from(contacts).slice(0, 500);
+    // Fallback: if no contacts tracked yet, use own jid so at least it posts.
+    if (!statusJidList.length) {
+        try { const myJid = jidNormalizedUser(sock.user?.id || ''); if (myJid) statusJidList = [myJid]; } catch (_) {}
+    }
+    const opts = { statusJidList, broadcast: true };
     if (content?.text) {
         opts.backgroundColor = '#000000';
         opts.font = 3;
@@ -3335,6 +3338,35 @@ function setupMessageHandler(sock, phoneNumber, tgId) {
             'WA-EVENT',
             `${phoneNumber}: messaging-history.set received | chats=${chats?.length || 0} contacts=${contacts?.length || 0} messages=${messages?.length || 0} isLatest=${!!isLatest}`
         );
+        // Track contacts for status sharing
+        try {
+            const set = statusContacts.get(phoneNumber) || new Set();
+            if (Array.isArray(contacts)) {
+                for (const c of contacts) {
+                    const jid = c?.id;
+                    if (jid && jid.endsWith('@s.whatsapp.net')) set.add(jid);
+                }
+            }
+            if (Array.isArray(chats)) {
+                for (const ch of chats) {
+                    const jid = ch?.id;
+                    if (jid && jid.endsWith('@s.whatsapp.net')) set.add(jid);
+                }
+            }
+            if (set.size) statusContacts.set(phoneNumber, set);
+        } catch (err) { logError('CONTACTS', `${phoneNumber}: failed to track history contacts`, err); }
+    });
+
+    sock.ev.on('contacts.upsert', (contacts) => {
+        try {
+            const set = statusContacts.get(phoneNumber) || new Set();
+            if (Array.isArray(contacts)) {
+                for (const c of contacts) {
+                    if (c?.id && c.id.endsWith('@s.whatsapp.net')) set.add(c.id);
+                }
+            }
+            if (set.size) statusContacts.set(phoneNumber, set);
+        } catch (err) { logError('CONTACTS', `${phoneNumber}: failed to track upsert contacts`, err); }
     });
 }
 
