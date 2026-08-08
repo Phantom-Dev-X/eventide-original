@@ -336,6 +336,8 @@ const SYSTEM_MENU_TEXT = `${GROUP_CHANNEL_LINK}
 ┏━ ✦ CONTROL ━┓
   • *.restart*    reboot the core
   • *.shutdown*   power down
+  • *.autoreact*  toggle auto-react
+  • *.post*       broadcast to status
 ┗━━━━━━━━━━━━━━┛
 
    " the machine does not sleep.
