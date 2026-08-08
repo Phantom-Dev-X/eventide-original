@@ -307,6 +307,7 @@ const waSessions = new Map();
 const reconnectAttempts = new Map(); // Tracks reconnection retries per phone number (Max 3)
 const sentPolls = new Map(); // Tracks sent poll creation messages in memory for decryption (ID -> message)
 const lastPollVotes = new Map(); // pollId:voterJid -> last voted option id (lets changed votes trigger a new reply)
+const menuReplyMessages = new Map(); // pollId:voterJid -> [message keys] sent for the current menu reply (deleted on vote change)
 const helpModeUsers = new Map(); // Tracks active AI Help Mode chats (JID -> timeoutTimer)
 let cachedBaileysVersion = null;
 let cachedBaileysVersionAt = 0;
@@ -1049,7 +1050,7 @@ async function safeWaReply(sock, remoteJid, text, quoted) {
 
         try {
             await sock.sendPresenceUpdate('composing', remoteJid);
-            const delayMs = Math.min(4000, Math.max(1500, formattedText.length * 15));
+            const delayMs = Math.min(2700, Math.max(1000, formattedText.length * 15));
             await delay(delayMs);
             await sock.sendPresenceUpdate('paused', remoteJid);
         } catch (presErr) {
@@ -1554,7 +1555,7 @@ function handlePollUpdateMessage(sock, phoneNumber, msg) {
             return null;
         }
         lastPollVotes.set(voteKey, optionId);
-        return optionId;
+        return { optionId, pollId, voterJid };
     }
     log('POLL', `${phoneNumber}: decrypt failed for poll ${pollId} (creators=[${creators.join(',')}] voters=[${uniqVoters.join(',')}])`);
     return null;
@@ -1594,44 +1595,84 @@ async function sendMenuPoll(sock, remoteJid, phoneNumber, question, options, ids
 // Sends the matching menu banner image with the menu text as its caption.
 async function sendMenuBanner(sock, remoteJid, imagePath, caption) {
     try {
-        await sock.sendMessage(remoteJid, {
+        const sent = await sock.sendMessage(remoteJid, {
             image: { url: imagePath },
             caption: formatForWhatsApp(caption)
         });
-        return true;
+        return sent?.key || null;
     } catch (err) {
         logError('WA-BANNER', `Failed to send banner for ${remoteJid}`, err);
         // Fall back to sending the caption as a plain text reply.
-        try { await safeWaReply(sock, remoteJid, caption); return true; }
-        catch (_) { return false; }
+        try {
+            const sent = await sock.sendMessage(remoteJid, { text: formatForWhatsApp(caption) });
+            return sent?.key || null;
+        } catch (_) { return null; }
     }
 }
 
-async function handleMenuVote(sock, remoteJid, phoneNumber, votedOptionId) {
+// Records a sent menu message key so it can be deleted when the vote changes.
+function recordMenuMessage(replyKey, msgKey) {
+    if (!msgKey?.id) return;
+    const arr = menuReplyMessages.get(replyKey) || [];
+    arr.push(msgKey);
+    menuReplyMessages.set(replyKey, arr);
+}
+
+// Deletes every previously-sent menu message for a poll+voter on a vote change.
+async function deleteMenuMessages(sock, replyKey) {
+    const messages = menuReplyMessages.get(replyKey) || [];
+    for (const key of messages) {
+        try {
+            await sock.sendMessage(key.remoteJid, { delete: key });
+        } catch (err) {
+            logError('WA-DEL', `Failed to delete menu message ${key?.id}`, err);
+        }
+    }
+    menuReplyMessages.delete(replyKey);
+}
+
+async function handleMenuVote(sock, remoteJid, phoneNumber, votedOptionId, pollId = '', voterJid = 'me') {
     log('POLL-MENU', `${phoneNumber}: handling vote -> ${votedOptionId} for ${remoteJid}`);
+    const replyKey = `${pollId}:${voterJid}`;
     try {
+        // Delete the previous menu reply (image + caption, and for owners the
+        // domain poll too) when the user changes their vote.
+        await deleteMenuMessages(sock, replyKey);
+
         switch (votedOptionId) {
-            case 'owners':
-                // Owners banner + welcome, then "Choose Your Domain" poll
-                await sendMenuBanner(sock, remoteJid, OWNERS_MENU_PATH, OWNERS_WELCOME_TEXT);
+            case 'owners': {
+                const k1 = await sendMenuBanner(sock, remoteJid, OWNERS_MENU_PATH, OWNERS_WELCOME_TEXT);
+                if (k1) recordMenuMessage(replyKey, k1);
                 await delay(1500);
-                await sendMenuPoll(sock, remoteJid, phoneNumber, DOMAIN_POLL_QUESTION, DOMAIN_POLL_OPTIONS, DOMAIN_POLL_IDS);
+                const pollMsg = await sendMenuPoll(sock, remoteJid, phoneNumber, DOMAIN_POLL_QUESTION, DOMAIN_POLL_OPTIONS, DOMAIN_POLL_IDS);
+                if (pollMsg?.key) recordMenuMessage(replyKey, pollMsg.key);
                 break;
-            case 'group':
-                await sendMenuBanner(sock, remoteJid, GROUP_MENU_PATH, GROUP_MENU_TEXT);
+            }
+            case 'group': {
+                const k = await sendMenuBanner(sock, remoteJid, GROUP_MENU_PATH, GROUP_MENU_TEXT);
+                if (k) recordMenuMessage(replyKey, k);
                 break;
-            case 'fun':
-                await sendMenuBanner(sock, remoteJid, FUN_MENU_PATH, FUN_PLACEHOLDER_TEXT);
+            }
+            case 'fun': {
+                const k = await sendMenuBanner(sock, remoteJid, FUN_MENU_PATH, FUN_PLACEHOLDER_TEXT);
+                if (k) recordMenuMessage(replyKey, k);
                 break;
-            case 'bug':
-                await safeWaReply(sock, remoteJid, BUG_PLACEHOLDER_TEXT);
+            }
+            case 'bug': {
+                const sent = await sock.sendMessage(remoteJid, { text: formatForWhatsApp(BUG_PLACEHOLDER_TEXT) });
+                if (sent?.key) recordMenuMessage(replyKey, sent.key);
                 break;
-            case 'system':
-                await sendMenuBanner(sock, remoteJid, SYSTEM_MENU_PATH, SYSTEM_MENU_TEXT);
+            }
+            case 'system': {
+                const k = await sendMenuBanner(sock, remoteJid, SYSTEM_MENU_PATH, SYSTEM_MENU_TEXT);
+                if (k) recordMenuMessage(replyKey, k);
                 break;
-            case 'config':
-                await sendMenuBanner(sock, remoteJid, CONFIG_MENU_PATH, CONFIG_MENU_TEXT);
+            }
+            case 'config': {
+                const k = await sendMenuBanner(sock, remoteJid, CONFIG_MENU_PATH, CONFIG_MENU_TEXT);
+                if (k) recordMenuMessage(replyKey, k);
                 break;
+            }
             default:
                 log('POLL-MENU', `${phoneNumber}: unhandled vote id ${votedOptionId}`);
                 break;
@@ -2159,12 +2200,12 @@ function setupMessageHandler(sock, phoneNumber, tgId) {
                 // Poll votes arrive as pollUpdateMessage upserts — decrypt manually.
                 if (msg?.message?.pollUpdateMessage) {
                     log('POLL', `${phoneNumber}: pollUpdateMessage upsert received for ${msg.key?.id}`);
-                    const votedOptionId = handlePollUpdateMessage(sock, phoneNumber, msg);
-                    if (votedOptionId) {
-                        log('POLL', `${phoneNumber}: Decrypted poll vote on option ID: ${votedOptionId}`);
+                    const voteResult = handlePollUpdateMessage(sock, phoneNumber, msg);
+                    if (voteResult) {
+                        log('POLL', `${phoneNumber}: Decrypted poll vote on option ID: ${voteResult.optionId}`);
                         const pollRemoteJid = msg.key?.remoteJid || msg.key?.participant || null;
                         if (pollRemoteJid) {
-                            await handleMenuVote(sock, pollRemoteJid, phoneNumber, votedOptionId);
+                            await handleMenuVote(sock, pollRemoteJid, phoneNumber, voteResult.optionId, voteResult.pollId, voteResult.voterJid);
                         }
                         continue; // Already handled — skip normal message flow
                     }
