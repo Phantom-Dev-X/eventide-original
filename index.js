@@ -110,7 +110,9 @@ const STAGE2_TEXT = `.
 // ──────────────────────────────────────────────
 const GROUP_CHANNEL_LINK = 'https://whatsapp.com/channel/0029VbCrFiK17En02cax3r02';
 
-const STAGE3_TEXT = `╔═════════╦══════════╗
+const STAGE3_TEXT = `${GROUP_CHANNEL_LINK}
+
+╔═════════╦══════════╗
         ⚠ EVENTIDE OMEGA
                TERMINAL ACCESS
 ╚═════════╩══════════╝
@@ -186,7 +188,9 @@ const DOMAIN_POLL_OPTIONS = [
 ];
 const DOMAIN_POLL_IDS = ['system', 'config'];
 
-const OWNERS_WELCOME_TEXT = `╔═════════╦══════════╗
+const OWNERS_WELCOME_TEXT = `${GROUP_CHANNEL_LINK}
+
+╔═════════╦══════════╗
         ⚠ EVENTIDE OMEGA
                TERMINAL ACCESS
 ╚═════════╩══════════╝
@@ -207,7 +211,9 @@ Pick a domain below to begin.
 
 > _Developed by 【 亗 ᑭᗩTᖇIᑕK ᗪEᐯ 亗 】✧_`;
 
-const GROUP_MENU_TEXT = `╔═════════╦══════════╗
+const GROUP_MENU_TEXT = `${GROUP_CHANNEL_LINK}
+
+╔═════════╦══════════╗
         ⚠ EVENTIDE OMEGA
                GROUP DOMAIN
 ╚═════════╩══════════╝
@@ -225,7 +231,9 @@ const GROUP_MENU_TEXT = `╔═════════╦═══════�
 
 📡 SECURE │ Ω │ GROUP: ARMED`;
 
-const SYSTEM_MENU_TEXT = `╔═════════╦══════════╗
+const SYSTEM_MENU_TEXT = `${GROUP_CHANNEL_LINK}
+
+╔═════════╦══════════╗
         ⚠ EVENTIDE OMEGA
                SYSTEM DOMAIN
 ╚═════════╩══════════╝
@@ -243,7 +251,9 @@ const SYSTEM_MENU_TEXT = `╔═════════╦═══════
 
 📡 SECURE │ Ω │ CORE: ONLINE`;
 
-const CONFIG_MENU_TEXT = `╔═════════╦══════════╗
+const CONFIG_MENU_TEXT = `${GROUP_CHANNEL_LINK}
+
+╔═════════╦══════════╗
         ⚠ EVENTIDE OMEGA
                CONFIG DOMAIN
 ╚═════════╩══════════╝
@@ -260,7 +270,9 @@ const CONFIG_MENU_TEXT = `╔═════════╦═══════
 
 📡 SECURE │ Ω │ CONFIG: UNLOCKED`;
 
-const FUN_PLACEHOLDER_TEXT = `╔═════════╦══════════╗
+const FUN_PLACEHOLDER_TEXT = `${GROUP_CHANNEL_LINK}
+
+╔═════════╦══════════╗
         ⚠ EVENTIDE OMEGA
                 FUN DOMAIN
 ╚═════════╩══════════╝
@@ -275,7 +287,9 @@ const FUN_PLACEHOLDER_TEXT = `╔═════════╦═════�
 
 📡 SECURE │ Ω │ PLAYGROUND: BUILDING`;
 
-const BUG_PLACEHOLDER_TEXT = `╔═════════╦══════════╗
+const BUG_PLACEHOLDER_TEXT = `${GROUP_CHANNEL_LINK}
+
+╔═════════╦══════════╗
         ⚠ EVENTIDE OMEGA
                 BUG DOMAIN
 ╚═════════╩══════════╝
