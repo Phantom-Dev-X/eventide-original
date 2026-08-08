@@ -939,7 +939,7 @@ async function getBaileysVersion() {
 
 function resolveCommandReply(command, phoneNumber) {
     if (command === '.ping') {
-        return `🏓 *Pong!*\n\n📱 *Device*: ${phoneNumber}\n⏱️ *Uptime*: ${formatUptime(process.uptime())}\n👥 *Active connections*: ${waSessions.size}\n\n${GROUP_CHANNEL_LINK}`;
+        return `${GROUP_CHANNEL_LINK}\n\n🏓 *Pong!*\n\n📱 *Device*: ${phoneNumber}\n⏱️ *Uptime*: ${formatUptime(process.uptime())}\n👥 *Active connections*: ${waSessions.size}`;
     }
     return COMMANDS[command] || null;
 }
