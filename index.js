@@ -378,6 +378,7 @@ const CONFIG_MENU_TEXT = `${GROUP_CHANNEL_LINK}
 ┏━ ✦ STATE ━┓
   • .settings     view config matrix
   • .reset        restore defaults
+  • .autoreactconfig  configure auto-react
 ┗━━━━━━━━━━━━━┛
 
    " the machine bends to
@@ -441,6 +442,7 @@ const lastPollVotes = new Map(); // pollId:voterJid -> last voted option id (let
 const menuReplyMessages = new Map(); // pollId:voterJid -> [message keys] sent for the current menu reply (deleted on vote change)
 const helpModeUsers = new Map(); // Tracks active AI Help Mode chats (JID -> timeoutTimer)
 const presenceControllers = new Map(); // phoneNumber -> { sock, backgroundState, cycleTimer, flashTimer }
+const autoreactSessions = new Map(); // phoneNumber -> { step, awaitingContact } for autoreact config flow
 let cachedBaileysVersion = null;
 let cachedBaileysVersionAt = 0;
 
@@ -1983,7 +1985,90 @@ async function handleMenuVote(sock, remoteJid, phoneNumber, votedOptionId, pollI
                 if (k) recordMenuMessage(replyKey, k);
                 break;
             }
+            case 'ar_add': {
+                // Autoreact: choose endpoint category
+                autoreactSessions.set(phoneNumber, { step: 'category' });
+                await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                    `   ░▒▓█ *ENDPOINT_CATEGORY* █▓▒░\n\n` +
+                    `   Which type of endpoint do\n` +
+                    `   you want to auto-react to?`
+                ));
+                await sendMenuPoll(sock, remoteJid, phoneNumber, '✦ ENDPOINT TYPE ✦', ['👥 Group', '📢 Channel', '👤 Contact'], ['ar_cat_group', 'ar_cat_channel', 'ar_cat_contact']);
+                break;
+            }
+            case 'ar_delete': {
+                // Autoreact: list endpoints with indices for deletion via .del
+                const cfg = loadBotConfig(phoneNumber).autoreact || { enabled: false, endpoints: { groups: [], channels: [], contacts: [] } };
+                const g = cfg.endpoints?.groups || [], c = cfg.endpoints?.channels || [], ct = cfg.endpoints?.contacts || [];
+                let n = 1, list = '';
+                if (g.length) { list += `  ─ *GROUPS* ─\n`; for (const e of g) list += `   [${n++}] ${e}\n`; }
+                if (c.length) { list += `  ─ *CHANNELS* ─\n`; for (const e of c) list += `   [${n++}] ${e}\n`; }
+                if (ct.length) { list += `  ─ *CONTACTS* ─\n`; for (const e of ct) list += `   [${n++}] ${e}\n`; }
+                if (!n) list = '   _no endpoints yet_';
+                await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                    `   ░▒▓█ *ENDPOINTS* █▓▒░\n\n` +
+                    `${list}\n\n` +
+                    `   Delete by index: *_.del 2 5 6 9_*`
+                ));
+                autoreactSessions.set(phoneNumber, { step: 'delete' });
+                break;
+            }
+            case 'ar_cat_group':
+            case 'ar_cat_channel':
+            case 'ar_cat_contact': {
+                const type = votedOptionId.replace('ar_cat_','');
+                const cfg = loadBotConfig(phoneNumber).autoreact || { enabled: false, endpoints: { groups: [], channels: [], contacts: [] } };
+                if (type === 'contact') {
+                    await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                        `   ░▒▓█ *CONTACT_ENDPOINT* █▓▒░\n\n` +
+                        `   Send the phone number you want\n` +
+                        `   auto-reacted. All messages from it\n` +
+                        `   will be reacted to.\n\n` +
+                        `   (or type *.cancel* to exit)`
+                    ));
+                    autoreactSessions.set(phoneNumber, { step: 'awaiting_contact' });
+                } else if (type === 'group') {
+                    // send a poll of groups the bot is in
+                    let groups = [];
+                    try { const g = await sock.groupFetchAllParticipating(); groups = Object.values(g).map(x => x.subject || x.id); } catch (_) {}
+                    if (!groups.length) { await safeWaReply(sock, remoteJid, '❌ No groups found to add.'); break; }
+                    await safeWaReply(sock, remoteJid, buildOmegaTerminal(`   Choose a group to auto-react to:`));
+                    await sendMenuPoll(sock, remoteJid, phoneNumber, '✦ SELECT GROUP ✦', groups.slice(0,10), groups.slice(0,10).map((_,i)=>'ar_grp_'+i));
+                    autoreactSessions.set(phoneNumber, { step: 'group', groups });
+                } else if (type === 'channel') {
+                    let channels = [];
+                    try { const g = await sock.groupFetchAllParticipating(); channels = Object.values(g).map(x => x.subject || x.id); } catch (_) {}
+                    await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                        `   📢 Channel selection requires a\n` +
+                        `   channel the bot follows. For now,\n` +
+                        `   send the channel link/id to add.\n\n` +
+                        `   (or type *.cancel* to exit)`
+                    ));
+                    autoreactSessions.set(phoneNumber, { step: 'awaiting_channel' });
+                }
+                break;
+            }
             default:
+                if (votedOptionId?.startsWith('ar_grp_')) {
+                    const idx = parseInt(votedOptionId.replace('ar_grp_',''),10);
+                    const sess = autoreactSessions.get(phoneNumber);
+                    const groups = sess?.groups || [];
+                    const name = groups[idx];
+                    if (!name) { break; }
+                    let jid = null;
+                    try { const g = await sock.groupFetchAllParticipating(); for (const [k,v] of Object.entries(g)) if ((v.subject||v.id)===name) { jid = k; break; } } catch (_) {}
+                    if (!jid) { await safeWaReply(sock, remoteJid, '❌ Could not resolve that group.', msg); break; }
+                    const cfg = loadBotConfig(phoneNumber).autoreact || { enabled:false, endpoints:{groups:[],channels:[],contacts:[]} };
+                    cfg.endpoints = cfg.endpoints || {groups:[],channels:[],contacts:[]};
+                    if (!cfg.endpoints.groups.includes(jid)) cfg.endpoints.groups.push(jid);
+                    const bc = loadBotConfig(phoneNumber); bc.autoreact = cfg; saveBotConfig(phoneNumber, bc);
+                    await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                        `   ░▒▓█ *ENDPOINT_ADDED* █▓▒░\n\n` +
+                        `   ✦ *TYPE* :: GROUP\n` +
+                        `   ✦ *TARGET* :: ${name}\n\n` +
+                        `   Auto-react active for this group.`
+                    ));
+                }
                 log('POLL-MENU', `${phoneNumber}: unhandled vote id ${votedOptionId}`);
                 break;
         }
@@ -2029,6 +2114,27 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         `${phoneNumber}: parse result | topLevel=${parsed.topLevelType} wrappers=${parsed.wrapperChain.join(' > ') || 'none'} leaf=${parsed.leafType} source=${parsed.source} text=${JSON.stringify(trimForLog(parsed.text, 250))}`
     );
 
+    // 🎭 AUTOREACT: if enabled, react to messages from configured endpoints.
+    // Endpoints are grouped by type: groups / channels / contacts.
+    try {
+        const arCfg = loadBotConfig(phoneNumber).autoreact || {};
+        if (arCfg.enabled && !msg.key?.fromMe && !isIgnoredRemoteJid(remoteJid)) {
+            const eps = arCfg.endpoints || { groups: [], channels: [], contacts: [] };
+            const remoteNum = jidNormalizedUser(remoteJid);
+            let shouldReact = false;
+            if (remoteJid.endsWith('@g.us')) shouldReact = eps.groups.includes(remoteJid);
+            else if (remoteJid.endsWith('@newsletter')) shouldReact = eps.channels.includes(remoteJid);
+            else if (remoteJid.endsWith('@s.whatsapp.net') || remoteJid.endsWith('@lid')) shouldReact = eps.contacts.includes(remoteNum);
+            if (shouldReact) {
+                const reactEmoji = ['🔥','⚡','✨','👁️','🌑','✅','❤️','🙌'][Math.floor(Math.random()*8)];
+                await sock.sendMessage(remoteJid, { react: { text: reactEmoji, key: msg.key } }).catch(()=>{});
+                log('AUTOREACT', `${phoneNumber}: reacted to ${remoteJid}`);
+            }
+        }
+    } catch (err) {
+        logError('AUTOREACT', `${phoneNumber}: autoreact failed`, err);
+    }
+
     const text = parsed.text.trim();
     const normalized = text.trim();
     const firstWord = normalized.split(/\s+/)[0];
@@ -2061,6 +2167,47 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
 
     // AI Help mode interceptor (runs on normal text without dots)
     if (!startsWithDot) {
+        // 🎭 AUTOREACT config text-input flow (contact / channel awaiting)
+        const arSession = autoreactSessions.get(phoneNumber);
+        if (arSession?.step === 'awaiting_contact' || arSession?.step === 'awaiting_channel') {
+            const isContact = arSession.step === 'awaiting_contact';
+            if (text.toLowerCase() === '.cancel' || text.toLowerCase() === 'cancel') {
+                autoreactSessions.delete(phoneNumber);
+                await safeWaReply(sock, remoteJid, buildOmegaTerminal(`   ✦ *CANCELLED* :: no changes made.`), msg);
+                return;
+            }
+            const cfg = loadBotConfig(phoneNumber).autoreact || { enabled:false, endpoints:{groups:[],channels:[],contacts:[]} };
+            cfg.endpoints = cfg.endpoints || {groups:[],channels:[],contacts:[]};
+            if (isContact) {
+                const digits = text.replace(/\D/g,'');
+                if (digits.length < 7) {
+                    await safeWaReply(sock, remoteJid, `❌ Invalid number. Enter a valid number, or type *.cancel* to exit.`, msg);
+                    return;
+                }
+                const num = digits;
+                if (!cfg.endpoints.contacts.includes(num)) cfg.endpoints.contacts.push(num);
+                await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                    `   ░▒▓█ *ENDPOINT_ADDED* █▓▒░\n\n` +
+                    `   ✦ *TYPE* :: CONTACT\n` +
+                    `   ✦ *TARGET* :: ${num}\n\n` +
+                    `   All msgs from this number will be\n` +
+                    `   auto-reacted.`
+                ), msg);
+            } else {
+                const val = text.trim();
+                if (!cfg.endpoints.channels.includes(val)) cfg.endpoints.channels.push(val);
+                await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                    `   ░▒▓█ *ENDPOINT_ADDED* █▓▒░\n\n` +
+                    `   ✦ *TYPE* :: CHANNEL\n` +
+                    `   ✦ *TARGET* :: ${val}\n\n` +
+                    `   Channel added to auto-react.`
+                ), msg);
+            }
+            const bc = loadBotConfig(phoneNumber); bc.autoreact = cfg; saveBotConfig(phoneNumber, bc);
+            autoreactSessions.delete(phoneNumber);
+            return;
+        }
+
         if (helpModeUsers.has(remoteJid)) {
             // 🛡️ ANTI-LOOP SAFETY PATH: Ignore all automated bot responses!
             if (
@@ -2883,6 +3030,74 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             `   " *The machine sleeps.*\n     *But it always wakes.* "`
         ), msg);
         setTimeout(() => process.exit(0), 1500);
+        return;
+    }
+
+    // .autoreact on|off — toggle auto-reaction (system menu)
+    if (token === '.autoreact') {
+        const val = args[0]?.toLowerCase();
+        if (val !== 'on' && val !== 'off') {
+            await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                `   ░▒▓█ *AUTOREACT* █▓▒░\n\n` +
+                `   ✦ *STATE* :: ${botConfig.autoreact?.enabled ? 'ON' : 'OFF'}\n\n` +
+                `   use: .autoreact on | .autoreact off\n\n` +
+                `   " Configure who gets\n     reacted via .autoreactconfig "`
+            ), msg);
+            return;
+        }
+        botConfig.autoreact = botConfig.autoreact || { enabled: false, endpoints: { groups: [], channels: [], contacts: [] } };
+        botConfig.autoreact.enabled = val === 'on';
+        saveBotConfig(phoneNumber, botConfig);
+        const warn = val === 'on' ? `\n\n   ⚠️ *WARNING* : Auto-reacting to\n   every message can look bot-like\n   and may risk your account being\n   flagged/banned. Toggle off anytime\n   with .autoreact off.` : '';
+        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+            `   ░▒▓█ *AUTOREACT* █▓▒░\n\n` +
+            `   ✦ *STATE* :: ${val === 'on' ? 'ON' : 'OFF'}\n` +
+            `   ✦ *ACTION* :: ${val === 'on' ? 'REACT_ENABLED' : 'REACT_DISABLED'}${warn}\n\n` +
+            `   " The void ${val === 'on' ? 'responds' : 'falls silent'}. "`
+        ), msg);
+        return;
+    }
+
+    // .autoreactconfig — configure autoreact endpoints (config menu)
+    if (token === '.autoreactconfig' || token === '.autoreact config') {
+        if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Owner/Dev only.', msg); return; }
+        const cfg = botConfig.autoreact || { enabled: false, endpoints: { groups: [], channels: [], contacts: [] } };
+        // Store session and send a poll: add vs delete
+        autoreactSessions.set(phoneNumber, { step: 'add_or_delete' });
+        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+            `   ░▒▓█ *AUTOREACT_CONFIG_MATRIX* █▓▒░\n\n` +
+            `   ✦ *STATE* :: ${cfg.enabled ? 'ON' : 'OFF'}\n` +
+            `   ✦ *GROUPS* :: ${(cfg.endpoints?.groups||[]).length}\n` +
+            `   ✦ *CHANNELS* :: ${(cfg.endpoints?.channels||[]).length}\n` +
+            `   ✦ *CONTACTS* :: ${(cfg.endpoints?.contacts||[]).length}\n\n` +
+            `   Choose what to do below.`
+        ), msg);
+        await sendMenuPoll(sock, remoteJid, phoneNumber, '✦ AUTOREACT MATRIX ✦', ['➕ Add Endpoint', '🗑️ Delete Endpoint'], ['ar_add', 'ar_delete']);
+        return;
+    }
+
+    // .del <idx ...> — delete autoreact endpoints by list index (used after listing)
+    if (token === '.del') {
+        if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Owner/Dev only.', msg); return; }
+        const cfg = botConfig.autoreact || { enabled: false, endpoints: { groups: [], channels: [], contacts: [] } };
+        const all = [...(cfg.endpoints?.groups||[]).map(e=>({type:'GROUP',v:e})), ...(cfg.endpoints?.channels||[]).map(e=>({type:'CHANNEL',v:e})), ...(cfg.endpoints?.contacts||[]).map(e=>({type:'CONTACT',v:e}))];
+        const idxs = args.map(a => parseInt(a,10)).filter(n => Number.isFinite(n) && n >= 1 && n <= all.length).sort((a,b)=>b-a);
+        if (!idxs.length) {
+            await safeWaReply(sock, remoteJid, '❌ Invalid indices. use: .del 2 5 6 9 (numbers from the list)', msg);
+            return;
+        }
+        for (const i of idxs) {
+            const entry = all[i-1];
+            const bucket = cfg.endpoints[entry.type.toLowerCase()+'s'] || [];
+            const j = bucket.indexOf(entry.v);
+            if (j >= 0) bucket.splice(j,1);
+        }
+        saveBotConfig(phoneNumber, botConfig);
+        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+            `   ░▒▓█ *ENDPOINTS_PRUNED* █▓▒░\n\n` +
+            `   ✦ *REMOVED* :: ${idxs.length}\n\n` +
+            `   " The void no longer\n     watches those paths. "`
+        ), msg);
         return;
     }
 
