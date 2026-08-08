@@ -1158,7 +1158,7 @@ async function createSocketForSession({ phoneNumber, tgId, authDir, version = nu
         printQRInTerminal: false,
         generateHighQualityLinkPreview: true,
         syncFullHistory: false,
-        markOnlineOnConnect: true,
+        markOnlineOnConnect: false,
         getMessage: getMessageFromStore
     });
 
@@ -1323,6 +1323,18 @@ function setupSocketEvents(sock, phoneNumber, tgId, authDir, version, isRestore)
                 allowSupabaseSync: false
             };
             waSessions.set(phoneNumber, sessionObj);
+
+            // 🎭 Sporadic presence: randomly appear online / offline so the bot
+            // doesn't look permanently "online" (less likely to be flagged).
+            const presenceTimer = setTimeout(async () => {
+                try {
+                    const isAvail = Math.random() < 0.35; // ~35% online bursts
+                    await sock.sendPresenceUpdate(isAvail ? 'available' : 'unavailable');
+                    log('PRESENCE', `${phoneNumber}: set presence to ${isAvail ? 'available' : 'unavailable'}`);
+                } catch (err) {
+                    logError('PRESENCE', `${phoneNumber}: failed to update presence`, err);
+                }
+            }, 4000);
 
             if (tgId !== null && typeof tgId !== 'undefined') {
                 setTelegramUserState(tgId, { phoneNumber, status: 'connected', sock });
