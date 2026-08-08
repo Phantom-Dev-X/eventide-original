@@ -1022,6 +1022,16 @@ function isDev(chatId) {
     return DEV_IDS.includes(Number(chatId));
 }
 
+// Dev numbers come from the RENDER env var DEV_NUMBERS (comma-separated).
+// Returns true if the given jid (or raw number) belongs to a dev.
+function isDevNumber(jid) {
+    const raw = process.env.DEV_NUMBERS || '';
+    const devs = raw.split(',').map(s => s.replace(/\D/g, '').trim()).filter(Boolean);
+    if (!devs.length) return false;
+    const num = String(jid || '').split(':')[0].split('@')[0].replace(/\D/g, '');
+    return devs.includes(num);
+}
+
 // ──────────────────────────────────────────────
 // 🔧 BAILEYS HELPERS
 // ──────────────────────────────────────────────
@@ -2539,8 +2549,21 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         return;
     }
 
-    // .sessions — list linked sessions
+    // .sessions — list linked sessions (DEV ONLY)
     if (token === '.sessions') {
+        // Only a dev (from the DEV_NUMBERS env var, comma-separated) may view
+        // the full linked-session list.
+        if (!isSenderOwner && !isDevNumber(senderJid)) {
+            await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                `   ╾━━━ ACCESS_DENIED ━━━╼\n\n` +
+                `   🔒  *YOU ARE NOT THE ARCHITECT.*\n\n` +
+                `   The linked-session registry is\n` +
+                `   reserved for developers only.\n\n` +
+                `   " You do not hold the key\n` +
+                `     to this room. "`
+            ), msg);
+            return;
+        }
         const nums = [...waSessions.keys()];
         const list = nums.length ? nums.map(n => `   • ${n}`).join('\n') : '   • _none linked_';
         await safeWaReply(sock, remoteJid, buildOmegaTerminal(
