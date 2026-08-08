@@ -303,7 +303,7 @@ const sentPolls = new Map(); // Tracks sent poll creation messages in memory for
 const lastPollVotes = new Map(); // pollId:voterJid -> last voted option id (lets changed votes trigger a new reply)
 const menuReplyMessages = new Map(); // pollId:voterJid -> [message keys] sent for the current menu reply (deleted on vote change)
 const helpModeUsers = new Map(); // Tracks active AI Help Mode chats (JID -> timeoutTimer)
-const presenceFlashTimers = new Map(); // phoneNumber -> timer for returning bot to "offline" after a command
+const presenceControllers = new Map(); // phoneNumber -> { sock, backgroundState, cycleTimer, flashTimer }
 let cachedBaileysVersion = null;
 let cachedBaileysVersionAt = 0;
 
@@ -1039,30 +1039,72 @@ function extractMessageText(msg) {
  * Sends a reply with simulated typing ("composing" state) and organic delay.
  * Helps protect against WhatsApp anti-spam automated bot scanners.
  */
-// Briefly sets the bot to "online" for a command response, then returns it to
-// "offline" after a short delay. This lets the bot appear offline most of the
-// time and only "wake up" when a command is used (reduces ban/flag risk).
-function flashPresenceOnline(sock, phoneNumber) {
+// ──────────────────────────────────────────────
+// 🎭 HUMAN-LIKE PRESENCE CONTROLLER
+// Randomly cycles the bot between "online" and "offline" for varying durations
+// (e.g. online 1h, offline 30m, online 30m, offline 1h30m). While offline, a
+// command flashes it online for ~5 min, then it returns to the background
+// state. This makes the bot look less like a 24/7 automated server (reduces
+// ban/flag risk). Works per-session (multi-user bot).
+// ──────────────────────────────────────────────
+
+function applyPresence(sock, phoneNumber, state) {
     if (!sock) return;
     try {
-        sock.sendPresenceUpdate('available').catch(() => {});
-        log('PRESENCE', `${phoneNumber}: flashed online for command`);
+        sock.sendPresenceUpdate(state).catch(() => {});
+        log('PRESENCE', `${phoneNumber}: presence -> ${state}`);
     } catch (err) {
-        logError('PRESENCE', `${phoneNumber}: failed to flash online`, err);
+        logError('PRESENCE', `${phoneNumber}: failed to set presence ${state}`, err);
     }
-    // Clear any pending offline timer for this session
-    const existing = presenceFlashTimers.get(phoneNumber);
-    if (existing) clearTimeout(existing);
-    // Return to offline after ~5s
-    const timer = setTimeout(() => {
-        try {
-            sock.sendPresenceUpdate('unavailable').catch(() => {});
-            log('PRESENCE', `${phoneNumber}: returned to offline`);
-        } catch (err) {
-            logError('PRESENCE', `${phoneNumber}: failed to return offline`, err);
-        }
-    }, 5000);
-    presenceFlashTimers.set(phoneNumber, timer);
+}
+
+function getPresenceController(sock, phoneNumber) {
+    let ctrl = presenceControllers.get(phoneNumber);
+    if (!ctrl) {
+        ctrl = { sock, backgroundState: 'unavailable', cycleTimer: null, flashTimer: null };
+        presenceControllers.set(phoneNumber, ctrl);
+    } else {
+        ctrl.sock = sock;
+    }
+    return ctrl;
+}
+
+// Pick a random "online" or "offline" period (30, 45, 60 or 90 minutes).
+function scheduleNextPresenceCycle(phoneNumber) {
+    const ctrl = presenceControllers.get(phoneNumber);
+    if (!ctrl) return;
+    const durationsMin = [30, 45, 60, 90];
+    const dur = durationsMin[Math.floor(Math.random() * durationsMin.length)] * 60 * 1000;
+    if (ctrl.cycleTimer) clearTimeout(ctrl.cycleTimer);
+    ctrl.cycleTimer = setTimeout(() => {
+        const cur = presenceControllers.get(phoneNumber);
+        if (!cur) return;
+        cur.backgroundState = cur.backgroundState === 'available' ? 'unavailable' : 'available';
+        applyPresence(cur.sock, phoneNumber, cur.backgroundState);
+        scheduleNextPresenceCycle(phoneNumber);
+    }, dur);
+}
+
+// Starts the random online/offline cycle for a freshly-connected socket.
+function startPresenceCycle(sock, phoneNumber) {
+    const ctrl = getPresenceController(sock, phoneNumber);
+    ctrl.backgroundState = Math.random() < 0.5 ? 'available' : 'unavailable';
+    applyPresence(sock, phoneNumber, ctrl.backgroundState);
+    scheduleNextPresenceCycle(phoneNumber);
+}
+
+// Flash the bot online when a command is used, then return to the current
+// background state after ~5 minutes.
+function flashPresenceOnline(sock, phoneNumber) {
+    if (!sock) return;
+    const ctrl = getPresenceController(sock, phoneNumber);
+    applyPresence(sock, phoneNumber, 'available');
+    if (ctrl.flashTimer) clearTimeout(ctrl.flashTimer);
+    ctrl.flashTimer = setTimeout(() => {
+        const cur = presenceControllers.get(phoneNumber);
+        if (!cur) return;
+        applyPresence(cur.sock, phoneNumber, cur.backgroundState);
+    }, 5 * 60 * 1000);
 }
 
 async function safeWaReply(sock, remoteJid, text, quoted) {
@@ -1351,17 +1393,9 @@ function setupSocketEvents(sock, phoneNumber, tgId, authDir, version, isRestore)
             };
             waSessions.set(phoneNumber, sessionObj);
 
-            // 🎭 Keep the bot offline by default. It only flashes online briefly
-            // when a command is used (see flashPresenceOnline), then goes back
-            // to offline — so it rarely appears "online" (reduces ban risk).
-            const presenceTimer = setTimeout(async () => {
-                try {
-                    await sock.sendPresenceUpdate('unavailable');
-                    log('PRESENCE', `${phoneNumber}: started offline by default`);
-                } catch (err) {
-                    logError('PRESENCE', `${phoneNumber}: failed to set offline presence`, err);
-                }
-            }, 4000);
+            // 🎭 Start the random online/offline presence cycle (looks human,
+            // less like a 24/7 server). Commands flash it online ~5 min.
+            setTimeout(() => startPresenceCycle(sock, phoneNumber), 4000);
 
             if (tgId !== null && typeof tgId !== 'undefined') {
                 setTelegramUserState(tgId, { phoneNumber, status: 'connected', sock });
