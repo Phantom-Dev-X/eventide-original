@@ -963,6 +963,52 @@ function fetchBuffer(url) {
     });
 }
 
+// 📤 STATUS POSTING HELPER — posts to the bot's WhatsApp Status.
+// Tracks a daily 50MB upload budget per bot to avoid bandwidth overuse.
+function getStatusBudget(phoneNumber) {
+    const filePath = path.join(AUTH_DIR, phoneNumber, 'status_budget.json');
+    try {
+        if (fs.existsSync(filePath)) {
+            const raw = JSON.parse(fs.readFileSync(filePath,'utf8'));
+            const today = new Date().toDateString();
+            if (raw.date === today) return { usedMB: raw.usedMB || 0, filePath };
+        }
+    } catch (_) {}
+    return { usedMB: 0, filePath };
+}
+function saveStatusBudget(phoneNumber, usedMB) {
+    const filePath = path.join(AUTH_DIR, phoneNumber, 'status_budget.json');
+    try {
+        ensureDir(path.dirname(filePath));
+        fs.writeFileSync(filePath, JSON.stringify({ date: new Date().toDateString(), usedMB }, null, 2), 'utf8');
+        if (isSupabaseEnabled()) debouncedSyncLocalToSupabase(phoneNumber, path.join(AUTH_DIR, phoneNumber));
+    } catch (err) { logError('STATUS', `${phoneNumber}: failed to save status budget`, err); }
+}
+async function postToStatus(sock, phoneNumber, content) {
+    // Compute rough MB for video/image content
+    let mb = 0;
+    if (content?.video) mb = (content.video.length || 0) / (1024*1024);
+    else if (content?.image) mb = (content.image.length || 0) / (1024*1024);
+    const budget = getStatusBudget(phoneNumber);
+    if (budget.usedMB + mb > 50) {
+        throw new Error(`Daily status upload cap reached (50MB). Used ${budget.usedMB.toFixed(1)}MB. Try again tomorrow.`);
+    }
+    // Fetch contacts so the status is visible to them (statusJidList)
+    let statusJidList = [];
+    try {
+        const contacts = await sock.fetchStatusContacts();
+        statusJidList = contacts;
+    } catch (_) {}
+    const opts = { statusJidList };
+    if (content?.text) {
+        opts.backgroundColor = '#000000';
+        opts.font = 3;
+    }
+    await sock.sendMessage('status@broadcast', content, opts);
+    saveStatusBudget(phoneNumber, budget.usedMB + mb);
+    return mb;
+}
+
 function getStoredSessionDirectories(dirPath = AUTH_DIR) {
     if (!fs.existsSync(dirPath)) return [];
     return fs.readdirSync(dirPath).filter(name => {
@@ -3098,6 +3144,53 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             `   ✦ *REMOVED* :: ${idxs.length}\n\n` +
             `   " The void no longer\n     watches those paths. "`
         ), msg);
+        return;
+    }
+
+    // .post — post to the bot's WhatsApp Status
+    //   .post <text>            -> text status
+    //   .post (reply to video)  -> video status
+    //   .post <tiktok/yt link>  -> attempt download & post (basic)
+    if (token === '.post') {
+        if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Owner/Dev only.', msg); return; }
+        const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+        const argText = args.join(' ').trim();
+        try {
+            // Case 1: reply to a video -> post video to status
+            if (quoted?.videoMessage) {
+                const media = await downloadMediaMessage({ message: { videoMessage: quoted.videoMessage } }, 'buffer', {}, { logger: pino({ level: 'silent' }) });
+                if (media.length > 50*1024*1024) { await safeWaReply(sock, remoteJid, '❌ Video too large (max 50MB).', msg); return; }
+                await postToStatus(sock, phoneNumber, { video: media, mimetype: quoted.videoMessage.mimetype || 'video/mp4' });
+                await safeWaReply(sock, remoteJid, buildOmegaTerminal(`   ✦ *STATUS_POSTED* :: video\n\n   " The moment is\n     broadcast to the void. "`), msg);
+                return;
+            }
+            // Case 2: reply to an image -> post image to status
+            if (quoted?.imageMessage) {
+                const media = await downloadMediaMessage({ message: { imageMessage: quoted.imageMessage } }, 'buffer', {}, { logger: pino({ level: 'silent' }) });
+                await postToStatus(sock, phoneNumber, { image: media, mimetype: quoted.imageMessage.mimetype || 'image/jpeg' });
+                await safeWaReply(sock, remoteJid, buildOmegaTerminal(`   ✦ *STATUS_POSTED* :: image\n\n   " The image is\n     cast into the void. "`), msg);
+                return;
+            }
+            // Case 3: a link -> attempt to download (basic; requires a downloader)
+            if (/https?:\/\//i.test(argText) && (/(youtube|youtu\.be|tiktok)/i.test(argText))) {
+                await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                    `   ✦ *LINK_RECEIVED*\n\n   Auto-download for social links\n   requires a downloader integration\n   (yt-dlp). For now, reply to a video\n   with .post, or send text.`
+                ), msg);
+                return;
+            }
+            // Case 4: text status
+            if (argText) {
+                await postToStatus(sock, phoneNumber, { text: argText });
+                await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                    `   ✦ *STATUS_POSTED* :: text\n\n   " ${argText.slice(0,50)} ... "\n\n   The words are\n   broadcast to the void.`
+                ), msg);
+                return;
+            }
+            await safeWaReply(sock, remoteJid, '❌ use: .post <text>  |  reply to a video/image with .post', msg);
+        } catch (err) {
+            logError('STATUS', 'post failed', err);
+            await safeWaReply(sock, remoteJid, `❌ Post failed: ${err?.message}`, msg);
+        }
         return;
     }
 
