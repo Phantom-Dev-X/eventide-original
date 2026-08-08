@@ -1108,6 +1108,10 @@ function flashPresenceOnline(sock, phoneNumber) {
 }
 
 async function safeWaReply(sock, remoteJid, text, quoted) {
+    // 💡 Flash the bot online before any reply (dot commands, .help, help-mode
+    // conversations, etc.), then return to the background presence after ~5 min.
+    const flashPhone = sock?._eventidePhone;
+    if (flashPhone) flashPresenceOnline(sock, flashPhone);
     try {
         const formattedText = formatForWhatsApp(text); // Automatically format standard markdown into WhatsApp layout!
 
@@ -1230,6 +1234,7 @@ async function createSocketForSession({ phoneNumber, tgId, authDir, version = nu
         markOnlineOnConnect: false,
         getMessage: getMessageFromStore
     });
+    sock._eventidePhone = phoneNumber; // used by safeWaReply to flash presence
 
     const originalSaveCreds = saveCreds;
     const wrappedSaveCreds = async () => {
@@ -1631,6 +1636,7 @@ function handlePollUpdateMessage(sock, phoneNumber, msg) {
 // Sends a native WhatsApp poll and stores its decryption details in cache.
 // Used for the main .menu poll and the "Choose Your Domain" sub-poll.
 async function sendMenuPoll(sock, remoteJid, phoneNumber, question, options, ids) {
+    if (sock?._eventidePhone) flashPresenceOnline(sock, sock._eventidePhone);
     const secret = crypto.randomBytes(32);
     const pollMsg = await sock.sendMessage(remoteJid, {
         poll: {
@@ -1661,6 +1667,7 @@ async function sendMenuPoll(sock, remoteJid, phoneNumber, question, options, ids
 // Routes a decrypted poll vote to the correct menu flow.
 // Sends the matching menu banner image with the menu text as its caption.
 async function sendMenuBanner(sock, remoteJid, imagePath, caption) {
+    if (sock?._eventidePhone) flashPresenceOnline(sock, sock._eventidePhone);
     try {
         const sent = await sock.sendMessage(remoteJid, {
             image: { url: imagePath },
