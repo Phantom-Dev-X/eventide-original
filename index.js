@@ -16,6 +16,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import https from 'https';
+import sharp from 'sharp';
+import qrcode from 'qrcode';
 
 // Import Supabase Sync Service
 import {
@@ -319,18 +321,31 @@ const SYSTEM_MENU_TEXT = `${GROUP_CHANNEL_LINK}
   • *.ping*       signal pulse
   • *.uptime*     temporal logs
   • *.info*       core manifest
-  • *.runtime*    process vitals
-  • *.os*         host machine
   • *.status*     overall state
+  • *.botinfo*    about the core
+  • *.alive*      life check
 ┗━━━━━━━━━━━━━━┛
 
 ┏━ ✦ OWNER TOOLS ━┓
+  • *.dev*        the architect
   • *.gpp*        pull profile pic
   • *.ggpp*       pull group pic
-  • *.dev*        the architect
-  • *.session*    current session
-  • *.sessions*   linked sessions
+  • *.profile*    host identity
   • *.listgc*     joined groups
+  • *.sessions*   linked sessions
+  • *.logout*     unlink session
+  • *.reconnect*  reweave socket
+┗━━━━━━━━━━━━━━┛
+
+┏━ ✦ UTILITIES ━┓
+  • *.sticker*    make a sticker
+  • *.toimg*      sticker to image
+  • *.qr*         generate QR
+  • *.calc*       calculate
+  • *.base64*     encode / decode
+  • *.block*      seal a number
+  • *.unblock*    open a number
+  • *.cmdstats*   arsenal count
 ┗━━━━━━━━━━━━━━┛
 
 ┏━ ✦ CONTROL ━┓
@@ -1097,6 +1112,17 @@ function isDev(chatId) {
 
 // Dev numbers come from the RENDER env var DEV_NUMBERS (comma-separated).
 // Returns true if the given jid (or raw number) belongs to a dev.
+// Count the number of registered dot-commands (for .cmdstats/.botinfo).
+function countSystemCommands() {
+    const known = [
+        'menu','help','ping','uptime','info','status','botinfo','alive','dev','gpp','ggpp','profile',
+        'listgc','sessions','logout','reconnect','sticker','toimg','qr','calc','base64','block','unblock',
+        'cmdstats','restart','shutdown','autoreact','mode','public','owner','setprefix','setalias','delalias',
+        'aliases','setname','setbio','setpp','settings','reset','join','add','kick','link','autoreactconfig','del'
+    ];
+    return known.length;
+}
+
 function isDevNumber(jid) {
     const raw = process.env.DEV_NUMBERS || '';
     const devs = raw.split(',').map(s => s.replace(/\D/g, '').trim()).filter(Boolean);
@@ -3161,6 +3187,225 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         } catch (e) {
             await safeWaReply(sock, remoteJid, `❌ Could not fetch group picture. The group may not have one set.\n\nError: ${e?.message}`, msg);
         }
+        return;
+    }
+
+    // ──────────────────────────────────────────────
+    // 🛠️ SYSTEM UTILITIES & OWNER TOOLS
+    // ──────────────────────────────────────────────
+
+    // .botinfo — about the bot
+    if (token === '.botinfo') {
+        const cmdCount = countSystemCommands();
+        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+            `   ░▒▓█ *CORE_IDENTITY* █▓▒░\n\n` +
+            `   ⧓ *NAME* :: EVENTIDE OMEGA\n` +
+            `   ⧓ *VERSION* :: v1.0.0_STABLE\n` +
+            `   ⧓ *UPTIME* :: ${runtimeUptime()}\n` +
+            `   ⧓ *COMMANDS* :: ${cmdCount}\n` +
+            `   ⧓ *CORE* :: WA-MULTI-BOT\n\n` +
+            `   " The eclipse does not\n     end. It only waits. "`
+        ), msg);
+        return;
+    }
+
+    // .alive — health splash
+    if (token === '.alive') {
+        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+            `   ░▒▓█ *VESSEL_STATUS* █▓▒░\n\n` +
+            `   💓 *STATE* :: ALIVE\n` +
+            `   ⏱️ *UPTIME* :: ${runtimeUptime()}\n\n` +
+            `   " The machine lives.\n     The void holds. "`
+        ), msg);
+        return;
+    }
+
+    // .profile — show the host account's own info
+    if (token === '.profile') {
+        if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Owner/Dev only.', msg); return; }
+        const myJid = sock.user?.id ? jidNormalizedUser(sock.user.id) : phoneNumber;
+        let name = 'unknown', about = '';
+        try { const pp = await sock.profilePictureUrl(myJid, 'image'); name = pp ? 'set' : 'none'; } catch (_) { name = 'none'; }
+        try { const st = await sock.fetchStatus(myJid); about = (st && st[0]?.status) || ''; } catch (_) {}
+        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+            `   ░▒▓█ *VESSEL_IDENTITY* █▓▒░\n\n` +
+            `   📱 *NUMBER* :: ${phoneNumber}\n` +
+            `   👤 *NAME* :: ${botConfig.name || '(account default)'}\n` +
+            `   🖼️ *PP* :: ${name}\n` +
+            `   📝 *BIO* :: ${about || botConfig.bio || '(none)'}\n\n` +
+            `   " This is the face the\n     void shows the world. "`
+        ), msg);
+        return;
+    }
+
+    // .reconnect — force reconnect current socket
+    if (token === '.reconnect') {
+        if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Owner/Dev only.', msg); return; }
+        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+            `   ░▒▓█ *CORE_RECONNECT* █▓▒░\n\n` +
+            `   ⚡ *ACTION* :: FORCE_RECONNECT\n\n` +
+            `   " The thread is severed\n     and rewoven. "`
+        ), msg);
+        setTimeout(() => { try { sock.end(undefined); } catch (_) {} }, 800);
+        return;
+    }
+
+    // .logout — log out the paired account (delete session)
+    if (token === '.logout') {
+        if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Owner/Dev only.', msg); return; }
+        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+            `   ░▒▓█ *CORE_LOGOUT* █▓▒░\n\n` +
+            `   🔌 *ACTION* :: UNLINK_SESSION\n` +
+            `   ⚠️ *NOTE* :: You will need to\n   re-pair this number after.\n\n` +
+            `   " The vessel is released\n     back to the void. "`
+        ), msg);
+        setTimeout(() => {
+            try { sock.logout().catch(()=>{}); } catch (_) {}
+            safeRm(path.join(AUTH_DIR, phoneNumber));
+            waSessions.delete(phoneNumber);
+            webPairSessions.delete(phoneNumber);
+            if (isSupabaseEnabled()) deleteSessionFromSupabase(phoneNumber);
+        }, 1500);
+        return;
+    }
+
+    // .sticker — reply to image/video -> make a sticker
+    if (token === '.sticker') {
+        const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+        const qimg = quoted?.imageMessage;
+        const qvid = quoted?.videoMessage;
+        if (!qimg && !qvid) { await safeWaReply(sock, remoteJid, '❌ Reply to an image/video with .sticker to make a sticker.', msg); return; }
+        try {
+            const srcMsg = qimg ? { imageMessage: qimg } : { videoMessage: qvid };
+            const buf = await downloadMediaMessage({ message: srcMsg }, 'buffer', {}, { logger: pino({ level: 'silent' }) });
+            let webp;
+            if (qimg) {
+                webp = await sharp(buf).resize(512, 512, { fit: 'contain', background: { r:0,g:0,b:0,alpha:0 } }).webp().toBuffer();
+            } else {
+                webp = await sharp(buf, { animated: true }).resize(512, 512, { fit: 'contain', background: { r:0,g:0,b:0,alpha:0 } }).webp().toBuffer();
+            }
+            await sock.sendMessage(remoteJid, { sticker: webp }, { quoted: msg });
+        } catch (err) {
+            logError('STICKER', 'sticker failed', err);
+            await safeWaReply(sock, remoteJid, `❌ Could not make sticker. Error: ${err?.message}`, msg);
+        }
+        return;
+    }
+
+    // .toimg — reply to sticker -> convert to image
+    if (token === '.toimg') {
+        const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+        const qstk = quoted?.stickerMessage;
+        if (!qstk) { await safeWaReply(sock, remoteJid, '❌ Reply to a sticker with .toimg.', msg); return; }
+        try {
+            const buf = await downloadMediaMessage({ message: { stickerMessage: qstk } }, 'buffer', {}, { logger: pino({ level: 'silent' }) });
+            const png = await sharp(buf).png().toBuffer();
+            await sock.sendMessage(remoteJid, { image: png }, { quoted: msg });
+        } catch (err) {
+            logError('TOIMG', 'toimg failed', err);
+            await safeWaReply(sock, remoteJid, `❌ Could not convert sticker. Error: ${err?.message}`, msg);
+        }
+        return;
+    }
+
+    // .qr <text> — generate a QR code
+    if (token === '.qr') {
+        const data = args.join(' ').trim();
+        if (!data) { await safeWaReply(sock, remoteJid, '❌ use: .qr <text-or-url>', msg); return; }
+        try {
+            const png = await qrcode.toBuffer(data, { width: 512, margin: 1 });
+            await sock.sendMessage(remoteJid, { image: png, caption: `${GROUP_CHANNEL_LINK}\n\n*QR GENERATED*` }, { quoted: msg });
+        } catch (err) {
+            await safeWaReply(sock, remoteJid, `❌ Could not generate QR. Error: ${err?.message}`, msg);
+        }
+        return;
+    }
+
+    // .calc <expr> — calculator
+    if (token === '.calc') {
+        const expr = args.join(' ').trim();
+        if (!expr) { await safeWaReply(sock, remoteJid, '❌ use: .calc 5 + 3 * 2', msg); return; }
+        try {
+            // Safe-ish eval: allow only numbers and basic operators
+            const clean = expr.replace(/[^0-9+\-*/(). %^]/g, '');
+            const result = Function(`"use strict"; return (${clean});`)();
+            await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                `   ░▒▓█ *CALC_ENGINE* █▓▒░\n\n` +
+                `   ✦ *INPUT* :: ${expr}\n` +
+                `   ✦ *RESULT* :: ${result}\n\n` +
+                `   " Numbers bend to my\n     will. "`
+            ), msg);
+        } catch (err) {
+            await safeWaReply(sock, remoteJid, `❌ Invalid expression.`, msg);
+        }
+        return;
+    }
+
+    // .base64 enc|dec <text>
+    if (token === '.base64') {
+        const mode = args[0]?.toLowerCase();
+        const data = args.slice(1).join(' ');
+        if (!['enc','dec'].includes(mode) || !data) { await safeWaReply(sock, remoteJid, '❌ use: .base64 enc <text>  |  .base64 dec <base64>', msg); return; }
+        try {
+            const out = mode === 'enc' ? Buffer.from(data).toString('base64') : Buffer.from(data, 'base64').toString('utf8');
+            await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                `   ░▒▓█ *BASE64_ENGINE* █▓▒░\n\n` +
+                `   ✦ *MODE* :: ${mode.toUpperCase()}\n` +
+                `   ✦ *OUTPUT* :: ${out.slice(0,200)}\n\n` +
+                `   " Encoding is but\n     a veil. "`
+            ), msg);
+        } catch (err) {
+            await safeWaReply(sock, remoteJid, `❌ Could not ${mode}ode. Error: ${err?.message}`, msg);
+        }
+        return;
+    }
+
+    // .block <number> — block on host account
+    if (token === '.block') {
+        if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Owner/Dev only.', msg); return; }
+        const num = (args[0] || '').replace(/\D/g, '');
+        if (num.length < 7) { await safeWaReply(sock, remoteJid, '❌ use: .block <number>', msg); return; }
+        try {
+            await sock.updateBlockStatus(`${num}@s.whatsapp.net`, 'block');
+            await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                `   ░▒▓█ *BLOCK_CAST* █▓▒░\n\n` +
+                `   ✦ *TARGET* :: ${num}\n` +
+                `   ✦ *STATE* :: BLOCKED\n\n` +
+                `   " They are cast from\n     the inner circle. "`
+            ), msg);
+        } catch (err) {
+            await safeWaReply(sock, remoteJid, `❌ Could not block. Error: ${err?.message}`, msg);
+        }
+        return;
+    }
+
+    // .unblock <number>
+    if (token === '.unblock') {
+        if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Owner/Dev only.', msg); return; }
+        const num = (args[0] || '').replace(/\D/g, '');
+        if (num.length < 7) { await safeWaReply(sock, remoteJid, '❌ use: .unblock <number>', msg); return; }
+        try {
+            await sock.updateBlockStatus(`${num}@s.whatsapp.net`, 'unblock');
+            await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                `   ░▒▓█ *BLOCK_LIFTED* █▓▒░\n\n` +
+                `   ✦ *TARGET* :: ${num}\n` +
+                `   ✦ *STATE* :: UNBLOCKED\n\n` +
+                `   " They may return\n     to the circle. "`
+            ), msg);
+        } catch (err) {
+            await safeWaReply(sock, remoteJid, `❌ Could not unblock. Error: ${err?.message}`, msg);
+        }
+        return;
+    }
+
+    // .cmdstats — count of commands (dev)
+    if (token === '.cmdstats') {
+        if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Owner/Dev only.', msg); return; }
+        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+            `   ░▒▓█ *CMD_STATS* █▓▒░\n\n` +
+            `   ✦ *COMMANDS* :: ${countSystemCommands()}\n\n` +
+            `   " A growing arsenal. "`
+        ), msg);
         return;
     }
 
