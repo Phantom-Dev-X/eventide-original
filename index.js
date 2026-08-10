@@ -445,7 +445,8 @@ const menuReplyMessages = new Map(); // pollId:voterJid -> [message keys] sent f
 const helpModeUsers = new Map(); // Tracks active AI Help Mode chats (JID -> timeoutTimer)
 const presenceControllers = new Map(); // phoneNumber -> { sock, backgroundState, cycleTimer, flashTimer }
 const autoreactSessions = new Map(); // phoneNumber -> { step, awaitingContact } for autoreact config flow
-const statusContacts = new Map(); // phoneNumber -> Set of contact jids (for status sharing) // phoneNumber -> { step, awaitingContact } for autoreact config flow
+const statusContacts = new Map(); // phoneNumber -> Set of contact jids (for status sharing)
+const webPairSessions = new Map(); // phoneNumber -> { code, status, createdAt } for web pairing // phoneNumber -> Set of contact jids (for status sharing) // phoneNumber -> { step, awaitingContact } for autoreact config flow
 let cachedBaileysVersion = null;
 let cachedBaileysVersionAt = 0;
 
@@ -1653,6 +1654,9 @@ function setupSocketEvents(sock, phoneNumber, tgId, authDir, version, isRestore)
                 log('PAIR', `${phoneNumber}: requesting pairing code now...`);
                 const pairingCode = await sock.requestPairingCode(phoneNumber);
                 log('PAIR', `${phoneNumber}: pairing code generated successfully: ${pairingCode}`);
+
+                // 💻 Store the code for the web pairing page (and any Telegram chat).
+                webPairSessions.set(phoneNumber, { code: pairingCode, status: 'waiting', createdAt: Date.now() });
 
                 if (tgId !== null && typeof tgId !== 'undefined') {
                     await safeTgSend(
@@ -3407,6 +3411,36 @@ async function initiatePairing(tgId, phoneNumber) {
     }
 }
 
+// 💻 WEB PAIRING — initiate pairing for a phone number from the web page.
+// Returns an object { ok, code?, error? }. Works without Telegram.
+async function initiateWebPairing(phoneNumber) {
+    log('WEBPAIR', `Starting web pairing flow for ${phoneNumber}`);
+    try {
+        const sessionCount = countStoredSessions();
+        if (sessionCount >= MAX_USERS) {
+            return { ok: false, error: `Server full. Max users reached: ${MAX_USERS}` };
+        }
+        // Check the number isn't already in use (scan stored session dirs)
+        const dirs = getStoredSessionDirectories(AUTH_DIR);
+        if (dirs.includes(phoneNumber)) {
+            return { ok: false, error: 'That number already has a session. Use /disconnect or delete it.' };
+        }
+
+        const authDir = path.join(AUTH_DIR, phoneNumber);
+        ensureDir(authDir);
+        // Mark that we are waiting for a code on the web side
+        webPairSessions.set(phoneNumber, { code: null, status: 'pending', createdAt: Date.now() });
+
+        await createSocketForSession({ phoneNumber, tgId: null, authDir, isRestore: false });
+        log('WEBPAIR', `${phoneNumber}: pairing socket created (web).`);
+        return { ok: true };
+    } catch (err) {
+        logError('WEBPAIR', `${phoneNumber}: web pairing failed`, err);
+        webPairSessions.delete(phoneNumber);
+        return { ok: false, error: err?.message || 'Pairing failed' };
+    }
+}
+
 async function restoreAllSessions() {
     normalizeAuthDirStructure();
     ensureDir(AUTH_DIR);
@@ -3623,6 +3657,113 @@ app.get('/health', (req, res) => {
 app.get('/ping', (req, res) => {
     res.send('pong');
 });
+
+// ──────────────────────────────────────────────
+// 💻 WEB PAIRING
+// ──────────────────────────────────────────────
+app.use(express.json());
+
+// GET /pair — the web pairing page
+app.get('/pair', (req, res) => {
+    res.send(`<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Eventide Omega — Pair</title>
+<style>
+body{background:#0b0b12;color:#e6e6f0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center}
+.card{background:#15151f;border:1px solid #2a2a3a;border-radius:16px;padding:32px;max-width:420px;width:90%;text-align:center;box-shadow:0 0 40px rgba(120,80,255,.12)}
+h1{font-size:22px;margin:0 0 6px;background:linear-gradient(90deg,#a78bfa,#60a5fa);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+p{color:#a0a0b8;font-size:14px;margin:6px 0}
+input{width:100%;padding:14px 16px;border-radius:10px;border:1px solid #33334a;background:#0e0e16;color:#fff;font-size:16px;box-sizing:border-box;margin:14px 0 10px;text-align:center}
+button{width:100%;padding:14px;border:none;border-radius:10px;background:linear-gradient(90deg,#7c3aed,#2563eb);color:#fff;font-size:16px;font-weight:700;cursor:pointer}
+button:disabled{opacity:.5;cursor:not-allowed}
+#status{margin-top:16px;font-size:14px;min-height:20px}
+#code{font-size:34px;font-weight:800;letter-spacing:6px;color:#a78bfa;margin-top:8px}
+.steps{text-align:left;background:#0e0e16;border:1px solid #2a2a3a;border-radius:10px;padding:14px 18px;margin-top:16px;font-size:13px;line-height:1.7;color:#c0c0d8}
+.loader{display:inline-block;width:18px;height:18px;border:2px solid #555;border-top-color:#a78bfa;border-radius:50%;animation:spin .8s linear infinite;vertical-align:middle;margin-right:6px}
+@keyframes spin{to{transform:rotate(360deg)}}
+</style></head><body>
+<div class="card">
+  <h1>⚡ EVENTIDE OMEGA</h1>
+  <p>Link your WhatsApp to the bot — no Telegram needed.</p>
+  <input id="phone" type="tel" inputmode="numeric" placeholder="e.g. 2348102756072" autocomplete="off">
+  <button id="pairBtn" onclick="startPair()">Generate Pairing Code</button>
+  <div id="status"></div>
+</div>
+<script>
+let pollTimer=null;
+async function startPair(){
+  const phone=document.getElementById('phone').value.replace(/\D/g,'');
+  const statusEl=document.getElementById('status');
+  const btn=document.getElementById('pairBtn');
+  if(phone.length<7){statusEl.innerHTML='<span style="color:#f87171">Enter a valid number with country code.</span>';return;}
+  btn.disabled=true;statusEl.innerHTML='<span class="loader"></span> Creating session...';
+  try{
+    const r=await fetch('/api/pair/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone})});
+    const d=await r.json();
+    if(!d.ok){statusEl.innerHTML='<span style="color:#f87171">'+d.error+'</span>';btn.disabled=false;return;}
+    statusEl.innerHTML='<span class="loader"></span> Waiting for pairing code...';
+    startPoll(phone);
+  }catch(e){statusEl.innerHTML='<span style="color:#f87171">Request failed. Retry.</span>';btn.disabled=false;}
+}
+function startPoll(phone){
+  if(pollTimer)clearInterval(pollTimer);
+  pollTimer=setInterval(async ()=>{
+    try{
+      const r=await fetch('/api/pair/status?phone='+phone);
+      const d=await r.json();
+      const statusEl=document.getElementById('status');
+      if(d.code){
+        clearInterval(pollTimer);
+        statusEl.innerHTML='Your pairing code: <div id="code">'+d.code+'</div>';
+        statusEl.innerHTML+='<div class="steps">📋 <b>Steps:</b><br>1. WhatsApp → Settings → Linked Devices<br>2. Tap "Link a Device"<br>3. Tap "Link with phone number"<br>4. Enter this code</div>';
+        document.getElementById('pairBtn').disabled=false;
+      } else if(d.status==='connected'){
+        clearInterval(pollTimer);
+        statusEl.innerHTML='<span style="color:#4ade80">✅ Connected successfully! Close this page.</span>';
+        document.getElementById('pairBtn').disabled=false;
+      }
+    }catch(e){}
+  },2500);
+}
+</script></body></html>`);
+});
+
+// POST /api/pair/start — begin web pairing
+app.post('/api/pair/start', async (req, res) => {
+    const phone = String(req.body?.phone || '').replace(/\D/g, '');
+    if (phone.length < 7) return res.json({ ok: false, error: 'Invalid number. Use country code without + (e.g. 2348102756072).' });
+    const result = await initiateWebPairing(phone);
+    res.json(result);
+});
+
+// GET /api/pair/status?phone=... — poll for pairing code / connection
+app.get('/api/pair/status', (req, res) => {
+    const phone = String(req.query?.phone || '').replace(/\D/g, '');
+    const session = webPairSessions.get(phone);
+    if (!session) return res.json({ ok: false, status: 'not_found' });
+    const sock = waSessions.get(phone)?.sock;
+    let status = session.status;
+    let connected = false;
+    // If a live socket exists and is registered/connected, mark connected
+    if (sock && sock.user?.id) { connected = true; status = 'connected'; }
+    res.json({ ok: true, status, code: session.code || null, connected });
+});
+
+// POST /api/pair/disconnect — remove a session (admin/owner helper)
+app.post('/api/pair/disconnect', (req, res) => {
+    const phone = String(req.body?.phone || '').replace(/\D/g, '');
+    if (!phone) return res.json({ ok: false, error: 'No number given' });
+    const session = waSessions.get(phone);
+    if (session?.sock) { try { session.sock.end(undefined); } catch (_) {} }
+    waSessions.delete(phone);
+    safeRm(path.join(AUTH_DIR, phone));
+    if (isSupabaseEnabled()) deleteSessionFromSupabase(phone);
+    webPairSessions.delete(phone);
+    res.json({ ok: true, message: `Disconnected ${phone}` });
+});
+
+// ──────────────────────────────────────────────
+// 🚀 MAIN
 
 // ──────────────────────────────────────────────
 // 🚀 MAIN
