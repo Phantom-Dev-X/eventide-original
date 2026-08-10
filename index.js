@@ -3040,6 +3040,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
 
     // .autoreact on|off — toggle auto-reaction (system menu)
     if (token === '.autoreact') {
+        if (!isSenderOwner) { await safeWaReply(sock, remoteJid, '❌ Owner only.', msg); return; }
         const val = args[0]?.toLowerCase();
         if (val !== 'on' && val !== 'off') {
             await safeWaReply(sock, remoteJid, buildOmegaTerminal(
@@ -3065,7 +3066,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
 
     // .autoreactconfig — configure autoreact endpoints (config menu)
     if (token === '.autoreactconfig' || token === '.autoreact config') {
-        if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Owner/Dev only.', msg); return; }
+        if (!isSenderOwner) { await safeWaReply(sock, remoteJid, '❌ Owner only.', msg); return; }
         const cfg = botConfig.autoreact || { enabled: false, endpoints: { groups: [], channels: [], contacts: [] } };
         // Store session and send a poll: add vs delete
         autoreactSessions.set(phoneNumber, { step: 'add_or_delete' });
