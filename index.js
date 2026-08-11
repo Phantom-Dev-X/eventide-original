@@ -593,6 +593,54 @@ function saveBotConfig(phoneNumber, config) {
 }
 
 // ──────────────────────────────────────────────
+// 📼 PERSISTENT MESSAGE LOG (for antidelete full-history recovery)
+// Stores every message (by id) that flows through the bot after pairing, so a
+// message deleted later can always be recovered — even after a bot restart.
+// Stored per-session in msg_log.json, synced to Supabase.
+// ──────────────────────────────────────────────
+const MSG_LOG_LIMIT = 5000; // cap per session to avoid unbounded growth
+
+function loadMsgLog(phoneNumber) {
+    const filePath = path.join(AUTH_DIR, phoneNumber, 'msg_log.json');
+    try {
+        if (fs.existsSync(filePath)) {
+            return JSON.parse(fs.readFileSync(filePath, 'utf8')) || {};
+        }
+    } catch (err) { logError('MSGLOG', `${phoneNumber}: failed to load msg_log.json`, err); }
+    return {};
+}
+
+function saveMsgLog(phoneNumber, log) {
+    const filePath = path.join(AUTH_DIR, phoneNumber, 'msg_log.json');
+    try {
+        ensureDir(path.dirname(filePath));
+        fs.writeFileSync(filePath, JSON.stringify(log, null, 0), 'utf8');
+        // Debounced sync handled by caller to avoid spamming Supabase on every msg.
+    } catch (err) { logError('MSGLOG', `${phoneNumber}: failed to save msg_log.json`, err); }
+}
+
+// Store a message in the persistent log. Keeps only the essential content.
+function logMessage(phoneNumber, remoteJid, msg) {
+    try {
+        const id = msg?.key?.id;
+        if (!id || msg?.key?.fromMe) return; // only log incoming others' messages (and all for safety)
+        const log = loadMsgLog(phoneNumber);
+        if (Object.keys(log).length >= MSG_LOG_LIMIT) {
+            // drop oldest (insertion order ~ oldest first for plain object)
+            const firstKey = Object.keys(log)[0];
+            delete log[firstKey];
+        }
+        log[id] = {
+            remoteJid: remoteJid,
+            participant: msg?.key?.participant || null,
+            message: msg?.message || null,
+            ts: msg?.messageTimestamp ? Number(msg.messageTimestamp) : Date.now() / 1000
+        };
+        saveMsgLog(phoneNumber, log);
+    } catch (err) { logError('MSGLOG', `${phoneNumber}: logMessage failed`, err); }
+}
+
+// ──────────────────────────────────────────────
 // 🛠️ WHATSAPP MARKDOWN FORMATTING CONVERTER (NEW & PRECISE!)
 // ──────────────────────────────────────────────
 function formatForWhatsApp(text) {
@@ -1219,6 +1267,12 @@ async function getMessageFromStore(key) {
     const cacheKey = `__all__:${key.remoteJid || ''}:${key.id}`;
     for (const [k, v] of recentMessages) {
         if (k.endsWith(':' + key.id) && v?.message) return v.message;
+    }
+
+    // Full-history recovery: check the persistent msg_log across all sessions
+    for (const number of getStoredSessionDirectories(AUTH_DIR)) {
+        const log = loadMsgLog(number);
+        if (log[key.id]?.message) return log[key.id].message;
     }
 
     // Fallback: search poll_cache.json files
@@ -2303,16 +2357,17 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         return;
     }
 
-    // 📦 Cache recent messages so antidelete can restore/forward deleted content.
+    // 📦 Cache + persist messages so antidelete can recover full history.
     try {
         recentMessages.set(`${phoneNumber}:${remoteJid}:${msgId}`, { ...msg, _cachedAt: Date.now() });
-        // Prune old entries occasionally
-        if (recentMessages.size > 500) {
+        if (recentMessages.size > 800) {
             const now = Date.now();
             for (const [k, v] of recentMessages) {
-                if (now - (v._cachedAt || 0) > 10 * 60 * 1000) recentMessages.delete(k);
+                if (now - (v._cachedAt || 0) > 60 * 60 * 1000) recentMessages.delete(k);
             }
         }
+        // Persist to the message log (full history since pairing)
+        logMessage(phoneNumber, remoteJid, msg);
     } catch (_) {}
 
     // 🔇 MUTE ENFORCEMENT: if the sender is muted in this group, delete their message.
