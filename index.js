@@ -1207,10 +1207,19 @@ function getDisconnectCode(lastDisconnect) {
         ?? null;
 }
 
-// Decrypt / Retrieve messages from memory map OR local persistent JSON
+// Decrypt / Retrieve messages from memory map OR local persistent JSON.
+// Baileys calls this to fetch a message by reference (e.g. for "delete for
+// everyone" — the protocol message carries a reference and Baileys looks up
+// the original here so it can emit the delete).
 async function getMessageFromStore(key) {
     const inMemory = sentPolls.get(key.id);
     if (inMemory) return inMemory;
+
+    // Look in the recent-messages cache first (this is how antidelete recovers content)
+    const cacheKey = `__all__:${key.remoteJid || ''}:${key.id}`;
+    for (const [k, v] of recentMessages) {
+        if (k.endsWith(':' + key.id) && v?.message) return v.message;
+    }
 
     // Fallback: search poll_cache.json files
     const sessionDirs = getStoredSessionDirectories(AUTH_DIR);
@@ -3984,25 +3993,43 @@ function setupMessageHandler(sock, phoneNumber, tgId) {
     });
 
     // 🛡️ ANTIDELETE: forward deleted messages to the OWNER's DM silently.
+    // WhatsApp's "delete for everyone" sends a protocol message carrying a
+    // reference (protocolMessageKey) to the deleted message. Baileys re-fetches
+    // that original via getMessage (our getMessageFromStore), and we grab the
+    // reference from the update to recover the content.
     sock.ev.on('messages.update', async (updates) => {
         for (const { key, update } of (Array.isArray(updates) ? updates : [])) {
             try {
-                const isRevoke = update?.messageStubType === 21 || String(key?.id || '').startsWith('REVOKE_');
+                // The reference to the deleted message lives in the protocolMessage
+                const protoKey = update?.message?.protocolMessage?.key
+                    || update?.protocolMessageKey
+                    || null;
+                const isRevoke = !!protoKey
+                    || update?.messageStubType === 21
+                    || String(key?.id || '').startsWith('REVOKE_');
                 if (isRevoke && key?.remoteJid?.endsWith('@g.us')) {
                     const antiCfg = loadBotConfig(phoneNumber).anti || {};
                     if (antiCfg.antidelete?.[key.remoteJid] === 'on') {
-                        // Look up the deleted message from our cache
-                        const cached = recentMessages.get(`${phoneNumber}:${key.remoteJid}:${key.id}`);
+                        // Recover the original content via the reference
+                        let deletedContent = null;
+                        const refKey = protoKey || key;
+                        try { deletedContent = await getMessageFromStore(refKey); } catch (_) {}
+                        // Also try our cache by the referenced id
+                        if (!deletedContent && refKey?.id) {
+                            for (const [k, v] of recentMessages) {
+                                if (k.endsWith(':' + refKey.id) && v?.message) { deletedContent = v.message; break; }
+                            }
+                        }
                         const deletedBy = key?.participant ? key.participant.split('@')[0] : 'unknown';
-                        // Owner DM = the paired account's own chat (self-jid)
                         const myJid = sock.user?.id ? jidNormalizedUser(sock.user.id) : null;
                         const ownerChat = myJid || key.remoteJid;
-                        if (cached) {
-                            // Forward the cached message to the owner DM
-                            await sock.sendMessage(ownerChat, { forward: cached }).catch(()=>{});
+                        if (deletedContent) {
+                            // Rebuild a full message object and forward to owner DM
+                            const fakeMsg = { key: { remoteJid, id: refKey?.id || key.id, participant: key.participant, fromMe: false }, message: deletedContent };
+                            await sock.sendMessage(ownerChat, { forward: fakeMsg }).catch(()=>{});
                         }
                         await sock.sendMessage(ownerChat, {
-                            text: `⚠️ *ANTIDELETE*\n\nA message was deleted in a group.\n\n🗑️ *Group*: ${key.remoteJid}\n👤 *Deleted by*: +${deletedBy}\n\n_Forwarded the deleted message above._`
+                            text: `⚠️ *ANTIDELETE*\n\nA message was deleted in a group.\n\n🗑️ *Group*: ${key.remoteJid}\n👤 *Deleted by*: +${deletedBy}\n${deletedContent ? '\n_Forwarded the deleted message above._' : '\n_Original content could not be recovered._'}`
                         }).catch(()=>{});
                         log('ANTIDELETE', `${phoneNumber}: forwarded deleted msg from ${key.remoteJid} to owner`);
                     }
