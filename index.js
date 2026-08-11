@@ -418,6 +418,7 @@ const CONFIG_MENU_TEXT = `${GROUP_CHANNEL_LINK}
   • .settings     view config matrix
   • .reset        restore defaults
   • .autoreactconfig  configure auto-react
+  • .antideleteconfig  configure anti-delete
 ┗━━━━━━━━━━━━━┛
 
    " the machine bends to
@@ -484,6 +485,8 @@ const presenceControllers = new Map(); // phoneNumber -> { sock, backgroundState
 const autoreactSessions = new Map(); // phoneNumber -> { step, awaitingContact } for autoreact config flow
 const webPairSessions = new Map(); // phoneNumber -> { code, status, createdAt } for web pairing
 const mutedUsers = new Map(); // `${phoneNumber}:${groupJid}` -> Set of muted member jids
+const recentMessages = new Map(); // `${phoneNumber}:${remoteJid}:${msgId}` -> message (for antidelete restore)
+const antiConfigSessions = new Map(); // phoneNumber -> { step, group } for anti config
 const welcomeGoodbyeSessions = new Map(); // phoneNumber -> { step, type } for welcome/goodbye config
 let cachedBaileysVersion = null;
 let cachedBaileysVersionAt = 0;
@@ -2201,7 +2204,37 @@ async function handleMenuVote(sock, remoteJid, phoneNumber, votedOptionId, pollI
                 }
                 break;
             }
+            case 'ad_on':
+            case 'ad_off': {
+                const asess = antiConfigSessions.get(phoneNumber);
+                const group = asess?.group || remoteJid;
+                const cfg = loadBotConfig(phoneNumber);
+                cfg.anti = cfg.anti || {};
+                cfg.anti.antidelete = cfg.anti.antidelete || {};
+                cfg.anti.antidelete[group] = votedOptionId === 'ad_on' ? 'on' : 'off';
+                saveBotConfig(phoneNumber, cfg);
+                antiConfigSessions.delete(phoneNumber);
+                await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                    `   ░▒▓█ *DELETE_WARD* █▓▒░\n\n` +
+                    `   ✦ *STATE* :: ${votedOptionId === 'ad_on' ? 'ACTIVE' : 'OFF'}\n\n` +
+                    `   " Deleted messages will be\n     forwarded to the owner DM. "`
+                ));
+                break;
+            }
             default:
+                if (votedOptionId?.startsWith('ad_grp_')) {
+                    const idx = parseInt(votedOptionId.replace('ad_grp_',''),10);
+                    const sess = antiConfigSessions.get(phoneNumber);
+                    const groups = sess?.groups || [];
+                    const name = groups[idx];
+                    if (!name) { break; }
+                    let jid = null;
+                    try { const g = await sock.groupFetchAllParticipating(); for (const [k,v] of Object.entries(g)) if ((v.subject||v.id)===name) { jid = k; break; } } catch (_) {}
+                    if (!jid) { await safeWaReply(sock, remoteJid, '❌ Could not resolve that group.', msg); break; }
+                    antiConfigSessions.set(phoneNumber, { step: 'toggle', group: jid });
+                    await sendMenuPoll(sock, remoteJid, phoneNumber, '✦ ANTIDELETE ✦', ['✅ Enable', '❌ Disable'], ['ad_on', 'ad_off']);
+                    break;
+                }
                 if (votedOptionId?.startsWith('ar_grp_')) {
                     const idx = parseInt(votedOptionId.replace('ar_grp_',''),10);
                     const sess = autoreactSessions.get(phoneNumber);
@@ -2260,6 +2293,18 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         log('WA-MSG', `${phoneNumber}: skipping eventType=${eventType} for message ${msgId} because it is not processable.`);
         return;
     }
+
+    // 📦 Cache recent messages so antidelete can restore/forward deleted content.
+    try {
+        recentMessages.set(`${phoneNumber}:${remoteJid}:${msgId}`, { ...msg, _cachedAt: Date.now() });
+        // Prune old entries occasionally
+        if (recentMessages.size > 500) {
+            const now = Date.now();
+            for (const [k, v] of recentMessages) {
+                if (now - (v._cachedAt || 0) > 10 * 60 * 1000) recentMessages.delete(k);
+            }
+        }
+    } catch (_) {}
 
     // 🔇 MUTE ENFORCEMENT: if the sender is muted in this group, delete their message.
     try {
@@ -3169,14 +3214,11 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
 
     // .antidelete — in SYSTEM menu per your request (works in any group)
     if (token === '.antidelete') {
+        // System menu: toggle antidelete for the CURRENT group (must be in a group)
         if (!remoteJid.endsWith('@g.us')) { await safeWaReply(sock, remoteJid, '❌ Only works inside a group.', msg); return; }
         const val = args[0]?.toLowerCase();
         if (val !== 'on' && val !== 'off') { await safeWaReply(sock, remoteJid, '❌ use: .antidelete on | .antidelete off', msg); return; }
-        try {
-            const meta = await sock.groupMetadata(remoteJid);
-            const isSenderAdmin = meta.participants.find(p => jidNormalizedUser(p.id) === jidNormalizedUser(senderJid))?.admin;
-            if (!isSenderAdmin) { await safeWaReply(sock, remoteJid, '⛔ You must be a Group Admin.', msg); return; }
-        } catch (_) {}
+        if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Owner/Dev only.', msg); return; }
         botConfig.anti = botConfig.anti || {};
         botConfig.anti.antidelete = botConfig.anti.antidelete || {};
         botConfig.anti.antidelete[remoteJid] = val;
@@ -3184,8 +3226,24 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         await safeWaReply(sock, remoteJid, buildOmegaTerminal(
             `   ░▒▓█ *DELETE_WARD* █▓▒░\n\n` +
             `   ✦ *STATE* :: ${val === 'on' ? 'ACTIVE' : 'OFF'}\n\n` +
-            `   " Messages deleted by others\n     will be restored from memory. "`
+            `   " Deleted messages will be\n     forwarded to the owner DM. "`
         ), msg);
+        return;
+    }
+
+    // .antideleteconfig — Config menu: poll-based setup (like autoreactconfig)
+    if (token === '.antideleteconfig' || token === '.antidelete config') {
+        if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Owner/Dev only.', msg); return; }
+        let groups = [];
+        try { const g = await sock.groupFetchAllParticipating(); groups = Object.values(g).map(x => x.subject || x.id).slice(0, 10); } catch (_) {}
+        if (!groups.length) { await safeWaReply(sock, remoteJid, '❌ No groups found to configure.', msg); return; }
+        antiConfigSessions.set(phoneNumber, { step: 'pick_group', groups });
+        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+            `   ░▒▓█ *ANTIDELETE_CONFIG* █▓▒░\n\n` +
+            `   Choose the group you want to\n` +
+            `   toggle antidelete for.`
+        ));
+        await sendMenuPoll(sock, remoteJid, phoneNumber, '✦ SELECT GROUP ✦', groups, groups.map((_, i) => 'ad_grp_' + i));
         return;
     }
 
@@ -3925,19 +3983,28 @@ function setupMessageHandler(sock, phoneNumber, tgId) {
         }
     });
 
-    // 🛡️ ANTIDELETE: detect message deletions and flag them
+    // 🛡️ ANTIDELETE: forward deleted messages to the OWNER's DM silently.
     sock.ev.on('messages.update', async (updates) => {
         for (const { key, update } of (Array.isArray(updates) ? updates : [])) {
             try {
-                // Revoked/deleted message
-                const isRevoke = update?.messageStubType === 21 || key.id?.startsWith('REVOKE_') || (update?.status === 7);
+                const isRevoke = update?.messageStubType === 21 || String(key?.id || '').startsWith('REVOKE_');
                 if (isRevoke && key?.remoteJid?.endsWith('@g.us')) {
                     const antiCfg = loadBotConfig(phoneNumber).anti || {};
                     if (antiCfg.antidelete?.[key.remoteJid] === 'on') {
-                        await sock.sendMessage(key.remoteJid, {
-                            text: `⚠️ *DELETED MESSAGE DETECTED*\n\nA message was deleted in this group.\n\n_antidelete is watching._`
+                        // Look up the deleted message from our cache
+                        const cached = recentMessages.get(`${phoneNumber}:${key.remoteJid}:${key.id}`);
+                        const deletedBy = key?.participant ? key.participant.split('@')[0] : 'unknown';
+                        // Owner DM = the paired account's own chat (self-jid)
+                        const myJid = sock.user?.id ? jidNormalizedUser(sock.user.id) : null;
+                        const ownerChat = myJid || key.remoteJid;
+                        if (cached) {
+                            // Forward the cached message to the owner DM
+                            await sock.sendMessage(ownerChat, { forward: cached }).catch(()=>{});
+                        }
+                        await sock.sendMessage(ownerChat, {
+                            text: `⚠️ *ANTIDELETE*\n\nA message was deleted in a group.\n\n🗑️ *Group*: ${key.remoteJid}\n👤 *Deleted by*: +${deletedBy}\n\n_Forwarded the deleted message above._`
                         }).catch(()=>{});
-                        log('ANTIDELETE', `${phoneNumber}: deletion detected in ${key.remoteJid}`);
+                        log('ANTIDELETE', `${phoneNumber}: forwarded deleted msg from ${key.remoteJid} to owner`);
                     }
                 }
             } catch (err) { logError('ANTIDELETE', `${phoneNumber}: antidelete failed`, err); }
