@@ -1407,21 +1407,28 @@ async function safeWaReply(sock, remoteJid, text, quoted) {
 }
 
 // ──────────────────────────────────────────────
-// 📱 TELEGRAM BOT
+// 📱 TELEGRAM BOT (OPTIONAL — only initialized if TELEGRAM_TOKEN is set)
+// The bot works fully without Telegram via the web pairing page.
 // ──────────────────────────────────────────────
-if (!TELEGRAM_TOKEN) {
-    console.error('❌ TELEGRAM_TOKEN not set!');
-    process.exit(1);
+let tgBot = null;
+if (TELEGRAM_TOKEN) {
+    try {
+        tgBot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
+        tgBot.on('polling_error', err => logError('TELEGRAM', 'Polling error', err));
+        log('TELEGRAM', 'Telegram bot initialized (token present).');
+    } catch (err) {
+        logError('TELEGRAM', 'Failed to init Telegram bot (continuing without it)', err);
+        tgBot = null;
+    }
+} else {
+    log('TELEGRAM', 'TELEGRAM_TOKEN not set — Telegram bot disabled. Use the /pair web page instead.');
 }
-
-const tgBot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
-
-tgBot.on('polling_error', err => logError('TELEGRAM', 'Polling error', err));
 
 // ──────────────────────────────────────────────
 // 🔒 TELEGRAM SEND HELPER
 // ──────────────────────────────────────────────
 async function safeTgSend(chatId, text) {
+    if (!tgBot) return; // Telegram disabled — no-op
     try {
         await tgBot.sendMessage(chatId, text, { parse_mode: 'Markdown' });
     } catch (err) {
@@ -1436,6 +1443,7 @@ async function safeTgSend(chatId, text) {
 }
 
 async function requireAdminOrExplain(chatId) {
+    if (!tgBot) return false; // Telegram disabled
     if (isDev(chatId)) return true;
     await safeTgSend(chatId, '⛔ Admins only. Add your Telegram ID to DEV_TELEGRAM_IDS to unlock this command.');
     return false;
@@ -3614,146 +3622,152 @@ async function restoreAllSessions() {
 }
 
 // ──────────────────────────────────────────────
-// 📱 TELEGRAM COMMANDS
+
 // ──────────────────────────────────────────────
+// 📱 TELEGRAM COMMANDS (only registered when Telegram is enabled)
+// ──────────────────────────────────────────────
+if (tgBot) {
+    // 📱 TELEGRAM COMMANDS
+    // ──────────────────────────────────────────────
 
-tgBot.onText(/\/start/, async (msg) => {
-    const chatId = msg.chat.id;
-    log('TELEGRAM', `/start from ${chatId}`);
-
-    const existing = telegramUsers.get(chatId);
-    if (existing?.status === 'connected') {
-        await safeTgSend(chatId, `✅ *Connected!*\n\n📱 ${existing.phoneNumber}\n🤖 Bot is active.`);
-        return;
-    }
-
-    await safeTgSend(
-        chatId,
-        `🤖 *WhatsApp Multi-Bot*\n\nSend your number to pair using country code without + sign.\nExample: 2348012345678\n\n/pair — Start pairing\n/status — Show status\n/disconnect — Disconnect your session\n/help — Commands`
-    );
-});
-
-tgBot.onText(/\/pair/, async (msg) => {
-    const chatId = msg.chat.id;
-    log('TELEGRAM', `/pair from ${chatId}`);
-
-    const existing = telegramUsers.get(chatId);
-    if (existing?.status === 'connected') {
-        await safeTgSend(chatId, '❌ You are already connected. Use /disconnect first if you want to re-pair.');
-        return;
-    }
-
-    if (existing?.status === 'pairing' || existing?.status === 'waiting_number') {
-        await safeTgSend(chatId, '⏳ Pairing is already in progress. Please send your number now.');
-        return;
-    }
-
-    setTelegramUserState(chatId, { phoneNumber: null, status: 'waiting_number', sock: null });
-    saveUserMap();
-    await safeTgSend(chatId, '📱 *Enter your number*\n\nUse country code + number and do not include the + sign.\nExample: 2348012345678');
-});
-
-tgBot.on('message', async (msg) => {
-    try {
+    tgBot.onText(/\/start/, async (msg) => {
         const chatId = msg.chat.id;
-        const chatType = msg.chat.type;
-        const text = msg.text?.trim();
+        log('TELEGRAM', `/start from ${chatId}`);
 
-        if (chatType !== 'private') return;
-        if (!text) return;
-        if (text.startsWith('/')) return;
+        const existing = telegramUsers.get(chatId);
+        if (existing?.status === 'connected') {
+            await safeTgSend(chatId, `✅ *Connected!*\n\n📱 ${existing.phoneNumber}\n🤖 Bot is active.`);
+            return;
+        }
 
-        log('TELEGRAM', `Text message from ${chatId}: ${trimForLog(text, 120)}`);
+        await safeTgSend(
+            chatId,
+            `🤖 *WhatsApp Multi-Bot*\n\nSend your number to pair using country code without + sign.\nExample: 2348012345678\n\n/pair — Start pairing\n/status — Show status\n/disconnect — Disconnect your session\n/help — Commands`
+        );
+    });
+
+    tgBot.onText(/\/pair/, async (msg) => {
+        const chatId = msg.chat.id;
+        log('TELEGRAM', `/pair from ${chatId}`);
+
+        const existing = telegramUsers.get(chatId);
+        if (existing?.status === 'connected') {
+            await safeTgSend(chatId, '❌ You are already connected. Use /disconnect first if you want to re-pair.');
+            return;
+        }
+
+        if (existing?.status === 'pairing' || existing?.status === 'waiting_number') {
+            await safeTgSend(chatId, '⏳ Pairing is already in progress. Please send your number now.');
+            return;
+        }
+
+        setTelegramUserState(chatId, { phoneNumber: null, status: 'waiting_number', sock: null });
+        saveUserMap();
+        await safeTgSend(chatId, '📱 *Enter your number*\n\nUse country code + number and do not include the + sign.\nExample: 2348012345678');
+    });
+
+    tgBot.on('message', async (msg) => {
+        try {
+            const chatId = msg.chat.id;
+            const chatType = msg.chat.type;
+            const text = msg.text?.trim();
+
+            if (chatType !== 'private') return;
+            if (!text) return;
+            if (text.startsWith('/')) return;
+
+            log('TELEGRAM', `Text message from ${chatId}: ${trimForLog(text, 120)}`);
+
+            const user = telegramUsers.get(chatId);
+            if (!user) {
+                await safeTgSend(chatId, '🤖 Use /start to begin first.');
+                return;
+            }
+
+            if (user.status !== 'waiting_number') return;
+
+            const phoneNumber = text.replace(/\D/g, '');
+            if (phoneNumber.length < 10 || phoneNumber.length > 15) {
+                await safeTgSend(chatId, '❌ Invalid number. Example: 2348012345678');
+                return;
+            }
+
+            await safeTgSend(chatId, `🔑 *Connecting...*\n\n📱 ${phoneNumber}\n\n⏳ Generating your pairing code...`);
+
+            try {
+                await initiatePairing(chatId, phoneNumber);
+            } catch (err) {
+                await safeTgSend(chatId, `❌ Pairing failed.\n\n${err.message}\n\nUse /pair to retry.`);
+            }
+        } catch (err) {
+            logError('TELEGRAM', 'Error inside message handler', err);
+        }
+    });
+
+    tgBot.onText(/\/status/, async (msg) => {
+        const chatId = msg.chat.id;
+        log('TELEGRAM', `/status from ${chatId}`);
+
+        if (!(await requireAdminOrExplain(chatId))) return;
 
         const user = telegramUsers.get(chatId);
-        if (!user) {
-            await safeTgSend(chatId, '🤖 Use /start to begin first.');
+        const statusMap = {
+            waiting_number: '⏳ Waiting for number',
+            pairing: '🔑 Pairing in progress',
+            connecting: '🔄 Connecting',
+            connected: '✅ Connected',
+            disconnected: '❌ Disconnected'
+        };
+
+        const sessionDirs = countStoredSessions();
+        await safeTgSend(
+            chatId,
+            `📊 *Status*\n\nYour state: ${statusMap[user?.status || 'disconnected'] || '❓ Unknown'}\nYour number: ${user?.phoneNumber || 'None'}\n\n👥 Active sockets: ${waSessions.size}\n📁 Stored sessions: ${sessionDirs}/${MAX_USERS}\n🧠 Loaded Telegram users: ${telegramUsers.size}\n⏱️ Uptime: ${formatUptime(process.uptime())}\n☁️ Supabase Sync: ${isSupabaseEnabled() ? '✅ Enabled' : '❌ Disabled'}`
+        );
+    });
+
+    tgBot.onText(/\/disconnect/, async (msg) => {
+        const chatId = msg.chat.id;
+        log('TELEGRAM', `/disconnect from ${chatId}`);
+
+        const user = telegramUsers.get(chatId);
+        if (!user?.phoneNumber) {
+            await safeTgSend(chatId, '❌ You do not have an active session to disconnect.');
             return;
         }
 
-        if (user.status !== 'waiting_number') return;
-
-        const phoneNumber = text.replace(/\D/g, '');
-        if (phoneNumber.length < 10 || phoneNumber.length > 15) {
-            await safeTgSend(chatId, '❌ Invalid number. Example: 2348012345678');
-            return;
+        const phoneNumber = user.phoneNumber;
+        const session = waSessions.get(phoneNumber);
+        if (session?.sock) {
+            try {
+                await session.sock.end(undefined);
+            } catch (err) {
+                logError('SESSION', `Manual disconnect failed to close socket for ${phoneNumber}`, err);
+            }
         }
 
-        await safeTgSend(chatId, `🔑 *Connecting...*\n\n📱 ${phoneNumber}\n\n⏳ Generating your pairing code...`);
-
-        try {
-            await initiatePairing(chatId, phoneNumber);
-        } catch (err) {
-            await safeTgSend(chatId, `❌ Pairing failed.\n\n${err.message}\n\nUse /pair to retry.`);
+        waSessions.delete(phoneNumber);
+        safeRm(path.join(AUTH_DIR, phoneNumber));
+        if (isSupabaseEnabled()) {
+            await deleteSessionFromSupabase(phoneNumber);
         }
-    } catch (err) {
-        logError('TELEGRAM', 'Error inside message handler', err);
-    }
-});
+        clearTelegramUser(chatId);
+        saveUserMap();
 
-tgBot.onText(/\/status/, async (msg) => {
-    const chatId = msg.chat.id;
-    log('TELEGRAM', `/status from ${chatId}`);
+        await safeTgSend(chatId, `✅ Disconnected ${phoneNumber} successfully.`);
+    });
 
-    if (!(await requireAdminOrExplain(chatId))) return;
+    tgBot.onText(/\/help/, async (msg) => {
+        const chatId = msg.chat.id;
+        log('TELEGRAM', `/help from ${chatId}`);
 
-    const user = telegramUsers.get(chatId);
-    const statusMap = {
-        waiting_number: '⏳ Waiting for number',
-        pairing: '🔑 Pairing in progress',
-        connecting: '🔄 Connecting',
-        connected: '✅ Connected',
-        disconnected: '❌ Disconnected'
-    };
+        await safeTgSend(
+            chatId,
+            `📖 *Commands*\n\n/start — Welcome message\n/pair — Connect your WhatsApp\n/status — Show status\n/disconnect — Disconnect your session\n/help — Show commands\n\n*WhatsApp commands:*\n.ping`
+        );
+    });
 
-    const sessionDirs = countStoredSessions();
-    await safeTgSend(
-        chatId,
-        `📊 *Status*\n\nYour state: ${statusMap[user?.status || 'disconnected'] || '❓ Unknown'}\nYour number: ${user?.phoneNumber || 'None'}\n\n👥 Active sockets: ${waSessions.size}\n📁 Stored sessions: ${sessionDirs}/${MAX_USERS}\n🧠 Loaded Telegram users: ${telegramUsers.size}\n⏱️ Uptime: ${formatUptime(process.uptime())}\n☁️ Supabase Sync: ${isSupabaseEnabled() ? '✅ Enabled' : '❌ Disabled'}`
-    );
-});
-
-tgBot.onText(/\/disconnect/, async (msg) => {
-    const chatId = msg.chat.id;
-    log('TELEGRAM', `/disconnect from ${chatId}`);
-
-    const user = telegramUsers.get(chatId);
-    if (!user?.phoneNumber) {
-        await safeTgSend(chatId, '❌ You do not have an active session to disconnect.');
-        return;
-    }
-
-    const phoneNumber = user.phoneNumber;
-    const session = waSessions.get(phoneNumber);
-    if (session?.sock) {
-        try {
-            await session.sock.end(undefined);
-        } catch (err) {
-            logError('SESSION', `Manual disconnect failed to close socket for ${phoneNumber}`, err);
-        }
-    }
-
-    waSessions.delete(phoneNumber);
-    safeRm(path.join(AUTH_DIR, phoneNumber));
-    if (isSupabaseEnabled()) {
-        await deleteSessionFromSupabase(phoneNumber);
-    }
-    clearTelegramUser(chatId);
-    saveUserMap();
-
-    await safeTgSend(chatId, `✅ Disconnected ${phoneNumber} successfully.`);
-});
-
-tgBot.onText(/\/help/, async (msg) => {
-    const chatId = msg.chat.id;
-    log('TELEGRAM', `/help from ${chatId}`);
-
-    await safeTgSend(
-        chatId,
-        `📖 *Commands*\n\n/start — Welcome message\n/pair — Connect your WhatsApp\n/status — Show status\n/disconnect — Disconnect your session\n/help — Show commands\n\n*WhatsApp commands:*\n.ping`
-    );
-});
-
+}
 // ──────────────────────────────────────────────
 // 🌐 EXPRESS
 // ──────────────────────────────────────────────
