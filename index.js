@@ -3751,6 +3751,12 @@ tgBot.onText(/\/help/, async (msg) => {
 const app = express();
 
 app.get('/', (req, res) => {
+    // Root URL: land users directly on the web pairing page.
+    // (Status stays available at /health for monitoring.)
+    res.redirect('/pair');
+});
+
+app.get('/status', (req, res) => {
     res.json({
         status: 'online',
         activeSockets: waSessions.size,
