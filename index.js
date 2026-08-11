@@ -300,8 +300,15 @@ const GROUP_MENU_TEXT = `${GROUP_CHANNEL_LINK}
   • *.kick*       sever a member
   • *.promote*    raise a member
   • *.demote*     lower a member
+  • *.mute*       silence a member
+  • *.unmute*     release a member
   • *.revoke*     reset invite link
   • *.link*       fetch invite link
+┗━━━━━━━━━━━━━┛
+
+┏━ ✦ AUTOMATION ━┓
+  • *.welcome*    greet new souls
+  • *.goodbye*    farewell departures
 ┗━━━━━━━━━━━━━┛
 
 ┏━ ✦ INFO ━┓
@@ -471,7 +478,9 @@ const menuReplyMessages = new Map(); // pollId:voterJid -> [message keys] sent f
 const helpModeUsers = new Map(); // Tracks active AI Help Mode chats (JID -> timeoutTimer)
 const presenceControllers = new Map(); // phoneNumber -> { sock, backgroundState, cycleTimer, flashTimer }
 const autoreactSessions = new Map(); // phoneNumber -> { step, awaitingContact } for autoreact config flow
-const webPairSessions = new Map(); // phoneNumber -> { code, status, createdAt } for web pairing // phoneNumber -> Set of contact jids (for status sharing) // phoneNumber -> { step, awaitingContact } for autoreact config flow
+const webPairSessions = new Map(); // phoneNumber -> { code, status, createdAt } for web pairing
+const mutedUsers = new Map(); // `${phoneNumber}:${groupJid}` -> Set of muted member jids
+const welcomeGoodbyeSessions = new Map(); // phoneNumber -> { step, type } for welcome/goodbye config
 let cachedBaileysVersion = null;
 let cachedBaileysVersionAt = 0;
 
@@ -995,6 +1004,19 @@ function buildOmegaTerminal(body) {
 }
 
 // Fetch a remote URL as a Buffer (for .gpp / .ggpp profile picture downloads).
+// Resolve a target JID from a reply-to message, an @mention, or a raw number.
+// Returns a normalized JID or null.
+function resolveTargetJid(msg, args) {
+    const ctx = msg.message?.extendedTextMessage?.contextInfo;
+    if (ctx?.participant) return jidNormalizedUser(ctx.participant);   // replied message
+    if (Array.isArray(ctx?.mentionedJid) && ctx.mentionedJid.length) return jidNormalizedUser(ctx.mentionedJid[0]); // @mention
+    for (const tok of (args || [])) {
+        const digits = tok.replace(/\D/g, '');
+        if (digits.length >= 7) return `${digits}@s.whatsapp.net`;
+    }
+    return null;
+}
+
 function fetchBuffer(url) {
     return new Promise((resolve, reject) => {
         const req = https.get(url, (res) => {
@@ -2123,6 +2145,44 @@ async function handleMenuVote(sock, remoteJid, phoneNumber, votedOptionId, pollI
                 }
                 break;
             }
+            case 'wg_wel_custom':
+            case 'wg_gb_custom':
+            case 'wg_wel_default':
+            case 'wg_gb_default':
+            case 'wg_wel_off':
+            case 'wg_gb_off': {
+                const sess = welcomeGoodbyeSessions.get(phoneNumber);
+                const type = sess?.type || (votedOptionId.includes('wel') ? 'welcome' : 'goodbye');
+                const group = sess?.group || remoteJid;
+                const isWel = type === 'welcome';
+                const cfg = loadBotConfig(phoneNumber);
+                cfg[isWel ? 'welcomeMsg' : 'goodbyeMsg'] = cfg[isWel ? 'welcomeMsg' : 'goodbyeMsg'] || {};
+                if (votedOptionId.endsWith('_off')) {
+                    cfg[isWel ? 'welcomeMsg' : 'goodbyeMsg'][group] = 'off';
+                    saveBotConfig(phoneNumber, cfg);
+                    welcomeGoodbyeSessions.delete(phoneNumber);
+                    await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                        `   ✦ *${isWel ? 'WELCOME' : 'GOODBYE'}* :: DISABLED\n\n   " The threshold falls\n     silent. "`
+                    ));
+                } else if (votedOptionId.endsWith('_default')) {
+                    cfg[isWel ? 'welcomeMsg' : 'goodbyeMsg'][group] = 'default';
+                    saveBotConfig(phoneNumber, cfg);
+                    welcomeGoodbyeSessions.delete(phoneNumber);
+                    await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                        `   ✦ *${isWel ? 'WELCOME' : 'GOODBYE'}* :: DEFAULT\n\n   " The standard words\n     are restored. "`
+                    ));
+                } else {
+                    // custom -> ask for the message text
+                    welcomeGoodbyeSessions.set(phoneNumber, { step: 'custom_text', type, group });
+                    await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                        `   ✦ *CUSTOM ${isWel ? 'WELCOME' : 'GOODBYE'}*\n\n` +
+                        `   Send the ${isWel ? 'welcome' : 'goodbye'} message now.\n` +
+                        `   (use *{{name}}* for the member's name)\n\n` +
+                        `   or type *.cancel* to exit`
+                    ));
+                }
+                break;
+            }
             default:
                 if (votedOptionId?.startsWith('ar_grp_')) {
                     const idx = parseInt(votedOptionId.replace('ar_grp_',''),10);
@@ -2182,6 +2242,19 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         log('WA-MSG', `${phoneNumber}: skipping eventType=${eventType} for message ${msgId} because it is not processable.`);
         return;
     }
+
+    // 🔇 MUTE ENFORCEMENT: if the sender is muted in this group, delete their message.
+    try {
+        if (remoteJid.endsWith('@g.us') && !fromMe) {
+            const muteKey = `${phoneNumber}:${remoteJid}`;
+            const muted = mutedUsers.get(muteKey);
+            if (muted && muted.has(jidNormalizedUser(participant))) {
+                await sock.sendMessage(remoteJid, { delete: { remoteJid, id: msgId, participant } }).catch(()=>{});
+                log('MUTE', `${phoneNumber}: deleted muted user's message in ${remoteJid}`);
+                return;
+            }
+        }
+    } catch (err) { logError('MUTE', `${phoneNumber}: mute delete failed`, err); }
 
     const parsed = extractMessageText(msg);
     log(
@@ -2280,6 +2353,27 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             }
             const bc = loadBotConfig(phoneNumber); bc.autoreact = cfg; saveBotConfig(phoneNumber, bc);
             autoreactSessions.delete(phoneNumber);
+            return;
+        }
+
+        // 🎉 WELCOME/GOODBYE custom message text-input flow
+        const wgSession = welcomeGoodbyeSessions.get(phoneNumber);
+        if (wgSession?.step === 'custom_text') {
+            const isWel = wgSession.type === 'welcome';
+            if (text.toLowerCase() === 'cancel' || text.toLowerCase() === '.cancel') {
+                welcomeGoodbyeSessions.delete(phoneNumber);
+                await safeWaReply(sock, remoteJid, buildOmegaTerminal(`   ✦ *CANCELLED* :: no changes made.`), msg);
+                return;
+            }
+            const cfg = loadBotConfig(phoneNumber);
+            cfg[isWel ? 'welcomeMsg' : 'goodbyeMsg'] = cfg[isWel ? 'welcomeMsg' : 'goodbyeMsg'] || {};
+            cfg[isWel ? 'welcomeMsg' : 'goodbyeMsg'][wgSession.group] = text.trim();
+            saveBotConfig(phoneNumber, cfg);
+            welcomeGoodbyeSessions.delete(phoneNumber);
+            await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                `   ✦ *${isWel ? 'WELCOME' : 'GOODBYE'}* :: CUSTOM\n\n` +
+                `   " The ${isWel ? 'threshold greets' : 'farewell is spoken'}\n     with your words. "`
+            ), msg);
             return;
         }
 
@@ -3010,6 +3104,90 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         return;
     }
 
+    // .mute @user / reply — silence a member in the group (auto-delete their msgs)
+    if (token === '.mute') {
+        if (!remoteJid.endsWith('@g.us')) { await safeWaReply(sock, remoteJid, '❌ Only works inside a group.', msg); return; }
+        const target = resolveTargetJid(msg, args);
+        if (!target) { await safeWaReply(sock, remoteJid, '❌ Reply to a message, @mention, or provide a number.\nExample: .mute @user', msg); return; }
+        try {
+            const meta = await sock.groupMetadata(remoteJid);
+            const isSenderAdmin = meta.participants.find(p => jidNormalizedUser(p.id) === jidNormalizedUser(senderJid))?.admin;
+            if (!isSenderAdmin) { await safeWaReply(sock, remoteJid, '⛔ You must be a Group Admin.', msg); return; }
+            const key = `${phoneNumber}:${remoteJid}`;
+            const set = mutedUsers.get(key) || new Set();
+            set.add(jidNormalizedUser(target));
+            mutedUsers.set(key, set);
+            const num = target.split('@')[0];
+            await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                `   ░▒▓█ *VOCAL_SEAL* █▓▒░\n\n` +
+                `   ✦ *TARGET* :: +${num}\n` +
+                `   ✦ *STATE* :: MUTED\n\n` +
+                `   " Their voice is\n     bound in silence. "`
+            ), msg);
+        } catch (err) { await safeWaReply(sock, remoteJid, `❌ ${err?.message || err}`, msg); }
+        return;
+    }
+
+    // .unmute @user / reply — unsilence a member
+    if (token === '.unmute') {
+        if (!remoteJid.endsWith('@g.us')) { await safeWaReply(sock, remoteJid, '❌ Only works inside a group.', msg); return; }
+        const target = resolveTargetJid(msg, args);
+        if (!target) { await safeWaReply(sock, remoteJid, '❌ Reply to a message, @mention, or provide a number.\nExample: .unmute @user', msg); return; }
+        try {
+            const meta = await sock.groupMetadata(remoteJid);
+            const isSenderAdmin = meta.participants.find(p => jidNormalizedUser(p.id) === jidNormalizedUser(senderJid))?.admin;
+            if (!isSenderAdmin) { await safeWaReply(sock, remoteJid, '⛔ You must be a Group Admin.', msg); return; }
+            const key = `${phoneNumber}:${remoteJid}`;
+            const set = mutedUsers.get(key) || new Set();
+            set.delete(jidNormalizedUser(target));
+            mutedUsers.set(key, set);
+            const num = target.split('@')[0];
+            await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                `   ░▒▓█ *VOCAL_RELEASE* █▓▒░\n\n` +
+                `   ✦ *TARGET* :: +${num}\n` +
+                `   ✦ *STATE* :: UNMUTED\n\n` +
+                `   " Their voice is\n     returned. "`
+            ), msg);
+        } catch (err) { await safeWaReply(sock, remoteJid, `❌ ${err?.message || err}`, msg); }
+        return;
+    }
+
+    // .welcome — premium poll flow to set the group welcome message
+    if (token === '.welcome') {
+        if (!remoteJid.endsWith('@g.us')) { await safeWaReply(sock, remoteJid, '❌ Only works inside a group.', msg); return; }
+        try {
+            const meta = await sock.groupMetadata(remoteJid);
+            const isSenderAdmin = meta.participants.find(p => jidNormalizedUser(p.id) === jidNormalizedUser(senderJid))?.admin;
+            if (!isSenderAdmin) { await safeWaReply(sock, remoteJid, '⛔ You must be a Group Admin.', msg); return; }
+        } catch (_) {}
+        welcomeGoodbyeSessions.set(phoneNumber, { step: 'action', type: 'welcome', group: remoteJid });
+        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+            `   ░▒▓█ *THRESHOLD_GREETS* █▓▒░\n\n` +
+            `   Configure the welcome\n` +
+            `   message for this group.`
+        ));
+        await sendMenuPoll(sock, remoteJid, phoneNumber, '✦ WELCOME MATRIX ✦', ['📝 Custom Message', '🎯 Default Message', '🚫 Disable'], ['wg_wel_custom', 'wg_wel_default', 'wg_wel_off']);
+        return;
+    }
+
+    // .goodbye — premium poll flow to set the group goodbye message
+    if (token === '.goodbye') {
+        if (!remoteJid.endsWith('@g.us')) { await safeWaReply(sock, remoteJid, '❌ Only works inside a group.', msg); return; }
+        try {
+            const meta = await sock.groupMetadata(remoteJid);
+            const isSenderAdmin = meta.participants.find(p => jidNormalizedUser(p.id) === jidNormalizedUser(senderJid))?.admin;
+            if (!isSenderAdmin) { await safeWaReply(sock, remoteJid, '⛔ You must be a Group Admin.', msg); return; }
+        } catch (_) {}
+        welcomeGoodbyeSessions.set(phoneNumber, { step: 'action', type: 'goodbye', group: remoteJid });
+        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+            `   ░▒▓█ *FAREWELL_PROTOCOL* █▓▒░\n\n` +
+            `   Configure the goodbye\n` +
+            `   message for this group.`
+        ));
+        await sendMenuPoll(sock, remoteJid, phoneNumber, '✦ GOODBYE MATRIX ✦', ['📝 Custom Message', '🎯 Default Message', '🚫 Disable'], ['wg_gb_custom', 'wg_gb_default', 'wg_gb_off']);
+        return;
+    }
+
     // ──────────────────────────────────────────────
     // 🖥️ SYSTEM COMMANDS (replies match phantom-x)
     // ──────────────────────────────────────────────
@@ -3559,15 +3737,17 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     }
 
     // .block <number> — block on host account
+    // .block — reply to/mention/provide a number to block that contact
     if (token === '.block') {
         if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Owner/Dev only.', msg); return; }
-        const num = (args[0] || '').replace(/\D/g, '');
-        if (num.length < 7) { await safeWaReply(sock, remoteJid, '❌ use: .block <number>', msg); return; }
+        const target = resolveTargetJid(msg, args);
+        if (!target) { await safeWaReply(sock, remoteJid, '❌ Reply to a message, @mention, or provide a number.\nExample: .block @user  |  .block 23480...', msg); return; }
+        const num = target.split('@')[0];
         try {
-            await sock.updateBlockStatus(`${num}@s.whatsapp.net`, 'block');
+            await sock.updateBlockStatus(target, 'block');
             await safeWaReply(sock, remoteJid, buildOmegaTerminal(
                 `   ░▒▓█ *BLOCK_CAST* █▓▒░\n\n` +
-                `   ✦ *TARGET* :: ${num}\n` +
+                `   ✦ *TARGET* :: +${num}\n` +
                 `   ✦ *STATE* :: BLOCKED\n\n` +
                 `   " They are cast from\n     the inner circle. "`
             ), msg);
@@ -3580,8 +3760,9 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     // .unblock <number>
     if (token === '.unblock') {
         if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Owner/Dev only.', msg); return; }
-        const num = (args[0] || '').replace(/\D/g, '');
-        if (num.length < 7) { await safeWaReply(sock, remoteJid, '❌ use: .unblock <number>', msg); return; }
+        const target = resolveTargetJid(msg, args);
+        if (!target) { await safeWaReply(sock, remoteJid, '❌ Reply to a message, @mention, or provide a number.\nExample: .unblock @user  |  .unblock 23480...', msg); return; }
+        const num = target.split('@')[0];
         try {
             await sock.updateBlockStatus(`${num}@s.whatsapp.net`, 'unblock');
             await safeWaReply(sock, remoteJid, buildOmegaTerminal(
@@ -3689,6 +3870,35 @@ function setupMessageHandler(sock, phoneNumber, tgId) {
             'WA-EVENT',
             `${phoneNumber}: messaging-history.set received | chats=${chats?.length || 0} contacts=${contacts?.length || 0} messages=${messages?.length || 0} isLatest=${!!isLatest}`
         );
+    });
+
+    // 🎉 WELCOME / GOODBYE — fire on member join / leave
+    sock.ev.on('group-participants.update', async (update) => {
+        const { id, participants, action } = update || {};
+        if (!id || !Array.isArray(participants)) return;
+        try {
+            const cfg = loadBotConfig(phoneNumber);
+            const which = action === 'add' ? 'welcomeMsg' : action === 'remove' ? 'goodbyeMsg' : null;
+            if (!which) return;
+            const setting = (cfg[which] || {})[id];
+            if (!setting || setting === 'off') return;
+            for (const p of participants) {
+                const num = p.split('@')[0];
+                const name = num;
+                let msgText;
+                if (setting === 'default') {
+                    msgText = which === 'welcomeMsg'
+                        ? `*Welcome to the group, ${name}!* 👋\nEnjoy your stay under the eclipse.`
+                        : `*Goodbye, ${name}.* The void will remember you.`;
+                } else {
+                    msgText = setting.replace(/{{name}}/g, name);
+                }
+                await sock.sendMessage(id, { text: msgText }).catch(()=>{});
+                log('WELCOME', `${phoneNumber}: ${action} message for ${num} in ${id}`);
+            }
+        } catch (err) {
+            logError('WELCOME', `${phoneNumber}: welcome/goodbye send failed`, err);
+        }
     });
 }
 
