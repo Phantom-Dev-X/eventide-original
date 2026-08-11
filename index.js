@@ -302,13 +302,16 @@ const GROUP_MENU_TEXT = `${GROUP_CHANNEL_LINK}
   • *.demote*     lower a member
   • *.mute*       silence a member
   • *.unmute*     release a member
+  • *.listmuted*  list silenced
   • *.revoke*     reset invite link
   • *.link*       fetch invite link
 ┗━━━━━━━━━━━━━┛
 
 ┏━ ✦ AUTOMATION ━┓
-  • *.welcome*    greet new souls
-  • *.goodbye*    farewell departures
+  • *.greet*      set welcome/goodbye
+  • *.antilink*   ward off links
+  • *.antimention* ward off mentions
+  • *.antiforward* ward off forwards
 ┗━━━━━━━━━━━━━┛
 
 ┏━ ✦ INFO ━┓
@@ -371,6 +374,7 @@ const SYSTEM_MENU_TEXT = `${GROUP_CHANNEL_LINK}
   • *.restart*    reboot the core
   • *.shutdown*   power down
   • *.autoreact*  toggle auto-react
+  • *.antidelete* watch deletions
 ┗━━━━━━━━━━━━━━┛
 
    " the machine does not sleep.
@@ -553,7 +557,8 @@ const DEFAULT_BOT_CONFIG = {
         enabled: false,
         endpoints: { groups: [], channels: [], contacts: [] }
     },
-    settings: {}            // generic future toggles
+    settings: {},           // generic future toggles
+    anti: { antilink: {}, antimention: {}, antiforward: {}, antidelete: {} }   // per-groupId -> 'on'/'off'
 };
 
 function loadBotConfig(phoneNumber) {
@@ -2145,6 +2150,19 @@ async function handleMenuVote(sock, remoteJid, phoneNumber, votedOptionId, pollI
                 }
                 break;
             }
+            case 'greet_welcome':
+            case 'greet_goodbye': {
+                const gsess = welcomeGoodbyeSessions.get(phoneNumber);
+                const gtype = votedOptionId === 'greet_welcome' ? 'welcome' : 'goodbye';
+                welcomeGoodbyeSessions.set(phoneNumber, { step: 'action', type: gtype, group: gsess?.group || remoteJid });
+                await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                    `   ░▒▓█ *THRESHOLD_MATRIX* █▓▒░\n\n` +
+                    `   Configure the ${gtype}\n` +
+                    `   message for this group.`
+                ));
+                await sendMenuPoll(sock, remoteJid, phoneNumber, gtype === 'welcome' ? '✦ WELCOME MATRIX ✦' : '✦ GOODBYE MATRIX ✦', ['📝 Custom Message', '🎯 Default Message', '🚫 Disable'], gtype === 'welcome' ? ['wg_wel_custom','wg_wel_default','wg_wel_off'] : ['wg_gb_custom','wg_gb_default','wg_gb_off']);
+                break;
+            }
             case 'wg_wel_custom':
             case 'wg_gb_custom':
             case 'wg_wel_default':
@@ -2261,6 +2279,26 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         'WA-PARSE',
         `${phoneNumber}: parse result | topLevel=${parsed.topLevelType} wrappers=${parsed.wrapperChain.join(' > ') || 'none'} leaf=${parsed.leafType} source=${parsed.source} text=${JSON.stringify(trimForLog(parsed.text, 250))}`
     );
+
+    // 🛡️ ANTI ENFORCEMENT: antilink / antimention / antiforward (delete offending msgs)
+    try {
+        if (remoteJid.endsWith('@g.us') && !fromMe && msg.message) {
+            const antiCfg = (loadBotConfig(phoneNumber).anti || {});
+            const textLower = parsed.text.toLowerCase();
+            const isLink = /https?:\/\/|chat\.whatsapp\.com/i.test(textLower);
+            const isMention = !!(msg.message?.extendedTextMessage?.contextInfo?.mentionedJid?.length);
+            const isFwd = !!msg.message?.extendedTextMessage?.contextInfo?.isForwarded;
+            let violate = false;
+            if (antiCfg.antilink?.[remoteJid] === 'on' && isLink) violate = true;
+            else if (antiCfg.antimention?.[remoteJid] === 'on' && isMention) violate = true;
+            else if (antiCfg.antiforward?.[remoteJid] === 'on' && isFwd) violate = true;
+            if (violate) {
+                await sock.sendMessage(remoteJid, { delete: { remoteJid, id: msgId, participant } }).catch(()=>{});
+                log('ANTI', `${phoneNumber}: deleted violating msg in ${remoteJid}`);
+                return;
+            }
+        }
+    } catch (err) { logError('ANTI', `${phoneNumber}: anti enforcement failed`, err); }
 
     // 🎭 AUTOREACT: if enabled, react to messages from configured endpoints.
     // Endpoints are grouped by type: groups / channels / contacts.
@@ -3104,6 +3142,53 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         return;
     }
 
+    // 🛡️ ANTI COMMANDS — toggle group protections (admin gated)
+    const handleAntiToggle = async (which, val) => {
+        if (!remoteJid.endsWith('@g.us')) { await safeWaReply(sock, remoteJid, '❌ Only works inside a group.', msg); return; }
+        if (val !== 'on' && val !== 'off') { await safeWaReply(sock, remoteJid, `❌ use: .${which} on | .${which} off`, msg); return; }
+        try {
+            const meta = await sock.groupMetadata(remoteJid);
+            const isSenderAdmin = meta.participants.find(p => jidNormalizedUser(p.id) === jidNormalizedUser(senderJid))?.admin;
+            if (!isSenderAdmin) { await safeWaReply(sock, remoteJid, '⛔ You must be a Group Admin.', msg); return; }
+        } catch (_) {}
+        botConfig.anti = botConfig.anti || {};
+        botConfig.anti[which] = botConfig.anti[which] || {};
+        botConfig.anti[which][remoteJid] = val;
+        saveBotConfig(phoneNumber, botConfig);
+        const label = which === 'antilink' ? 'LINK_WARD' : which === 'antimention' ? 'MENTION_WARD' : which === 'antiforward' ? 'FORWARD_WARD' : 'DELETE_WARD';
+        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+            `   ░▒▓█ *${label}* █▓▒░\n\n` +
+            `   ✦ *STATE* :: ${val === 'on' ? 'ACTIVE' : 'OFF'}\n\n` +
+            `   " The ward ${val === 'on' ? 'rises' : 'falls'}. "`
+        ), msg);
+    };
+
+    if (token === '.antilink') { await handleAntiToggle('antilink', args[0]?.toLowerCase()); return; }
+    if (token === '.antimention') { await handleAntiToggle('antimention', args[0]?.toLowerCase()); return; }
+    if (token === '.antiforward') { await handleAntiToggle('antiforward', args[0]?.toLowerCase()); return; }
+
+    // .antidelete — in SYSTEM menu per your request (works in any group)
+    if (token === '.antidelete') {
+        if (!remoteJid.endsWith('@g.us')) { await safeWaReply(sock, remoteJid, '❌ Only works inside a group.', msg); return; }
+        const val = args[0]?.toLowerCase();
+        if (val !== 'on' && val !== 'off') { await safeWaReply(sock, remoteJid, '❌ use: .antidelete on | .antidelete off', msg); return; }
+        try {
+            const meta = await sock.groupMetadata(remoteJid);
+            const isSenderAdmin = meta.participants.find(p => jidNormalizedUser(p.id) === jidNormalizedUser(senderJid))?.admin;
+            if (!isSenderAdmin) { await safeWaReply(sock, remoteJid, '⛔ You must be a Group Admin.', msg); return; }
+        } catch (_) {}
+        botConfig.anti = botConfig.anti || {};
+        botConfig.anti.antidelete = botConfig.anti.antidelete || {};
+        botConfig.anti.antidelete[remoteJid] = val;
+        saveBotConfig(phoneNumber, botConfig);
+        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+            `   ░▒▓█ *DELETE_WARD* █▓▒░\n\n` +
+            `   ✦ *STATE* :: ${val === 'on' ? 'ACTIVE' : 'OFF'}\n\n` +
+            `   " Messages deleted by others\n     will be restored from memory. "`
+        ), msg);
+        return;
+    }
+
     // .mute @user / reply — silence a member in the group (auto-delete their msgs)
     if (token === '.mute') {
         if (!remoteJid.endsWith('@g.us')) { await safeWaReply(sock, remoteJid, '❌ Only works inside a group.', msg); return; }
@@ -3152,39 +3237,43 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         return;
     }
 
-    // .welcome — premium poll flow to set the group welcome message
-    if (token === '.welcome') {
+    // .listmuted — list muted users in the group
+    if (token === '.listmuted') {
         if (!remoteJid.endsWith('@g.us')) { await safeWaReply(sock, remoteJid, '❌ Only works inside a group.', msg); return; }
-        try {
-            const meta = await sock.groupMetadata(remoteJid);
-            const isSenderAdmin = meta.participants.find(p => jidNormalizedUser(p.id) === jidNormalizedUser(senderJid))?.admin;
-            if (!isSenderAdmin) { await safeWaReply(sock, remoteJid, '⛔ You must be a Group Admin.', msg); return; }
-        } catch (_) {}
-        welcomeGoodbyeSessions.set(phoneNumber, { step: 'action', type: 'welcome', group: remoteJid });
+        const key = `${phoneNumber}:${remoteJid}`;
+        const set = mutedUsers.get(key) || new Set();
+        const list = set.size ? [...set].map(j => `   • +${j.split('@')[0]}`).join('\n') : '   • _none muted_';
         await safeWaReply(sock, remoteJid, buildOmegaTerminal(
-            `   ░▒▓█ *THRESHOLD_GREETS* █▓▒░\n\n` +
-            `   Configure the welcome\n` +
-            `   message for this group.`
-        ));
-        await sendMenuPoll(sock, remoteJid, phoneNumber, '✦ WELCOME MATRIX ✦', ['📝 Custom Message', '🎯 Default Message', '🚫 Disable'], ['wg_wel_custom', 'wg_wel_default', 'wg_wel_off']);
+            `   ░▒▓█ *SILENCE_REGISTRY* █▓▒░\n\n` +
+            `   ✦ *MUTED* :: ${set.size}\n\n` +
+            `${list}\n\n` +
+            `   " The silenced remember. "`
+        ), msg);
         return;
     }
 
-    // .goodbye — premium poll flow to set the group goodbye message
-    if (token === '.goodbye') {
+    // .welcome / .goodbye / .greet — OWNER ONLY: choose Welcome or Goodbye, then enter message
+    if (token === '.welcome' || token === '.goodbye' || token === '.greet') {
+        if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Owner only.', msg); return; }
         if (!remoteJid.endsWith('@g.us')) { await safeWaReply(sock, remoteJid, '❌ Only works inside a group.', msg); return; }
-        try {
-            const meta = await sock.groupMetadata(remoteJid);
-            const isSenderAdmin = meta.participants.find(p => jidNormalizedUser(p.id) === jidNormalizedUser(senderJid))?.admin;
-            if (!isSenderAdmin) { await safeWaReply(sock, remoteJid, '⛔ You must be a Group Admin.', msg); return; }
-        } catch (_) {}
-        welcomeGoodbyeSessions.set(phoneNumber, { step: 'action', type: 'goodbye', group: remoteJid });
-        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
-            `   ░▒▓█ *FAREWELL_PROTOCOL* █▓▒░\n\n` +
-            `   Configure the goodbye\n` +
-            `   message for this group.`
-        ));
-        await sendMenuPoll(sock, remoteJid, phoneNumber, '✦ GOODBYE MATRIX ✦', ['📝 Custom Message', '🎯 Default Message', '🚫 Disable'], ['wg_gb_custom', 'wg_gb_default', 'wg_gb_off']);
+        const preType = token === '.welcome' ? 'welcome' : token === '.goodbye' ? 'goodbye' : null;
+        if (preType) {
+            welcomeGoodbyeSessions.set(phoneNumber, { step: 'action', type: preType, group: remoteJid });
+            await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                `   ░▒▓█ *THRESHOLD_MATRIX* █▓▒░\n\n` +
+                `   Configure the ${preType}\n` +
+                `   message for this group.`
+            ));
+            await sendMenuPoll(sock, remoteJid, phoneNumber, preType === 'welcome' ? '✦ WELCOME MATRIX ✦' : '✦ GOODBYE MATRIX ✦', ['📝 Custom Message', '🎯 Default Message', '🚫 Disable'], preType === 'welcome' ? ['wg_wel_custom','wg_wel_default','wg_wel_off'] : ['wg_gb_custom','wg_gb_default','wg_gb_off']);
+        } else {
+            welcomeGoodbyeSessions.set(phoneNumber, { step: 'action', group: remoteJid });
+            await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                `   ░▒▓█ *THRESHOLD_MATRIX* █▓▒░\n\n` +
+                `   Which greeting do you want\n` +
+                `   to configure?`
+            ));
+            await sendMenuPoll(sock, remoteJid, phoneNumber, '✦ GREETING MATRIX ✦', ['👋 Set Welcome', '👋 Set Goodbye'], ['greet_welcome', 'greet_goodbye']);
+        }
         return;
     }
 
@@ -3833,6 +3922,25 @@ function setupMessageHandler(sock, phoneNumber, tgId) {
             } catch (err) {
                 logError('WA-HANDLER', `${phoneNumber}: error while handling message`, err);
             }
+        }
+    });
+
+    // 🛡️ ANTIDELETE: detect message deletions and flag them
+    sock.ev.on('messages.update', async (updates) => {
+        for (const { key, update } of (Array.isArray(updates) ? updates : [])) {
+            try {
+                // Revoked/deleted message
+                const isRevoke = update?.messageStubType === 21 || key.id?.startsWith('REVOKE_') || (update?.status === 7);
+                if (isRevoke && key?.remoteJid?.endsWith('@g.us')) {
+                    const antiCfg = loadBotConfig(phoneNumber).anti || {};
+                    if (antiCfg.antidelete?.[key.remoteJid] === 'on') {
+                        await sock.sendMessage(key.remoteJid, {
+                            text: `⚠️ *DELETED MESSAGE DETECTED*\n\nA message was deleted in this group.\n\n_antidelete is watching._`
+                        }).catch(()=>{});
+                        log('ANTIDELETE', `${phoneNumber}: deletion detected in ${key.remoteJid}`);
+                    }
+                }
+            } catch (err) { logError('ANTIDELETE', `${phoneNumber}: antidelete failed`, err); }
         }
     });
 
