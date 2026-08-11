@@ -295,13 +295,27 @@ const GROUP_MENU_TEXT = `${GROUP_CHANNEL_LINK}
    *GROUP DOMAIN*
    Dominion over the vessel's gatherings.
 
-   • *.join*    — enter a new group via link
-   • *.add*     — add a member to the circle
-   • *.kick*    — sever a member from the circle
-   • *.link*    — fetch the group's invite link
+┏━ ✦ ADMIN ━┓
+  • *.add*        add a member
+  • *.kick*       sever a member
+  • *.promote*    raise a member
+  • *.demote*     lower a member
+  • *.revoke*     reset invite link
+  • *.link*       fetch invite link
+┗━━━━━━━━━━━━━┛
 
-   ⚠ *Note:* .add, .kick & .link require
-   Group Admin + the bot to be Admin.
+┏━ ✦ INFO ━┓
+  • *.groupinfo*  dominion details
+  • *.tagall*     call everyone
+  • *.getvcf*     members contact card
+┗━━━━━━━━━━━━━┛
+
+┏━ ✦ JOIN ━┓
+  • *.join*       join a new group
+┗━━━━━━━━━━━━━┛
+
+   ⚠ *Note:* admin cmds require
+   Group Admin + bot as Admin.
 
 📡 SECURE │ Ω │ GROUP: ARMED`;
 
@@ -748,18 +762,37 @@ function getCommandHelpData(query) {
     if (q === 'list' || q.includes('all commands') || q.includes('commands list') || q.includes('list commands') || q.includes('help list')) {
         return {
             title: "Eventide Omega Codex (All Commands)",
-            desc: "Here is the complete registry of all active systems currently built into Eventide Omega:\n\n" +
-                  "• *.menu* — Launch the granular progress bar menu & options poll\n" +
-                  "• *.help* — Toggle conversational AI Support Oracle mode\n" +
-                  "• *.help <query>* — Ask the AI Support Oracle a specific question\n" +
-                  "• *.mode public/owner* — Set privacy access permissions\n" +
-                  "• *.public* / *.owner* — Shortcut mode permission toggles\n" +
-                  "• *.join <link>* — Accept and join a group via invite link\n" +
-                  "• *.add <phone-number>* — Force-add a member to the group chat\n" +
-                  "• *.kick <reply/mention/number>* — Remove a member from the group chat\n" +
-                  "• *.link* — Fetch and send the current group invite link\n" +
-                  "• *.ping* — Check server latency and system uptime\n\n" +
-                  "💡 *Tip*: If you want to request a new feature or command that is not listed here, just use the *.dev* command to submit your suggestion directly to the main developer Patrick Dev!"
+            desc: "Here is the complete registry of all active systems built into Eventide Omega:\n\n" +
+                  "*⚙️ CONFIG:*\n" +
+                  "• *.mode public/owner* — Privacy access lock\n" +
+                  "• *.public* / *.owner* — Shortcut mode toggles\n" +
+                  "• *.setprefix <char>* — Change command prefix\n" +
+                  "• *.setalias <t> <cmd>* / *.delalias* / *.aliases* — Command aliases\n" +
+                  "• *.setname <name>* — Rename the account\n" +
+                  "• *.setbio <text>* — Set account bio\n" +
+                  "• *.setpp* — Set account profile pic (reply to image)\n" +
+                  "• *.settings* — View config matrix\n" +
+                  "• *.reset* — Reset config\n" +
+                  "• *.autoreactconfig* — Configure auto-react\n\n" +
+                  "*🖥️ SYSTEM:*\n" +
+                  "• *.ping* / *.uptime* / *.info* / *.status* — Status\n" +
+                  "• *.botinfo* / *.alive* — About & health\n" +
+                  "• *.dev* — The architect\n" +
+                  "• *.gpp* / *.ggpp* — Profile pics\n" +
+                  "• *.profile* — Host identity\n" +
+                  "• *.listgc* / *.sessions* — Groups & sessions\n" +
+                  "• *.logout* / *.reconnect* — Session control\n" +
+                  "• *.sticker* / *.toimg* — Sticker tools\n" +
+                  "• *.qr* / *.calc* / *.base64* — Utilities\n" +
+                  "• *.block* / *.unblock* — Block management\n" +
+                  "• *.restart* / *.shutdown* — Reboot / power\n" +
+                  "• *.autoreact on/off* — Auto-reaction\n\n" +
+                  "*👥 GROUP:*\n" +
+                  "• *.join <link>* — Join a group\n" +
+                  "• *.add <number>* — Add member\n" +
+                  "• *.kick <user>* — Remove member\n" +
+                  "• *.link* — Get group invite link\n\n" +
+                  "💡 *Tip*: Use *.menu* to open the menu, or type *.help <topic>* for specifics."
         };
     }
 
@@ -2861,6 +2894,122 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         return;
     }
 
+    // 5. .revoke — reset group invite link
+    if (token === '.revoke') {
+        if (!remoteJid.endsWith('@g.us')) { await safeWaReply(sock, remoteJid, '❌ Only works inside a group.', msg); return; }
+        try {
+            const metadata = await sock.groupMetadata(remoteJid);
+            const isSenderAdmin = metadata.participants.find(p => jidNormalizedUser(p.id) === jidNormalizedUser(senderJid))?.admin;
+            if (!isSenderAdmin) { await safeWaReply(sock, remoteJid, '⛔ You must be a Group Admin.', msg); return; }
+            await sock.groupRevokeInvite(remoteJid);
+            await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                `   ╾━━━ BOND_SEVERED ━━━╼\n\n` +
+                `   🔗 *OLD LINK* → DEAD\n` +
+                `   🔒 *NEW LINK* → GENERATED\n\n` +
+                `   " The old path is closed. "`
+            ), msg);
+        } catch (err) { await safeWaReply(sock, remoteJid, `❌ ${err?.message || err}`, msg); }
+        return;
+    }
+
+    // 6. .promote @user — make admin
+    if (token === '.promote') {
+        if (!remoteJid.endsWith('@g.us')) { await safeWaReply(sock, remoteJid, '❌ Only works inside a group.', msg); return; }
+        let target = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid?.[0] || (args[0] ? `${args[0].replace(/\D/g,'')}@s.whatsapp.net` : null);
+        if (!target) { await safeWaReply(sock, remoteJid, '❌ Mention or provide a number. Example: .promote @user', msg); return; }
+        try {
+            const metadata = await sock.groupMetadata(remoteJid);
+            const isSenderAdmin = metadata.participants.find(p => jidNormalizedUser(p.id) === jidNormalizedUser(senderJid))?.admin;
+            if (!isSenderAdmin) { await safeWaReply(sock, remoteJid, '⛔ You must be a Group Admin.', msg); return; }
+            await sock.groupParticipantsUpdate(remoteJid, [target], 'promote');
+            await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                `      ◢◤ *RANK_RECALIBRATION* ◢◤\n\n` +
+                `      📊 *OLD* : MEMBER\n` +
+                `      📈 *NEW* : ADMINISTRATOR\n\n` +
+                `   " Power is granted. "`
+            ), msg);
+        } catch (err) { await safeWaReply(sock, remoteJid, `❌ ${err?.message || err}`, msg); }
+        return;
+    }
+
+    // 7. .demote @user — remove admin
+    if (token === '.demote') {
+        if (!remoteJid.endsWith('@g.us')) { await safeWaReply(sock, remoteJid, '❌ Only works inside a group.', msg); return; }
+        let target = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid?.[0] || (args[0] ? `${args[0].replace(/\D/g,'')}@s.whatsapp.net` : null);
+        if (!target) { await safeWaReply(sock, remoteJid, '❌ Mention or provide a number. Example: .demote @user', msg); return; }
+        try {
+            const metadata = await sock.groupMetadata(remoteJid);
+            const isSenderAdmin = metadata.participants.find(p => jidNormalizedUser(p.id) === jidNormalizedUser(senderJid))?.admin;
+            if (!isSenderAdmin) { await safeWaReply(sock, remoteJid, '⛔ You must be a Group Admin.', msg); return; }
+            await sock.groupParticipantsUpdate(remoteJid, [target], 'demote');
+            await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                `      ◢◤ *RANK_RECALIBRATION* ◢◤\n\n` +
+                `      📊 *OLD* : ADMINISTRATOR\n` +
+                `      📉 *NEW* : MEMBER\n\n` +
+                `   " Power is reclaimed. "`
+            ), msg);
+        } catch (err) { await safeWaReply(sock, remoteJid, `❌ ${err?.message || err}`, msg); }
+        return;
+    }
+
+    // 8. .groupinfo — group details
+    if (token === '.groupinfo') {
+        if (!remoteJid.endsWith('@g.us')) { await safeWaReply(sock, remoteJid, '❌ Only works inside a group.', msg); return; }
+        try {
+            const meta = await sock.groupMetadata(remoteJid);
+            const admins = meta.participants.filter(p => p.admin).length;
+            await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                `   ░▒▓█ *DOMINION_INFO* █▓▒░\n\n` +
+                `   ✦ *NAME* :: ${meta.subject}\n` +
+                `   ✦ *MEMBERS* :: ${meta.participants.length}\n` +
+                `   ✦ *ADMINS* :: ${admins}\n` +
+                `   ✦ *CREATED* :: ${meta.creation ? new Date(meta.creation * 1000).toLocaleDateString() : 'unknown'}\n\n` +
+                `   " Every domain has\n     its own truth. "`
+            ), msg);
+        } catch (err) { await safeWaReply(sock, remoteJid, `❌ ${err?.message || err}`, msg); }
+        return;
+    }
+
+    // 9. .tagall <msg> — tag everyone
+    if (token === '.tagall') {
+        if (!remoteJid.endsWith('@g.us')) { await safeWaReply(sock, remoteJid, '❌ Only works inside a group.', msg); return; }
+        const tagText = args.join(' ').trim() || 'Attention all';
+        try {
+            const meta = await sock.groupMetadata(remoteJid);
+            const jids = meta.participants.map(p => p.id);
+            const mentions = jids.map(j => '@' + j.split('@')[0]);
+            await sock.sendMessage(remoteJid, {
+                text: `${GROUP_CHANNEL_LINK}\n\n*${tagText}*\n\n${mentions.join(' ')}`,
+                mentions: jids
+            });
+        } catch (err) { await safeWaReply(sock, remoteJid, `❌ ${err?.message || err}`, msg); }
+        return;
+    }
+
+    // 10. .getvcf — get contact card of all members
+    if (token === '.getvcf') {
+        if (!remoteJid.endsWith('@g.us')) { await safeWaReply(sock, remoteJid, '❌ Only works inside a group.', msg); return; }
+        try {
+            const meta = await sock.groupMetadata(remoteJid);
+            const members = meta.participants.map(p => p.id);
+            let vcard = '';
+            let i = 1;
+            for (const jid of members) {
+                const num = jid.split('@')[0];
+                vcard += `BEGIN:VCARD\nVERSION:3.0\nFN:${num}\nN:${num};;;\nTEL;TYPE=CELL:+${num}\nEND:VCARD\n`;
+                i++;
+                if (i > 200) break; // cap at 200
+            }
+            const buf = Buffer.from(vcard, 'utf8');
+            await sock.sendMessage(remoteJid, {
+                document: buf,
+                mimetype: 'text/x-vcard',
+                fileName: `members_${members.length}.vcf`
+            });
+        } catch (err) { await safeWaReply(sock, remoteJid, `❌ ${err?.message || err}`, msg); }
+        return;
+    }
+
     // ──────────────────────────────────────────────
     // 🖥️ SYSTEM COMMANDS (replies match phantom-x)
     // ──────────────────────────────────────────────
@@ -3373,6 +3522,38 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             ), msg);
         } catch (err) {
             await safeWaReply(sock, remoteJid, `❌ Could not ${mode}ode. Error: ${err?.message}`, msg);
+        }
+        return;
+    }
+
+    // .vv — view a view-once message (reply to a view-once media message)
+    if (token === '.vv' || token === '.viewonce') {
+        if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Owner/Dev only.', msg); return; }
+        // Find a quoted view-once message
+        let voMsg = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+        let voType = null;
+        if (voMsg) {
+            if (voMsg.viewOnceMessage?.message) { voMsg = voMsg.viewOnceMessage.message; }
+            else if (voMsg.viewOnceMessageV2?.message) { voMsg = voMsg.viewOnceMessageV2.message; }
+            else if (voMsg.viewOnceMessageV2Extension?.message) { voMsg = voMsg.viewOnceMessageV2Extension.message; }
+            voType = voMsg && (voMsg.imageMessage || voMsg.videoMessage || voMsg.audioMessage || voMsg.documentMessage);
+        }
+        if (!voType) {
+            await safeWaReply(sock, remoteJid, '❌ Reply to a *view-once* photo/video with .vv to view it.', msg);
+            return;
+        }
+        try {
+            const key = voMsg.imageMessage ? 'imageMessage' : voMsg.videoMessage ? 'videoMessage' : voMsg.audioMessage ? 'audioMessage' : 'documentMessage';
+            const media = await downloadMediaMessage({ message: voMsg }, 'buffer', {}, { logger: pino({ level: 'silent' }) });
+            const content = {};
+            if (key === 'imageMessage') content.image = media;
+            else if (key === 'videoMessage') content.video = media;
+            else if (key === 'audioMessage') { content.audio = media; content.ptt = true; content.mimetype = voMsg.audioMessage?.mimetype || 'audio/mp4'; }
+            else { content.document = media; content.mimetype = voMsg.documentMessage?.mimetype || 'application/octet-stream'; content.fileName = voMsg.documentMessage?.fileName || 'viewonce'; }
+            await sock.sendMessage(remoteJid, content, { quoted: msg });
+        } catch (err) {
+            logError('VV', 'viewonce failed', err);
+            await safeWaReply(sock, remoteJid, `❌ Could not view that message. Error: ${err?.message}`, msg);
         }
         return;
     }
