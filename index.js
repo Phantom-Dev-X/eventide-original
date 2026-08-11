@@ -16,8 +16,6 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import https from 'https';
-import sharp from 'sharp';
-import qrcode from 'qrcode';
 
 // Import Supabase Sync Service
 import {
@@ -979,6 +977,11 @@ function fetchBuffer(url) {
         req.setTimeout(15000, () => { req.destroy(new Error('Timeout')); });
     });
 }
+
+// Lazy-load optional native deps so the bot boots even if a lib fails to
+// install on the host (e.g. sharp native binary). Each returns null on failure.
+function loadSharp() { try { return require('sharp'); } catch (_) { return null; } }
+function loadQrcode() { try { return require('qrcode'); } catch (_) { return null; } }
 
 function getStoredSessionDirectories(dirPath = AUTH_DIR) {
     if (!fs.existsSync(dirPath)) return [];
@@ -3277,12 +3280,14 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         if (!qimg && !qvid) { await safeWaReply(sock, remoteJid, '❌ Reply to an image/video with .sticker to make a sticker.', msg); return; }
         try {
             const srcMsg = qimg ? { imageMessage: qimg } : { videoMessage: qvid };
+            const sharpMod = loadSharp();
+            if (!sharpMod) { await safeWaReply(sock, remoteJid, '❌ Sticker processing unavailable on this host.', msg); return; }
             const buf = await downloadMediaMessage({ message: srcMsg }, 'buffer', {}, { logger: pino({ level: 'silent' }) });
             let webp;
             if (qimg) {
-                webp = await sharp(buf).resize(512, 512, { fit: 'contain', background: { r:0,g:0,b:0,alpha:0 } }).webp().toBuffer();
+                webp = await sharpMod(buf).resize(512, 512, { fit: 'contain', background: { r:0,g:0,b:0,alpha:0 } }).webp().toBuffer();
             } else {
-                webp = await sharp(buf, { animated: true }).resize(512, 512, { fit: 'contain', background: { r:0,g:0,b:0,alpha:0 } }).webp().toBuffer();
+                webp = await sharpMod(buf, { animated: true }).resize(512, 512, { fit: 'contain', background: { r:0,g:0,b:0,alpha:0 } }).webp().toBuffer();
             }
             await sock.sendMessage(remoteJid, { sticker: webp }, { quoted: msg });
         } catch (err) {
@@ -3298,8 +3303,10 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         const qstk = quoted?.stickerMessage;
         if (!qstk) { await safeWaReply(sock, remoteJid, '❌ Reply to a sticker with .toimg.', msg); return; }
         try {
+            const sharpMod = loadSharp();
+            if (!sharpMod) { await safeWaReply(sock, remoteJid, '❌ Image processing unavailable on this host.', msg); return; }
             const buf = await downloadMediaMessage({ message: { stickerMessage: qstk } }, 'buffer', {}, { logger: pino({ level: 'silent' }) });
-            const png = await sharp(buf).png().toBuffer();
+            const png = await sharpMod(buf).png().toBuffer();
             await sock.sendMessage(remoteJid, { image: png }, { quoted: msg });
         } catch (err) {
             logError('TOIMG', 'toimg failed', err);
@@ -3313,7 +3320,9 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         const data = args.join(' ').trim();
         if (!data) { await safeWaReply(sock, remoteJid, '❌ use: .qr <text-or-url>', msg); return; }
         try {
-            const png = await qrcode.toBuffer(data, { width: 512, margin: 1 });
+            const qrcodeMod = loadQrcode();
+            if (!qrcodeMod) { await safeWaReply(sock, remoteJid, '❌ QR generation unavailable on this host.', msg); return; }
+            const png = await qrcodeMod.toBuffer(data, { width: 512, margin: 1 });
             await sock.sendMessage(remoteJid, { image: png, caption: `${GROUP_CHANNEL_LINK}\n\n*QR GENERATED*` }, { quoted: msg });
         } catch (err) {
             await safeWaReply(sock, remoteJid, `❌ Could not generate QR. Error: ${err?.message}`, msg);
