@@ -3041,6 +3041,9 @@ async function sendMenuPoll(sock, remoteJid, phoneNumber, question, options, ids
             messageSecret: secret
         }
     });
+    if (!pollMsg?.key?.id) {
+        throw new Error('WhatsApp rejected the poll. Try the command again.');
+    }
 
     const actualSecret =
         pollMsg?.message?.messageContextInfo?.messageSecret ||
@@ -5592,6 +5595,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
 
     // 🎮 TIC TAC TOE — premium arena
     if (token === '.tictactoe' || token === '.ttt' || token === '.xo') {
+      try {
         const sub = (args[0] || '').toLowerCase();
         const live = getTttGame(phoneNumber, remoteJid);
         if (sub === 'yes' || sub === 'accept') {
@@ -5668,11 +5672,16 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
                 `   1 min a turn · 3 min of silence kills it.`
             )
         });
-        const openPoll = await sendMenuPoll(sock, remoteJid, phoneNumber, '✦ OPEN THE GRID ✦', ['🤖 Play vs Bot', '👤 Play vs Human'], ['ttt_vs_bot', 'ttt_vs_p']);
+        const openPoll = await sendMenuPoll(sock, remoteJid, phoneNumber, 'OPEN THE GRID', ['Play vs Bot', 'Play vs Human'], ['ttt_vs_bot', 'ttt_vs_p']);
         const sess = tttSetupSessions.get(phoneNumber) || {};
         sess.modePollKey = openPoll?.key || null;
         tttSetupSessions.set(phoneNumber, sess);
         return;
+      } catch (err) {
+        logError('TTT', `${phoneNumber}: .ttt failed`, err);
+        await safeWaReply(sock, remoteJid, `❌ Arena failed to open.\n${err?.message || err}\n\nTry *.ttt* again.`, msg).catch(() => {});
+        return;
+      }
     }
 
     // ──────────────────────────────────────────────
