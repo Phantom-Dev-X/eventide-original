@@ -4,6 +4,8 @@ package-lock.json
 
 # Sessions (user auth data)
 sessions/
+web_users.json
+web_id_sessions.json
 
 # Logs
 *.log

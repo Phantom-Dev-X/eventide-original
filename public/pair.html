@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Eventide Omega · Pair Your Bot</title>
+    <style>
+        *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+        :root{
+            --bg:#06090f;--bg2:#0a0f1a;--bg3:#0d1424;
+            --card:#111827;--card2:#151f32;--input:#0f1729;
+            --border:#1a2540;--border2:#243352;
+            --accent:#06b6d4;--accent2:#22d3ee;
+            --glow:rgba(6,182,212,0.35);--glow2:rgba(6,182,212,0.15);
+            --success:#10b981;--error:#ef4444;
+            --text:#e2e8f0;--text2:#94a3b8;--text3:#64748b;
+        }
+        body{font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+        .hero-bg{position:fixed;inset:0;overflow:hidden;z-index:0}
+        .hero-bg::before{content:'';position:absolute;top:-40%;left:-20%;width:80%;height:80%;background:radial-gradient(circle,rgba(6,182,212,0.07) 0%,transparent 70%)}
+        .hero-bg::after{content:'';position:absolute;bottom:-30%;right:-10%;width:60%;height:60%;background:radial-gradient(circle,rgba(6,182,212,0.05) 0%,transparent 70%)}
+        .grid-bg{position:fixed;inset:0;background-image:linear-gradient(rgba(6,182,212,0.03) 1px,transparent 1px),linear-gradient(90deg,rgba(6,182,212,0.03) 1px,transparent 1px);background-size:60px 60px;mask-image:radial-gradient(ellipse 80% 60% at 50% 40%,#000 20%,transparent 100%)}
+
+        .wrap{position:relative;z-index:2;width:100%;max-width:440px}
+        .back-link{display:flex;align-items:center;gap:6px;color:var(--text3);text-decoration:none;font-size:13px;margin-bottom:20px;transition:color .2s}
+        .back-link:hover{color:var(--accent2)}
+        .login-card{background:var(--card);border:1px solid var(--border);border-radius:24px;padding:36px 32px;position:relative;overflow:hidden;box-shadow:0 0 80px rgba(6,182,212,0.06),0 25px 50px rgba(0,0,0,0.4)}
+        .login-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,transparent,var(--accent),transparent);animation:shimmer 3s ease-in-out infinite}
+        @keyframes shimmer{0%,100%{opacity:.3}50%{opacity:1}}
+        .login-header{text-align:center;margin-bottom:28px}
+        .login-icon{width:64px;height:64px;margin:0 auto 16px;background:var(--glow2);border:1px solid var(--border2);border-radius:20px;display:flex;align-items:center;justify-content:center;animation:iconFloat 4s ease-in-out infinite}
+        @keyframes iconFloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
+        .login-icon svg{width:32px;height:32px;stroke:var(--accent2);fill:none;stroke-width:1.5}
+        .login-title{font-size:22px;font-weight:800;margin-bottom:4px}
+        .login-sub{font-size:13px;color:var(--text3)}
+
+        .login-tabs{display:flex;gap:4px;background:var(--input);border-radius:12px;padding:4px;margin-bottom:24px}
+        .login-tab{flex:1;padding:10px;text-align:center;font-size:13px;font-weight:600;color:var(--text3);border-radius:9px;cursor:pointer;transition:all .3s;border:none;background:none}
+        .login-tab.active{background:var(--accent);color:var(--bg);box-shadow:0 2px 12px var(--glow)}
+
+        .form-group{margin-bottom:18px}
+        .form-label{display:block;font-size:12px;font-weight:600;color:var(--text3);letter-spacing:.8px;text-transform:uppercase;margin-bottom:6px}
+        .input-wrap{display:flex;align-items:center;background:var(--input);border:1.5px solid var(--border);border-radius:12px;padding:0 14px;transition:all .3s}
+        .input-wrap:focus-within{border-color:var(--accent);box-shadow:0 0 0 4px var(--glow2)}
+        .input-wrap .ico{width:18px;height:18px;stroke:var(--text3);fill:none;stroke-width:2;margin-right:10px;flex-shrink:0}
+        .input-wrap input{flex:1;background:none;border:none;outline:none;color:var(--text);font-size:15px;padding:13px 0;font-family:inherit}
+        .input-wrap input::placeholder{color:#3b4a6b}
+        .btn{width:100%;padding:14px;border:none;border-radius:12px;font-size:15px;font-weight:700;cursor:pointer;transition:all .3s;letter-spacing:.5px}
+        .btn-primary{background:linear-gradient(135deg,var(--accent),#0891b2);color:var(--bg);box-shadow:0 4px 20px var(--glow)}
+        .btn-primary:hover:not(:disabled){transform:translateY(-2px);box-shadow:0 8px 30px var(--glow)}
+        .btn-primary:disabled{opacity:.5;cursor:not-allowed}
+        .spinner{display:inline-block;width:18px;height:18px;border:2.5px solid rgba(0,0,0,.2);border-top-color:var(--bg);border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:8px}
+        @keyframes spin{to{transform:rotate(360deg)}}
+
+        .error-msg{background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.2);border-radius:10px;padding:10px 14px;font-size:13px;color:var(--error);margin-bottom:14px;display:none}
+        .login-footer{text-align:center;margin-top:20px;font-size:12px;color:var(--text3)}
+        .login-footer a{color:var(--accent2);text-decoration:none;font-weight:500}
+
+        .login-section{display:none;animation:fadeIn .4s ease}
+        .login-section.active{display:block}
+        @keyframes fadeIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+
+        .code-display{text-align:center;margin:20px 0}
+        .code-box{display:inline-flex;gap:5px;padding:18px 24px;background:var(--input);border:2px solid var(--accent);border-radius:16px;box-shadow:0 0 40px var(--glow)}
+        .code-char{font-family:'Courier New',monospace;font-size:32px;font-weight:900;color:var(--accent2);min-width:24px;text-align:center;animation:charPop .4s ease backwards}
+        .code-char.sep{color:var(--text3);font-weight:400;min-width:10px}
+        @keyframes charPop{from{opacity:0;transform:scale(.3)}to{opacity:1;transform:scale(1)}}
+        .code-label{font-size:12px;color:var(--text3);margin-top:12px;letter-spacing:.5px}
+        .code-copy{margin-top:10px;padding:7px 18px;background:var(--glow2);border:1px solid var(--border);border-radius:8px;color:var(--accent2);font-size:12px;cursor:pointer;transition:all .2s}
+        .code-copy:hover{background:var(--accent);color:var(--bg)}
+
+        .info-box{background:rgba(6,182,212,0.06);border:1px solid rgba(6,182,212,0.2);border-radius:10px;padding:12px 14px;font-size:12px;color:var(--text2);margin-top:12px;line-height:1.6}
+        .info-box strong{color:var(--accent2)}
+
+        .status-bar{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:16px;padding:10px;border-radius:10px;font-size:13px;font-weight:600}
+        .status-bar.waiting{background:var(--glow2);color:var(--accent2);border:1px solid rgba(6,182,212,.2)}
+        .status-bar.connected{background:rgba(16,185,129,.15);color:var(--success);border:1px solid rgba(16,185,129,.2)}
+        .status-bar.err{background:rgba(239,68,68,.1);color:var(--error);border:1px solid rgba(239,68,68,.2)}
+        .pulse-dot{width:8px;height:8px;border-radius:50%;animation:pulse 1.5s ease-in-out infinite}
+        .waiting .pulse-dot{background:var(--accent)}
+        .connected .pulse-dot{background:var(--success);animation:none}
+        .err .pulse-dot{background:var(--error);animation:none}
+        @keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(1.4)}}
+
+        .mini-steps{display:flex;flex-direction:column;gap:8px;margin-top:16px}
+        .mini-step{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--text2)}
+        .mini-step .num{width:24px;height:24px;background:var(--glow2);border:1px solid var(--border);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:var(--accent2);flex-shrink:0}
+
+        .success-icon{width:64px;height:64px;margin:0 auto 16px;background:rgba(16,185,129,.15);border-radius:50%;display:flex;align-items:center;justify-content:center;animation:popIn .5s ease}
+        .success-icon svg{width:32px;height:32px;stroke:var(--success);fill:none;stroke-width:2.5}
+        @keyframes popIn{0%{transform:scale(0)}60%{transform:scale(1.2)}100%{transform:scale(1)}}
+        .success-title{font-size:20px;font-weight:800;text-align:center;color:var(--success);margin-bottom:6px}
+        .success-text{text-align:center;font-size:13px;color:var(--text2);line-height:1.6}
+    </style>
+</head>
+<body>
+<div class="hero-bg"></div>
+<div class="grid-bg"></div>
+
+<div class="wrap">
+    <a href="/login.html" class="back-link">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+        Back to login
+    </a>
+
+    <div class="login-card">
+        <div class="login-header">
+            <div class="login-icon">
+                <svg viewBox="0 0 24 24"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
+            </div>
+            <div class="login-title">Pair Your WhatsApp</div>
+            <div class="login-sub">Generate a code or enter your Session ID</div>
+        </div>
+
+        <div class="login-tabs">
+            <button class="login-tab active" onclick="switchTab('pair')" id="tab-pair">New Pairing</button>
+            <button class="login-tab" onclick="switchTab('session')" id="tab-session">Session ID</button>
+        </div>
+
+        <!-- PAIR TAB -->
+        <div class="login-section active" id="sec-pair">
+            <div class="error-msg" id="err-pair"></div>
+            <div class="form-group">
+                <label class="form-label">WhatsApp Number</label>
+                <div class="input-wrap">
+                    <svg class="ico" viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+                    <input type="tel" id="phone-input" placeholder="2348102756072" maxlength="15">
+                </div>
+                <p style="font-size:11px;color:var(--text3);margin-top:6px">Country code + number, no + or spaces</p>
+            </div>
+            <button class="btn btn-primary" id="btn-pair" onclick="requestPair()">⚡ Generate Pairing Code</button>
+        </div>
+
+        <!-- SESSION ID TAB -->
+        <div class="login-section" id="sec-session">
+            <div class="error-msg" id="err-session"></div>
+            <div class="form-group">
+                <label class="form-label">Session ID</label>
+                <div class="input-wrap">
+                    <svg class="ico" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                    <input type="text" id="session-input" placeholder="EO-XXXXXXXXXXXXXXXXXX" autocomplete="off">
+                </div>
+                <p style="font-size:11px;color:var(--text3);margin-top:6px">Your Session ID was sent to your WhatsApp after pairing</p>
+            </div>
+            <button class="btn btn-primary" id="btn-session" onclick="loginSession()">🔑 Access Dashboard</button>
+        </div>
+
+        <!-- PAIRING CODE DISPLAY -->
+        <div class="login-section" id="sec-code">
+            <div class="code-display">
+                <div class="code-box" id="code-box"></div>
+                <p class="code-label">Enter this code in WhatsApp → Linked Devices</p>
+                <button class="code-copy" onclick="copyCode()">📋 Copy Code</button>
+            </div>
+            <div class="info-box">
+                📱 After you enter the code and WhatsApp connects, your bot will send you a <strong>Session ID</strong> in WhatsApp. Keep it safe — use it to log into the dashboard anytime.
+            </div>
+            <div class="status-bar waiting" id="status-bar">
+                <div class="pulse-dot"></div>
+                <span id="status-text">Waiting for WhatsApp to connect...</span>
+            </div>
+            <div class="mini-steps">
+                <div class="mini-step"><span class="num">1</span> Open <strong>WhatsApp</strong> on your phone</div>
+                <div class="mini-step"><span class="num">2</span> <strong>Settings → Linked Devices</strong></div>
+                <div class="mini-step"><span class="num">3</span> Tap <strong>"Link a Device"</strong></div>
+                <div class="mini-step"><span class="num">4</span> Enter the <strong>8-digit code</strong> above</div>
+            </div>
+            <button onclick="resetLogin()" style="width:100%;margin-top:14px;padding:12px;background:var(--input);color:var(--text2);border:1px solid var(--border);border-radius:12px;font-size:13px;font-weight:600;cursor:pointer;transition:all .2s" onmouseover="this.style.borderColor='#06b6d4'" onmouseout="this.style.borderColor='#1a2540'">← Try Another Number</button>
+        </div>
+
+        <!-- SUCCESS -->
+        <div class="login-section" id="sec-success">
+            <div class="success-icon"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg></div>
+            <div class="success-title">Connected! 🎉</div>
+            <p class="success-text">Your WhatsApp is linked!<br>Check your <strong>WhatsApp</strong> for your Session ID, then use the <strong>Session ID</strong> tab above to enter your dashboard.</p>
+            <div class="status-bar connected" style="margin-top:16px">
+                <div class="pulse-dot"></div>
+                <span>WhatsApp Connected — Session ID sent to your phone</span>
+            </div>
+            <button onclick="switchTab('session')" style="width:100%;margin-top:16px;padding:13px;background:linear-gradient(135deg,#06b6d4,#0891b2);border:none;border-radius:12px;color:#06090f;font-size:14px;font-weight:700;cursor:pointer">Enter Session ID →</button>
+        </div>
+
+        <div class="login-footer" style="margin-top:18px">
+            Already paired? Use the <a href="#" onclick="switchTab('session');return false">Session ID tab</a>
+        </div>
+    </div>
+</div>
+
+<script>
+    // BOT_URL — allows pair.html to be hosted anywhere (Vercel, GitHub Pages, etc.)
+    // and still talk to the actual bot on Render/panel.
+    // Usage:  https://your-vercel-site.vercel.app/pair.html?bot=https://your-bot.onrender.com
+    // If no ?bot= param, falls back to same-origin (normal operation when served from the bot).
+    const BOT_URL = (() => {
+        const p = new URLSearchParams(location.search).get('bot') || '';
+        return p.replace(/\/$/, ''); // strip trailing slash
+    })();
+    function api(path) { return BOT_URL + path; }
+
+    // Gate behind real backend auth — kick to login if not signed in.
+    (async () => {
+        try {
+            const r = await fetch(api('/api/auth/me'), { credentials: 'include' });
+            const d = await r.json();
+            if (!d.ok || !d.authed) {
+                window.location.replace((BOT_URL || '') + '/login.html' + (BOT_URL ? '?bot=' + encodeURIComponent(BOT_URL) : ''));
+                return;
+            }
+        } catch (_) { window.location.replace((BOT_URL || '') + '/login.html'); }
+    })();
+
+    let currentCode = '', currentSessionId = null, pollInterval = null;
+
+    function switchTab(tab) {
+        document.querySelectorAll('.login-tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.login-section').forEach(s => s.classList.remove('active'));
+        document.getElementById('tab-' + tab).classList.add('active');
+        document.getElementById('sec-' + tab).classList.add('active');
+    }
+
+    function showLoginSection(id) {
+        document.querySelectorAll('.login-section').forEach(s => s.classList.remove('active'));
+        document.getElementById('sec-' + id).classList.add('active');
+    }
+
+    function showError(elId, msg) {
+        const el = document.getElementById(elId);
+        el.textContent = msg;
+        el.style.display = 'block';
+        setTimeout(() => el.style.display = 'none', 6000);
+    }
+
+    function renderCode(code) {
+        const box = document.getElementById('code-box');
+        box.innerHTML = '';
+        const raw = code.replace(/[-\s]/g, '');
+        for (let i = 0; i < raw.length; i++) {
+            if (i === 4) {
+                const s = document.createElement('span');
+                s.className = 'code-char sep';
+                s.textContent = '–';
+                box.appendChild(s);
+            }
+            const c = document.createElement('span');
+            c.className = 'code-char';
+            c.textContent = raw[i];
+            c.style.animationDelay = (0.08 * i) + 's';
+            box.appendChild(c);
+        }
+    }
+
+    function copyCode() {
+        navigator.clipboard.writeText(currentCode.replace(/[-\s]/g, '')).then(() => {
+            const b = document.querySelector('.code-copy');
+            b.textContent = '✅ Copied!';
+            setTimeout(() => b.textContent = '📋 Copy Code', 2000);
+        }).catch(() => {});
+    }
+
+    function resetLogin() {
+        if (pollInterval) clearInterval(pollInterval);
+        pollInterval = null; currentSessionId = null; currentCode = '';
+        document.getElementById('phone-input').value = '';
+        document.getElementById('btn-pair').disabled = false;
+        document.getElementById('btn-pair').innerHTML = '⚡ Generate Pairing Code';
+        switchTab('pair');
+    }
+
+    async function requestPair() {
+        const inp = document.getElementById('phone-input');
+        const btn = document.getElementById('btn-pair');
+        const phone = inp.value.replace(/[^0-9]/g, '');
+        if (phone.length < 8 || phone.length > 15) {
+            showError('err-pair', 'Enter a valid number with country code (e.g. 2348102756072)');
+            return;
+        }
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner"></span> Requesting code…';
+        // Small inline status so the user knows it's working during the
+        // few seconds the server takes to ask WhatsApp for the code.
+        let pairHint = document.getElementById('pair-hint');
+        if (!pairHint) {
+            pairHint = document.createElement('p');
+            pairHint.id = 'pair-hint';
+            pairHint.style.cssText = 'font-size:12px;color:var(--accent2);margin-top:10px;text-align:center';
+            btn.parentNode.appendChild(pairHint);
+        }
+        pairHint.textContent = '⏳ Asking WhatsApp for your code… this takes a few seconds.';
+        try {
+            const r = await fetch(api('/api/pair'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({ phone, force: true })
+            });
+            const d = await r.json();
+            if (pairHint) pairHint.remove();
+            if (!d.ok) {
+                showError('err-pair', d.error || 'Failed. Try again.');
+                btn.disabled = false;
+                btn.innerHTML = '⚡ Generate Pairing Code';
+                return;
+            }
+            currentCode = d.code;
+            currentSessionId = d.sessionId;
+            renderCode(d.code);
+            showLoginSection('code');
+            startPolling();
+        } catch (e) {
+            if (pairHint) pairHint.remove();
+            showError('err-pair', 'Network error. Is the server running?');
+            btn.disabled = false;
+            btn.innerHTML = '⚡ Generate Pairing Code';
+        }
+    }
+
+    async function loginSession() {
+        const inp = document.getElementById('session-input');
+        const btn = document.getElementById('btn-session');
+        const val = inp.value.trim();
+        if (!val) { showError('err-session', 'Enter your Session ID'); return; }
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner"></span> Verifying...';
+        try {
+            const r = await fetch(api('/api/s/' + encodeURIComponent(val) + '/info'), { credentials: 'include' });
+            const d = await r.json();
+            if (d.ok) {
+                localStorage.setItem('eo_session', val);
+                window.location.href = (BOT_URL || '') + '/dashboard.html?s=' + encodeURIComponent(val);
+            } else {
+                showError('err-session', d.error || 'Invalid Session ID. Try again.');
+                btn.disabled = false;
+                btn.innerHTML = '🔑 Access Dashboard';
+            }
+        } catch (e) {
+            showError('err-session', 'Network error. Check your connection.');
+            btn.disabled = false;
+            btn.innerHTML = '🔑 Access Dashboard';
+        }
+    }
+
+    function startPolling() {
+        if (pollInterval) clearInterval(pollInterval);
+        pollInterval = setInterval(async () => {
+            try {
+                const r = await fetch(api('/api/status?id=' + currentSessionId), { credentials: 'include' });
+                const d = await r.json();
+                if (d.ok) {
+                    if (d.status === 'connected') {
+                        clearInterval(pollInterval); pollInterval = null;
+                        showLoginSection('success');
+                    } else if (d.status === 'failed') {
+                        clearInterval(pollInterval); pollInterval = null;
+                        const sb = document.getElementById('status-bar');
+                        sb.className = 'status-bar err';
+                        document.getElementById('status-text').textContent = 'Connection failed. Try again.';
+                    }
+                }
+            } catch (e) {}
+        }, 3000);
+        setTimeout(() => {
+            if (pollInterval) {
+                clearInterval(pollInterval); pollInterval = null;
+                const sb = document.getElementById('status-bar');
+                if (sb.classList.contains('waiting')) {
+                    sb.className = 'status-bar err';
+                    document.getElementById('status-text').textContent = 'Timed out. Generate a new code.';
+                }
+            }
+        }, 180000);
+    }
+
+    document.getElementById('phone-input').addEventListener('keydown', e => { if (e.key === 'Enter') requestPair(); });
+    document.getElementById('session-input').addEventListener('keydown', e => { if (e.key === 'Enter') loginSession(); });
+
+    // If already have a session, show a hint
+    const saved = localStorage.getItem('eo_session');
+    if (saved) {
+        const inp = document.getElementById('session-input');
+        inp.value = saved;
+        switchTab('session');
+    }
+</script>
+</body>
+</html>

@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Eventide Omega • Create Account</title>
+    <style>
+        *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+        body{font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,sans-serif;background:#06090f;color:#e2e8f0;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px}
+        .bg-glow{position:fixed;inset:0;overflow:hidden;z-index:0}
+        .bg-glow::before{content:'';position:absolute;top:-40%;left:-20%;width:80%;height:80%;background:radial-gradient(circle,rgba(6,182,212,0.07) 0%,transparent 70%)}
+        .bg-glow::after{content:'';position:absolute;bottom:-30%;right:-10%;width:60%;height:60%;background:radial-gradient(circle,rgba(6,182,212,0.05) 0%,transparent 70%)}
+        .card{position:relative;z-index:2;background:#111827;border:1px solid #1a2540;border-radius:20px;padding:40px 36px;width:100%;max-width:420px;overflow:hidden;box-shadow:0 0 80px rgba(6,182,212,0.06),0 25px 50px rgba(0,0,0,0.5)}
+        .card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,transparent,#22d3ee,transparent);animation:shimmer 3s ease-in-out infinite}
+        @keyframes shimmer{0%,100%{opacity:.3}50%{opacity:1}}
+        .logo{display:flex;align-items:center;gap:12px;margin-bottom:28px;justify-content:center}
+        .logo-text{font-size:20px;font-weight:800;letter-spacing:1.5px;background:linear-gradient(135deg,#22d3ee,#06b6d4);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+        h1{text-align:center;font-size:22px;font-weight:800;margin-bottom:6px}
+        .sub{text-align:center;font-size:13px;color:#64748b;margin-bottom:28px}
+        .form-group{margin-bottom:16px}
+        .label{display:block;font-size:11px;font-weight:600;color:#64748b;letter-spacing:.8px;text-transform:uppercase;margin-bottom:6px}
+        .input-wrap{display:flex;align-items:center;background:#0f1729;border:1.5px solid #1a2540;border-radius:12px;padding:0 14px;transition:all .3s}
+        .input-wrap:focus-within{border-color:#06b6d4;box-shadow:0 0 0 4px rgba(6,182,212,0.12)}
+        .input-wrap svg{width:17px;height:17px;stroke:#3b4a6b;fill:none;stroke-width:2;margin-right:10px;flex-shrink:0}
+        .input-wrap input{flex:1;background:none;border:none;outline:none;color:#e2e8f0;font-size:15px;padding:13px 0;font-family:inherit}
+        .input-wrap input::placeholder{color:#3b4a6b}
+        .btn{width:100%;padding:14px;background:linear-gradient(135deg,#06b6d4,#0891b2);border:none;border-radius:12px;color:#06090f;font-size:15px;font-weight:700;cursor:pointer;transition:all .3s;margin-top:4px}
+        .btn:hover{box-shadow:0 8px 30px rgba(6,182,212,0.35);transform:translateY(-2px)}
+        .btn:disabled{opacity:.5;cursor:not-allowed;transform:none}
+        .err{background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.2);border-radius:10px;padding:10px 14px;font-size:13px;color:#ef4444;margin-bottom:14px;display:none}
+        .footer{text-align:center;margin-top:22px;font-size:13px;color:#64748b}
+        .footer a{color:#22d3ee;text-decoration:none;font-weight:600}
+        .spinner{display:inline-block;width:16px;height:16px;border:2.5px solid rgba(6,9,15,.2);border-top-color:#06090f;border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:8px}
+        @keyframes spin{to{transform:rotate(360deg)}}
+    </style>
+</head>
+<body>
+<div class="bg-glow"></div>
+<div class="card">
+    <div class="logo">
+        <svg width="34" height="34" viewBox="0 0 36 36">
+            <defs><linearGradient id="lg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#22d3ee"/><stop offset="100%" stop-color="#06b6d4"/></linearGradient></defs>
+            <circle cx="18" cy="18" r="16" fill="none" stroke="url(#lg)" stroke-width="1.5" opacity="0.5"/>
+            <path d="M18 6 L18 18 L26 24" stroke="url(#lg)" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+            <circle cx="18" cy="18" r="3" fill="url(#lg)" opacity="0.8"/>
+        </svg>
+        <span class="logo-text">EVENTIDE OMEGA</span>
+    </div>
+    <h1>Create Account</h1>
+    <p class="sub">Join the Eventide Omega platform</p>
+
+    <div class="err" id="err"></div>
+
+    <div class="form-group">
+        <label class="label">Full Name</label>
+        <div class="input-wrap">
+            <svg viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            <input type="text" id="name" placeholder="Your full name" autocomplete="name">
+        </div>
+    </div>
+    <div class="form-group">
+        <label class="label">Email Address</label>
+        <div class="input-wrap">
+            <svg viewBox="0 0 24 24"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+            <input type="email" id="email" placeholder="you@example.com" autocomplete="email">
+        </div>
+    </div>
+    <div class="form-group">
+        <label class="label">Password</label>
+        <div class="input-wrap">
+            <svg viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            <input type="password" id="password" placeholder="Create a password (min 6 chars)" autocomplete="new-password">
+            <button type="button" onclick="togglePw('password',this)" style="background:none;border:none;cursor:pointer;padding:4px;color:#3b4a6b" title="Show/Hide">
+                <svg class="eye-icon" viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+        </div>
+    </div>
+
+    <button class="btn" id="btn" onclick="createAccount()">Create Account</button>
+
+    <div class="footer">
+        Already have an account? <a href="/login.html">Sign In</a>
+    </div>
+</div>
+
+<script>
+    function showErr(msg) {
+        const el = document.getElementById('err');
+        el.textContent = msg;
+        el.style.display = 'block';
+        setTimeout(() => el.style.display = 'none', 5000);
+    }
+
+    function togglePw(id, btn) {
+        const input = document.getElementById(id);
+        const isHidden = input.type === 'password';
+        input.type = isHidden ? 'text' : 'password';
+        btn.innerHTML = isHidden
+            ? '<svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>'
+            : '<svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+    }
+
+    async function createAccount() {
+        const name  = document.getElementById('name').value.trim();
+        const email = document.getElementById('email').value.trim();
+        const pass  = document.getElementById('password').value;
+        if (!name)  return showErr('Enter your full name.');
+        if (!email || !email.includes('@')) return showErr('Enter a valid email address.');
+        if (pass.length < 6) return showErr('Password must be at least 6 characters.');
+
+        const btn = document.getElementById('btn');
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner"></span> Creating...';
+
+        try {
+            const r = await fetch('/api/auth/signup', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, email, password: pass }),
+            });
+            const d = await r.json();
+            if (d.ok) {
+                window.location.href = '/login.html';
+            } else {
+                btn.disabled = false;
+                btn.textContent = 'Create Account';
+                showErr(d.error || 'Signup failed.');
+            }
+        } catch (e) {
+            btn.disabled = false;
+            btn.textContent = 'Create Account';
+            showErr('Network error. Try again.');
+        }
+    }
+
+    document.addEventListener('keydown', e => { if (e.key === 'Enter') createAccount(); });
+</script>
+</body>
+</html>
