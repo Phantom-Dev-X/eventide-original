@@ -65,10 +65,11 @@ const RECENT_APPEND_WINDOW_SECONDS = 120;
 // 🔮 HEADERS & STAGES (PERFECT WHATSAPP SPACING)
 // ──────────────────────────────────────────────
 
-const TERMINAL_HEADER = `╔═════════╦══════════╗
-        ⚠ EVENTIDE OMEGA
-               TERMINAL ACCESS
-╚═════════╩══════════╝\n\n`;
+const TERMINAL_HEADER =
+    '╔════════╦════════╗\n' +
+    '        ⚠ EVENTIDE OMEGA\n' +
+    '               TERMINAL ACCESS                                                                         \n' +
+    '╚════════╩════════╝\n\n';
 
 const animSteps = [
     { percent: 8,  bar: 1,  text: '◐ initiating umbral protocol', core: '◌', cipher: '◌', void: '◌' },
@@ -195,10 +196,10 @@ function channelContextInfo() {
 
 const STAGE3_TEXT = `${GROUP_CHANNEL_LINK}
 
-╔═════════╦══════════╗
+╔════════╦════════╗
         ⚠ EVENTIDE OMEGA
                TERMINAL ACCESS
-╚═════════╩══════════╝
+╚════════╩════════╝
 
                 ═══ E C L I P S E ═══
              " i am what remains when 
@@ -224,10 +225,10 @@ const STAGE3_TEXT = `${GROUP_CHANNEL_LINK}
 
 // The animated loading message edits into this once it points down to the
 // banner image (the full STAGE3_TEXT is then sent as the image caption).
-const STAGE3_ARROWS_TEXT = `╔═════════╦══════════╗
+const STAGE3_ARROWS_TEXT = `╔════════╦════════╗
         ⚠ EVENTIDE OMEGA
                TERMINAL ACCESS
-╚═════════╩══════════╝
+╚════════╩════════╝
 
                 ═══ E C L I P S E ═══
 
@@ -252,7 +253,7 @@ const CONFIG_MENU_PATH      = path.join(__dirname, 'assets', 'config_menu.png');
 // ──────────────────────────────────────────────
 // 📊 POLL DETAILS
 // ──────────────────────────────────────────────
-const POLL_QUESTION = `╔═════════╦══════════╗\n        ⚠ EVENTIDE OMEGA ⚠\n╚═════════╩══════════╝`;
+const POLL_QUESTION = `╔════════╦════════╗\n        ⚠ EVENTIDE OMEGA\n╚════════╩════════╝`;
 const POLL_OPTIONS = [
     '╰|1...2➤ [ 1. OWNERS MENU ]',
     '╰|1...2➤ [ 2. GROUP MENU ]',
@@ -264,7 +265,7 @@ const MENU_POLL_IDS = ['owners', 'group', 'fun', 'bug'];
 // ──────────────────────────────────────────────
 // 🗂️ SUB-MENU / DOMAIN POLLS
 // ──────────────────────────────────────────────
-const DOMAIN_POLL_QUESTION = `╔═════════╦══════════╗\n     CHOOSE YOUR DOMAIN ⚠\n╚═════════╩══════════╝`;
+const DOMAIN_POLL_QUESTION = `╔════════╦════════╗\n     CHOOSE YOUR DOMAIN\n╚════════╩════════╝`;
 const DOMAIN_POLL_OPTIONS = [
     '╰|1...2➤ [ 1. SYSTEM MENU ]',
     '╰|1...2➤ [ 2. CONFIG MENU ]'
@@ -273,10 +274,10 @@ const DOMAIN_POLL_IDS = ['system', 'config'];
 
 const OWNERS_WELCOME_TEXT = `${GROUP_CHANNEL_LINK}
 
-╔═════════╦══════════╗
+╔════════╦════════╗
         ⚠ EVENTIDE OMEGA
                TERMINAL ACCESS
-╚═════════╩══════════╝
+╚════════╩════════╝
 
 " you built this night —
   you rule its stars. "
@@ -296,10 +297,10 @@ Pick a domain below to begin.
 
 const GROUP_MENU_TEXT = `${GROUP_CHANNEL_LINK}
 
-╔═════════╦══════════╗
+╔════════╦════════╗
         ⚠ EVENTIDE OMEGA
                GROUP DOMAIN
-╚═════════╩══════════╝
+╚════════╩════════╝
 
    *GROUP DOMAIN*
    Dominion over the vessel's gatherings.
@@ -343,10 +344,10 @@ const GROUP_MENU_TEXT = `${GROUP_CHANNEL_LINK}
 
 const SYSTEM_MENU_TEXT = `${GROUP_CHANNEL_LINK}
 
-╔═════════╦══════════╗
+╔════════╦════════╗
         ⚠ EVENTIDE OMEGA
                SYSTEM DOMAIN
-╚═════════╩══════════╝
+╚════════╩════════╝
 
       ◈ ── S Y S T E M ── ◈
    the core of the machine
@@ -404,10 +405,10 @@ const SYSTEM_MENU_TEXT = `${GROUP_CHANNEL_LINK}
 
 const CONFIG_MENU_TEXT = `${GROUP_CHANNEL_LINK}
 
-╔═════════╦══════════╗
+╔════════╦════════╗
         ⚠ EVENTIDE OMEGA
                CONFIG DOMAIN
-╚═════════╩══════════╝
+╚════════╩════════╝
 
       ◈ ── C O N F I G ── ◈
    shape the vessel itself
@@ -448,10 +449,10 @@ const CONFIG_MENU_TEXT = `${GROUP_CHANNEL_LINK}
 
 const FUN_PLACEHOLDER_TEXT = `${GROUP_CHANNEL_LINK}
 
-╔═════════╦══════════╗
+╔════════╦════════╗
         ⚠ EVENTIDE OMEGA
                 FUN DOMAIN
-╚═════════╩══════════╝
+╚════════╩════════╝
 
    *FUN DOMAIN*
    Play. Roast. Ruin someone politely.
@@ -478,10 +479,10 @@ const FUN_PLACEHOLDER_TEXT = `${GROUP_CHANNEL_LINK}
 
 const BUG_PLACEHOLDER_TEXT = `${GROUP_CHANNEL_LINK}
 
-╔═════════╦══════════╗
+╔════════╦════════╗
         ⚠ EVENTIDE OMEGA
                 BUG DOMAIN
-╚═════════╩══════════╝
+╚════════╩════════╝
 
    *BUG DOMAIN*
    The fault-line is being sealed.
@@ -1219,14 +1220,14 @@ function renderTttBoard(game) {
     if (game.status === 'pending') {
         footer = '   waiting for the challenged to accept…';
     } else if (win?.mark === 'DRAW') {
-        footer = '   ●  draw. neither soul claimed the grid.';
+        footer = '   ●  draw. the grid holds.';
     } else if (win?.mark) {
         const champ = win.mark === 'X' ? xName : oName;
         footer = '   ●  ' + (win.mark === 'X' ? '❌' : '⭕') + '  ' + champ + '  wins';
     } else {
         footer = (
-            '   ●  ' + turnMark + '  ' + turnName + '  to move\n' +
-            '   reply to THIS board with 1–9\n' +
+            '   ●  ' + turnMark + '  ' + turnName + '\n' +
+            '   your move · reply 1–9\n' +
             '   1 min a turn'
         );
     }
@@ -2196,12 +2197,12 @@ function runtimeUptime() {
 // Shared terminal wrapper — exactly matches phantom-x's buildOmegaTerminal.
 function buildOmegaTerminal(body) {
     return (
-        `╔══════════╦══════════════╗\n` +
-        `║       ⚠ *EVENTIDE OMEGA TERMINAL*\n` +
-        `║                           *ACCESS*\n` +
-        `╚═══════════╩═════════════╝\n\n` +
-        body + `\n\n` +
-        `— *EVENTIDE OMEGA* · 👁`
+        '╔════════╦════════╗\n' +
+        '        ⚠ EVENTIDE OMEGA\n' +
+        '               TERMINAL ACCESS                                                                         \n' +
+        '╚════════╩════════╝\n\n' +
+        body + '\n\n' +
+        '— *EVENTIDE OMEGA* · 👁'
     );
 }
 
@@ -2658,11 +2659,9 @@ async function safeWaReply(sock, remoteJid, text, quoted) {
     try {
         let formattedText = formatForWhatsApp(text);
 
-        // Attach the channel link (top) to every normal reply so it gets the
-        // link-preview card. Skip AI help replies (start with 🤖) per design.
-        if (!formattedText.startsWith('🤖') && !formattedText.includes(GROUP_CHANNEL_LINK)) {
-            formattedText = `${GROUP_CHANNEL_LINK}\n\n${formattedText}`;
-        }
+        // Do NOT prepend the raw channel URL — ~56 chars, wraps every
+        // reply on phones. Omega replies stay header-width (~30).
+        // Menu splash (STAGE3) still carries the link for the preview card.
 
         try {
             await sock.sendPresenceUpdate('composing', remoteJid);
@@ -2680,9 +2679,7 @@ async function safeWaReply(sock, remoteJid, text, quoted) {
         logError('WA-SEND', `Quoted reply failed for ${remoteJid}. Retrying without quote`, err);
         try {
             let formattedText = formatForWhatsApp(text);
-            if (!formattedText.startsWith('🤖') && !formattedText.includes(GROUP_CHANNEL_LINK)) {
-                formattedText = `${GROUP_CHANNEL_LINK}\n\n${formattedText}`;
-            }
+            // no channel URL prepend (keeps bubble at Omega header width)
             const content = await attachChannelPreview({ text: formattedText });
             await sock.sendMessage(remoteJid, content);
             return true;
