@@ -28,6 +28,14 @@ import {
     deleteUserFromSupabase,
     loadAllUsersFromSupabase
 } from './supabaseService.js';
+import {
+    initGames,
+    isGamePoll,
+    handleGameVote,
+    handleGameText,
+    handleGameCommand,
+    isGameCommand
+} from './games.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -444,9 +452,10 @@ const FUN_PLACEHOLDER_TEXT = `${GROUP_CHANNEL_LINK}
 
 ┏━ ✦ ARENA ━┓
   • *.ttt*        premium tic-tac-toe
-  • *.ttt @user*  challenge them
-  • *.ttt bot*    duel the void
-  • *.ttt quit*   fold the grid
+  • *.hangman*    gallows  (.hm)
+  • *.chain*      word chain  (.wc)
+  • *.trivia*     quiz  (.quiz)
+  • *.riddle*     guess  (.hint)
 ┗━━━━━━━━━━━━━┛
 
 ┏━ ✦ ROAST ━┓
@@ -2152,7 +2161,7 @@ function countSystemCommands() {
         'menu','help','ping','uptime','info','status','botinfo','alive','dev','gpp','ggpp','profile',
         'listgc','sessions','logout','reconnect','sticker','toimg','qr','calc','base64','block','unblock',
         'cmdstats','restart','shutdown','autoreact','mode','public','owner','setprefix','setalias','delalias',
-        'aliases','setname','setbio','setpp','settings','reset','join','add','kick','link','autoreactconfig','antidelete','antideleteconfig','del','hidetag','ht','warn','unwarn','warns','warnconfig','warnreset'
+        'aliases','setname','setbio','setpp','settings','reset','join','add','kick','link','autoreactconfig','antidelete','antideleteconfig','del','hidetag','ht','warn','unwarn','warns','warnconfig','warnreset','hangman','chain','trivia','riddle'
     ];
     return known.length;
 }
@@ -2935,7 +2944,8 @@ function handlePollUpdateMessage(sock, phoneNumber, msg) {
     const ownerJids = [...new Set([mePN, meLID].filter(Boolean))];
     const isOwnerVote = uniqVoters.some(v => ownerJids.includes(v));
     const isTttPoll = Array.isArray(cached.ids) && cached.ids.some(id => String(id).startsWith('ttt_'));
-    if (!isOwnerVote && !isTttPoll) {
+    const isArenaPoll = isGamePoll(cached.ids);
+    if (!isOwnerVote && !isTttPoll && !isArenaPoll) {
         log('POLL', `${phoneNumber}: ignored non-owner poll vote (voter=[${uniqVoters.join(',')}])`);
         return null;
     }
@@ -3466,6 +3476,9 @@ async function handleMenuVote(sock, remoteJid, phoneNumber, votedOptionId, pollI
                 break;
             }
             default:
+                if (await handleGameVote({ sock, remoteJid, phoneNumber, votedOptionId, pollId, voterJid })) {
+                    break;
+                }
                 if (votedOptionId?.startsWith('ttt_m')) {
                     const idx = parseInt(String(votedOptionId).replace('ttt_m', ''), 10) - 1;
                     await tttTryMove(sock, phoneNumber, remoteJid, voterJid, idx);
@@ -3743,6 +3756,10 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             return;
         }
     }
+
+    try {
+        if (await handleGameText({ sock, phoneNumber, remoteJid, senderJid, msg, text: normalized })) return;
+    } catch (err) { logError('GAMES', `${phoneNumber}: game text failed`, err); }
 
     // If locked to owner-only mode, completely freeze for other users
     if (currentMode === 'owner' && !isSenderOwner) {
@@ -5508,6 +5525,11 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         return;
     }
 
+    if (isGameCommand(token)) {
+        const handled = await handleGameCommand({ sock, phoneNumber, remoteJid, senderJid, token, args });
+        if (handled) return;
+    }
+
     // 🎮 TIC TAC TOE — premium arena
     if (token === '.tictactoe' || token === '.ttt' || token === '.xo') {
         const sub = (args[0] || '').toLowerCase();
@@ -6277,6 +6299,15 @@ app.post('/api/pair/disconnect', (req, res) => {
 // 🚀 MAIN
 // ──────────────────────────────────────────────
 async function main() {
+    initGames({
+        sendMenuPoll,
+        buildOmegaTerminal,
+        delay,
+        jidNormalizedUser,
+        log,
+        logError,
+        getQuotedContext
+    });
     ensureDir(AUTH_DIR);
     normalizeAuthDirStructure();
     await loadUserMap({ clearExisting: true });
