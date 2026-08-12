@@ -1029,9 +1029,130 @@ function tttSamePlayer(a, b) {
     return !!(da && db && da === db);
 }
 
-function tttShort(jid) {
+function tttOwnerPn(sock, phoneNumber) {
+    const cands = [
+        sock?.user?.phoneNumber,
+        sock?.authState?.creds?.me?.phoneNumber,
+        sock?.user?.id && String(sock.user.id).includes('@s.whatsapp.net') ? sock.user.id : '',
+        phoneNumber
+    ];
+    for (const c of cands) {
+        const d = String(c || '').split(':')[0].split('@')[0].replace(/\D/g, '');
+        if (d.length >= 7) return d;
+    }
+    return '';
+}
+
+function tttJidDigits(jid) {
+    return String(jid || '').split(':')[0].split('@')[0].replace(/\D/g, '');
+}
+
+function tttIsLid(jid) {
+    return String(jid || '').includes('@lid');
+}
+
+function tttIsOwnerJid(sock, phoneNumber, jid) {
+    if (!jid || jid === 'BOT') return false;
+    if (tttSamePlayer(jid, sock?.user?.id) || tttSamePlayer(jid, sock?.user?.lid) || tttSamePlayer(jid, sock?.user?.phoneNumber)) return true;
+    const d = tttJidDigits(jid);
+    const own = tttOwnerPn(sock, phoneNumber);
+    return !!(d && own && d === own);
+}
+
+function tttPnFromMsg(msg) {
+    const k = msg?.key || {};
+    for (const c of [k.participantAlt, k.remoteJidAlt, k.participantPn, k.senderPn]) {
+        if (!c) continue;
+        const s = String(c);
+        if (s.includes('@lid')) continue;
+        const d = s.split(':')[0].split('@')[0].replace(/\D/g, '');
+        if (d.length >= 7 && d.length <= 15) return d;
+    }
+    return '';
+}
+
+function tttCollectIds(sock, phoneNumber, jid, msg) {
+    const ids = new Set();
+    if (jid && jid !== 'BOT') ids.add(jid);
+    const k = msg?.key || {};
+    for (const c of [k.participant, k.participantAlt, k.remoteJidAlt]) {
+        if (c && !String(c).endsWith('@g.us') && !String(c).endsWith('@broadcast')) ids.add(c);
+    }
+    if (msg?.key?.fromMe || tttIsOwnerJid(sock, phoneNumber, jid)) {
+        for (const c of [sock?.user?.id, sock?.user?.lid, sock?.user?.phoneNumber]) {
+            if (c) ids.add(c);
+        }
+        const pn = tttOwnerPn(sock, phoneNumber);
+        if (pn) ids.add(pn + '@s.whatsapp.net');
+    }
+    return [...ids].filter(Boolean);
+}
+
+async function tttResolveLabel(sock, phoneNumber, jid, msg) {
     if (!jid || jid === 'BOT') return 'VOID';
-    return '+' + String(jid).split('@')[0].replace(/\D/g, '').slice(-10);
+    if (msg?.key?.fromMe || tttIsOwnerJid(sock, phoneNumber, jid)) {
+        const pn = tttOwnerPn(sock, phoneNumber);
+        if (pn) return '+' + pn;
+    }
+    const fromMsg = tttPnFromMsg(msg);
+    if (fromMsg) return '+' + fromMsg;
+    if (String(jid).includes('@s.whatsapp.net') || String(jid).includes('@c.us')) {
+        const d = tttJidDigits(jid);
+        if (d) return '+' + d;
+    }
+    try {
+        const map = sock?.signalRepository?.lidMapping;
+        if (map?.getPNForLID && tttIsLid(jid)) {
+            const pn = await map.getPNForLID(jid);
+            const d = String(pn || '').split(':')[0].split('@')[0].replace(/\D/g, '');
+            if (d.length >= 7) return '+' + d;
+        }
+    } catch (_) {}
+    const name = String(msg?.pushName || '').trim();
+    if (name && name.toLowerCase() !== 'unknown') return name;
+    return 'player';
+}
+
+function tttPlayerMatches(game, slot, jid, sock, phoneNumber) {
+    if (!game) return false;
+    if (game[slot] === 'BOT') return jid === 'BOT';
+    const pool = [game[slot], ...(game[slot + 'Ids'] || [])];
+    if (pool.some(id => tttSamePlayer(id, jid))) return true;
+    if (sock && tttIsOwnerJid(sock, phoneNumber, game[slot]) && tttIsOwnerJid(sock, phoneNumber, jid)) return true;
+    return false;
+}
+
+function tttName(game, slot) {
+    if (!game) return 'player';
+    if (game[slot] === 'BOT') return 'VOID';
+    const stored = game[slot + 'Label'];
+    if (stored) return stored;
+    const jid = game[slot];
+    if (!jid) return 'open';
+    if (String(jid).includes('@s.whatsapp.net') || String(jid).includes('@c.us')) {
+        const d = tttJidDigits(jid);
+        return d ? '+' + d : 'player';
+    }
+    return 'player';
+}
+
+function tttShort(jid, game, sock, phoneNumber) {
+    if (!jid || jid === 'BOT') return 'VOID';
+    if (game) {
+        if (tttSamePlayer(jid, game.x) && game.xLabel) return game.xLabel;
+        if (tttSamePlayer(jid, game.o) && game.oLabel) return game.oLabel;
+    }
+    if (sock && tttIsOwnerJid(sock, phoneNumber, jid)) {
+        const pn = tttOwnerPn(sock, phoneNumber);
+        if (pn) return '+' + pn;
+    }
+    if (String(jid).includes('@s.whatsapp.net') || String(jid).includes('@c.us')) {
+        const d = tttJidDigits(jid);
+        if (d) return '+' + d;
+    }
+    if (tttIsLid(jid)) return 'player';
+    const d = tttJidDigits(jid);
+    return d ? '+' + d : 'player';
 }
 
 function tttWinner(board) {
@@ -1082,41 +1203,52 @@ function tttBotMove(board, aiMark, difficulty) {
 
 function renderTttBoard(game) {
     const win = tttWinner(game.board);
-    const winSet = new Set(win?.line || []);
     const cell = (i) => {
-        if (game.board[i] === 'X') return winSet.has(i) ? ' ✦❌ ' : '  ❌ ';
-        if (game.board[i] === 'O') return winSet.has(i) ? ' ✦⭕ ' : '  ⭕ ';
-        return `   ${i + 1} `;
+        // Empty is "   N   " (digit centered). ❌/⭕ are 2 cols in WhatsApp,
+        // so drop the digit AND one space, then drop the emoji in that hole.
+        if (game.board[i] === 'X') return '   ❌  ';
+        if (game.board[i] === 'O') return '   ⭕  ';
+        return '   ' + (i + 1) + '   ';
     };
-    const xName = game.vsBot && game.x === 'BOT' ? 'VOID' : tttShort(game.x);
-    const oName = game.vsBot && game.o === 'BOT' ? 'VOID' : tttShort(game.o);
+    const xName = tttName(game, 'x');
+    const oName = tttName(game, 'o');
+    const oLine = game.difficulty ? (oName + '  ·  ' + String(game.difficulty).toUpperCase()) : oName;
     const turnMark = game.turn === 'X' ? '❌' : '⭕';
-    const turnName = game.turn === 'X'
-        ? (game.x === 'BOT' ? 'VOID' : tttShort(game.x))
-        : (game.o === 'BOT' ? 'VOID' : tttShort(game.o));
+    const turnName = game.turn === 'X' ? xName : oName;
     let footer;
-    if (game.status === 'pending') footer = '   waiting for the challenged to accept…';
-    else if (win?.mark === 'DRAW') footer = '   stalemate. neither soul claimed the grid.';
-    else if (win?.mark) footer = `   ${win.mark === 'X' ? '❌' : '⭕'} claims the arena.`;
-    else footer = `   ●  ${turnMark}  ${turnName}  to move\n   reply to THIS board with 1–9\n   1 min a turn`;
+    if (game.status === 'pending') {
+        footer = '   waiting for the challenged to accept…';
+    } else if (win?.mark === 'DRAW') {
+        footer = '   ●  draw. neither soul claimed the grid.';
+    } else if (win?.mark) {
+        const champ = win.mark === 'X' ? xName : oName;
+        footer = '   ●  ' + (win.mark === 'X' ? '❌' : '⭕') + '  ' + champ + '  wins';
+    } else {
+        footer = (
+            '   ●  ' + turnMark + '  ' + turnName + '  to move\n' +
+            '   reply to THIS board with 1–9\n' +
+            '   1 min a turn'
+        );
+    }
 
     return (
-        '```\n' +
         '      ✦ EVENTIDE ARENA ✦\n' +
-        '         TIC · TAC · TOE\n\n' +
+        '         TIC · TAC · TOE\n' +
+        '\n' +
         '    ╭──────┬──────┬──────╮\n' +
-        `    │${cell(0)}│${cell(1)}│${cell(2)}│\n` +
+        '    │' + cell(0) + '│' + cell(1) + '│' + cell(2) + '│\n' +
         '    ├──────┼──────┼──────┤\n' +
-        `    │${cell(3)}│${cell(4)}│${cell(5)}│\n` +
+        '    │' + cell(3) + '│' + cell(4) + '│' + cell(5) + '│\n' +
         '    ├──────┼──────┼──────┤\n' +
-        `    │${cell(6)}│${cell(7)}│${cell(8)}│\n` +
-        '    ╰──────┴──────┴──────╯\n\n' +
-        `    ❌  ${xName}\n` +
-        `    ⭕  ${oName}${game.difficulty ? '  ·  ' + game.difficulty.toUpperCase() : ''}\n\n` +
-        footer + '\n```'
+        '    │' + cell(6) + '│' + cell(7) + '│' + cell(8) + '│\n' +
+        '    ╰──────┴──────┴──────╯\n' +
+        '\n' +
+        '    ❌  ' + xName + '\n' +
+        '    ⭕  ' + oLine + '\n' +
+        '\n' +
+        footer
     );
 }
-
 function getTttGame(phoneNumber, chatJid) {
     return tttGames.get(tttKey(phoneNumber, chatJid)) || null;
 }
@@ -1145,15 +1277,19 @@ function tttIsReplyToBoard(msg, game) {
 }
 
 async function tttPaint(sock, phoneNumber, game, { extra = '', rematch = false } = {}) {
-    const body = renderTttBoard(game) + (extra ? `\n${extra}` : '');
+    let body = renderTttBoard(game);
+    if (extra) body += '\n' + extra;
     try {
-        if (game.boardKey) {
+        if (game.boardKey?.id) {
             await sock.sendMessage(game.chatJid, { text: body, edit: game.boardKey });
+            log('TTT', `${phoneNumber}: edited board ${game.boardKey.id}`);
         } else {
             const sent = await sock.sendMessage(game.chatJid, { text: body });
             game.boardKey = sent?.key || null;
+            log('TTT', `${phoneNumber}: sent fresh board ${game.boardKey?.id || 'none'}`);
         }
-    } catch (_) {
+    } catch (err) {
+        logError('TTT', `${phoneNumber}: board edit failed, sending new card`, err);
         const sent = await sock.sendMessage(game.chatJid, { text: body });
         game.boardKey = sent?.key || null;
     }
@@ -1199,15 +1335,22 @@ function tttArmDeadGame(sock, phoneNumber, game, ms = 3 * 60 * 1000) {
     }, ms);
 }
 
-async function tttStart(sock, phoneNumber, chatJid, { x, o, vsBot = false, difficulty = 'medium' }) {
+async function tttStart(sock, phoneNumber, chatJid, { x, o, vsBot = false, difficulty = 'medium', xLabel = '', oLabel = '', xIds = [], oIds = [], boardKey = null } = {}) {
     const prev = getTttGame(phoneNumber, chatJid);
     if (prev) { tttClearTimer(prev); await tttDeletePoll(sock, prev); }
+    if (x !== 'BOT' && !xLabel) xLabel = await tttResolveLabel(sock, phoneNumber, x, null);
+    if (o !== 'BOT' && !oLabel) oLabel = await tttResolveLabel(sock, phoneNumber, o, null);
+    if (x === 'BOT') xLabel = 'VOID';
+    if (o === 'BOT') oLabel = 'VOID';
     const game = {
         chatJid, x, o, vsBot, difficulty: vsBot ? difficulty : '',
+        xLabel, oLabel,
+        xIds: x === 'BOT' ? [] : [...new Set((xIds || []).filter(Boolean))],
+        oIds: o === 'BOT' ? [] : [...new Set((oIds || []).filter(Boolean))],
         board: Array(9).fill(null),
         turn: 'X',
         status: 'active',
-        boardKey: null,
+        boardKey: boardKey || null,
         pollKey: null,
         timer: null,
         idleTimer: null,
@@ -1237,7 +1380,7 @@ async function tttPlayBot(sock, phoneNumber, game) {
     if (win) {
         game.status = 'done';
         tttClearTimer(game);
-        await tttPaint(sock, phoneNumber, game, { extra: win.mark === 'DRAW' ? '\n⚖ *DRAW.* the grid belongs to no one.' : '\n👑 *VOID WINS.* the machine does not blink.', rematch: true });
+        await tttPaint(sock, phoneNumber, game, { rematch: true });
         return;
     }
     game.turn = botMark === 'X' ? 'O' : 'X';
@@ -1245,7 +1388,7 @@ async function tttPlayBot(sock, phoneNumber, game) {
     tttArmTimer(sock, phoneNumber, game);
 }
 
-async function tttTryMove(sock, phoneNumber, chatJid, playerJid, idx) {
+async function tttTryMove(sock, phoneNumber, chatJid, playerJid, idx, msg = null) {
     const game = getTttGame(phoneNumber, chatJid);
     if (!game || game.status !== 'active') {
         await sock.sendMessage(chatJid, { text: '❌ No live arena here. Type *.ttt* to open one.' });
@@ -1255,24 +1398,28 @@ async function tttTryMove(sock, phoneNumber, chatJid, playerJid, idx) {
         await sock.sendMessage(chatJid, { text: '❌ That cell is sealed. Pick an open number.' });
         return;
     }
-    const expected = game.turn === 'X' ? game.x : game.o;
+    const slot = game.turn === 'X' ? 'x' : 'o';
+    const expected = game[slot];
     if (expected === 'BOT') return;
-    const who = (!playerJid || playerJid === 'me') ? (sock.user?.id || '') : playerJid;
-    const ownerIsExpected = tttSamePlayer(expected, sock.user?.id);
-    if (!tttSamePlayer(expected, who) && !(ownerIsExpected && (playerJid === 'me' || tttSamePlayer(who, sock.user?.id)))) {
-        await sock.sendMessage(chatJid, { text: `⏳ Not your turn. Waiting on ${tttShort(expected)}.` });
+    const who = (!playerJid || playerJid === 'me') ? (sock.user?.id || sock.user?.phoneNumber || '') : playerJid;
+    if (!tttPlayerMatches(game, slot, who, sock, phoneNumber) && !tttPlayerMatches(game, slot, playerJid, sock, phoneNumber)) {
+        await sock.sendMessage(chatJid, { text: `⏳ Not your turn. Waiting on ${tttName(game, slot)}.` });
         return;
     }
     game.board[idx] = game.turn;
+    game.moveCount = (game.moveCount || 0) + 1;
+    if (game.idleTimer) { clearTimeout(game.idleTimer); game.idleTimer = null; }
+    if (msg) {
+        const fresh = await tttResolveLabel(sock, phoneNumber, who, msg);
+        if (fresh && fresh !== 'player') game[slot + 'Label'] = fresh;
+        const more = tttCollectIds(sock, phoneNumber, who, msg);
+        game[slot + 'Ids'] = [...new Set([...(game[slot + 'Ids'] || []), ...more])];
+    }
     const win = tttWinner(game.board);
     if (win) {
         game.status = 'done';
         tttClearTimer(game);
-        const champ = win.mark === 'DRAW' ? null : (win.mark === 'X' ? game.x : game.o);
-        const extra = win.mark === 'DRAW'
-            ? '\n⚖ *DRAW.* two minds, one stalemate.'
-            : `\n👑 *${champ === 'BOT' ? 'VOID' : tttShort(champ)}* takes the grid.`;
-        await tttPaint(sock, phoneNumber, game, { extra, rematch: true });
+        await tttPaint(sock, phoneNumber, game, { rematch: true });
         return;
     }
     game.turn = game.turn === 'X' ? 'O' : 'X';
@@ -1291,8 +1438,13 @@ async function tttOfferChallenge(sock, phoneNumber, chatJid, challenger, target)
         await sock.sendMessage(chatJid, { text: '❌ An arena is already open here. *.ttt quit* to fold it.' });
         return;
     }
+    const xLabel = await tttResolveLabel(sock, phoneNumber, challenger, null);
+    const oLabel = await tttResolveLabel(sock, phoneNumber, target, null);
     const game = {
         chatJid, x: challenger, o: target, vsBot: false, difficulty: '',
+        xLabel, oLabel,
+        xIds: tttCollectIds(sock, phoneNumber, challenger, null),
+        oIds: tttCollectIds(sock, phoneNumber, target, null),
         board: Array(9).fill(null), turn: 'X', status: 'pending',
         boardKey: null, pollKey: null, timer: null, idleTimer: null,
         moveCount: 0, openSeat: false, startedAt: Date.now()
@@ -1300,9 +1452,9 @@ async function tttOfferChallenge(sock, phoneNumber, chatJid, challenger, target)
     tttGames.set(tttKey(phoneNumber, chatJid), game);
     const card = buildOmegaTerminal(
         `   ░▒▓█ *ARENA_CHALLENGE* █▓▒░\n\n` +
-        `   ✦ *HOST* :: ${tttShort(challenger)}  ❌\n` +
-        `   ✦ *INVITED* :: ${tttShort(target)}  ⭕\n\n` +
-        `   Only ${tttShort(target)} can sit.\n` +
+        `   ✦ *HOST* :: ${xLabel}  ❌\n` +
+        `   ✦ *INVITED* :: ${oLabel}  ⭕\n\n` +
+        `   Only ${oLabel} can sit.\n` +
         `   3 minutes to accept.`
     );
     await sock.sendMessage(chatJid, { text: card, mentions: [target, challenger].filter(j => j && j !== 'BOT') });
@@ -1317,8 +1469,12 @@ async function tttOpenLobby(sock, phoneNumber, chatJid, host) {
         await sock.sendMessage(chatJid, { text: '❌ An arena is already open here. *.ttt quit* to fold it.' });
         return;
     }
+    const xLabel = await tttResolveLabel(sock, phoneNumber, host, null);
     const game = {
         chatJid, x: host, o: null, vsBot: false, difficulty: '',
+        xLabel, oLabel: 'open',
+        xIds: tttCollectIds(sock, phoneNumber, host, null),
+        oIds: [],
         board: Array(9).fill(null), turn: 'X', status: 'pending',
         boardKey: null, pollKey: null, timer: null, idleTimer: null,
         moveCount: 0, openSeat: true, startedAt: Date.now()
@@ -1327,7 +1483,7 @@ async function tttOpenLobby(sock, phoneNumber, chatJid, host) {
     await sock.sendMessage(chatJid, {
         text: buildOmegaTerminal(
             `   ░▒▓█ *OPEN SEAT* █▓▒░\n\n` +
-            `   ✦ *HOST* :: ${tttShort(host)}  ❌\n` +
+            `   ✦ *HOST* :: ${xLabel}  ❌\n` +
             `   ✦ *SEAT* :: first soul who claims ⭕\n\n` +
             `   Anyone can sit. First Accept wins.\n` +
             `   3 minutes or the chair vanishes.`
@@ -3167,7 +3323,10 @@ async function handleMenuVote(sock, remoteJid, phoneNumber, votedOptionId, pollI
                     x: host,
                     o: 'BOT',
                     vsBot: true,
-                    difficulty: diff
+                    difficulty: diff,
+                    xLabel: sess.hostLabel || await tttResolveLabel(sock, phoneNumber, host, null),
+                    oLabel: 'VOID',
+                    xIds: sess.hostIds || tttCollectIds(sock, phoneNumber, host, null)
                 });
                 break;
             }
@@ -3182,6 +3341,8 @@ async function handleMenuVote(sock, remoteJid, phoneNumber, votedOptionId, pollI
                         break;
                     }
                     game.o = voter;
+                    game.oLabel = await tttResolveLabel(sock, phoneNumber, voter, null);
+                    game.oIds = tttCollectIds(sock, phoneNumber, voter, null);
                     game.openSeat = false;
                 } else if (!tttSamePlayer(voter, game.o)) {
                     await sock.sendMessage(remoteJid, { text: '❌ This invite is sealed. Only the tagged rival may sit.' });
@@ -3213,7 +3374,8 @@ async function handleMenuVote(sock, remoteJid, phoneNumber, votedOptionId, pollI
                 const game = getTttGame(phoneNumber, remoteJid);
                 if (!game) { await sock.sendMessage(remoteJid, { text: '❌ No arena to rematch. *.ttt*' }); break; }
                 await tttStart(sock, phoneNumber, remoteJid, {
-                    x: game.x, o: game.o, vsBot: game.vsBot, difficulty: game.difficulty || 'medium'
+                    x: game.x, o: game.o, vsBot: game.vsBot, difficulty: game.difficulty || 'medium',
+                    xLabel: game.xLabel, oLabel: game.oLabel, xIds: game.xIds || [], oIds: game.oIds || []
                 });
                 break;
             }
@@ -3831,7 +3993,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     if (/^[1-9]$/.test(normalized)) {
         const live = getTttGame(phoneNumber, remoteJid);
         if (live && live.status === 'active' && tttIsReplyToBoard(msg, live)) {
-            await tttTryMove(sock, phoneNumber, remoteJid, senderJid, parseInt(normalized, 10) - 1);
+            await tttTryMove(sock, phoneNumber, remoteJid, senderJid, parseInt(normalized, 10) - 1, msg);
             return;
         }
     }
@@ -5650,7 +5812,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
                 await sock.sendMessage(remoteJid, { text: '↪ Reply to the *board* with the number. A loose 5 in chat is just chat.' });
                 return;
             }
-            await tttTryMove(sock, phoneNumber, remoteJid, senderJid, parseInt(sub, 10) - 1);
+            await tttTryMove(sock, phoneNumber, remoteJid, senderJid, parseInt(sub, 10) - 1, msg);
             return;
         }
         if (live && live.status === 'active') {
@@ -5672,10 +5834,19 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         }
         if (['bot', 'easy', 'medium', 'hard', 'void'].includes(sub)) {
             const diff = sub === 'easy' || sub === 'hard' || sub === 'medium' ? sub : 'medium';
-            await tttStart(sock, phoneNumber, remoteJid, { x: senderJid, o: 'BOT', vsBot: true, difficulty: diff });
+            await tttStart(sock, phoneNumber, remoteJid, {
+                x: senderJid, o: 'BOT', vsBot: true, difficulty: diff,
+                xLabel: await tttResolveLabel(sock, phoneNumber, senderJid, msg),
+                oLabel: 'VOID',
+                xIds: tttCollectIds(sock, phoneNumber, senderJid, msg)
+            });
             return;
         }
-        tttSetupSessions.set(phoneNumber, { step: 'mode', chat: remoteJid, host: senderJid });
+        tttSetupSessions.set(phoneNumber, {
+            step: 'mode', chat: remoteJid, host: senderJid,
+            hostLabel: await tttResolveLabel(sock, phoneNumber, senderJid, msg),
+            hostIds: tttCollectIds(sock, phoneNumber, senderJid, msg)
+        });
         await sock.sendMessage(remoteJid, {
             text: buildOmegaTerminal(
                 `   ░▒▓█ *EVENTIDE ARENA* █▓▒░\n\n` +
