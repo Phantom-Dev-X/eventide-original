@@ -1203,15 +1203,25 @@ function tttBotMove(board, aiMark, difficulty) {
 }
 
 function renderTttBoard(game, extra = '') {
-    // Monospace card. Each square is EXACTLY 7 chars so it matches
-    // the 7 dashes in the border. Empty "   N   "; emoji replaces
-    // the digit AND one space (WA emoji = 2 cols) → "   ❌  ".
-    const win = tttWinner(game.board);
+    // Exact grid the owner pasted. Do not "fix" spacing.
+    const EMPTY = [
+        '         1      ',
+        '        2      ',
+        '        3        ',
+        '         4      ',
+        '        5      ',
+        '       6        ',
+        '         7       ',
+        '        8      ',
+        '        9        '
+    ];
     const cell = (i) => {
-        if (game.board[i] === 'X') return '   ❌  ';
-        if (game.board[i] === 'O') return '   ⭕  ';
-        return '   ' + (i + 1) + '   ';
+        const raw = EMPTY[i];
+        if (game.board[i] === 'X') return raw.replace(String(i + 1) + ' ', '❌');
+        if (game.board[i] === 'O') return raw.replace(String(i + 1) + ' ', '⭕');
+        return raw;
     };
+    const win = tttWinner(game.board);
     const xName = tttName(game, 'x');
     const oName = tttName(game, 'o');
     const oLine = game.difficulty ? (oName + '  ·  ' + String(game.difficulty).toUpperCase()) : oName;
@@ -1219,42 +1229,40 @@ function renderTttBoard(game, extra = '') {
     const turnName = game.turn === 'X' ? xName : oName;
     let footer;
     if (game.status === 'pending') {
-        footer = 'waiting for accept…';
+        footer = '   waiting for accept…';
     } else if (win?.mark === 'DRAW') {
-        footer = '●  draw. the grid holds.';
+        footer = '   ●  draw. the grid holds.';
     } else if (win?.mark) {
         const champ = win.mark === 'X' ? xName : oName;
-        footer = '●  ' + (win.mark === 'X' ? '❌' : '⭕') + '  ' + champ + '  wins';
+        footer = '   ●  ' + (win.mark === 'X' ? '❌' : '⭕') + '  ' + champ + '  wins';
     } else {
         footer = (
-            '●  ' + turnMark + '  ' + turnName + '  to move\n' +
-            'reply to THIS board with 1–9\n' +
-            '1 min a turn'
+            '   ●  ' + turnMark + '  ' + turnName + '  to move\n' +
+            '   reply to THIS board with 1–9\n' +
+            '   1 min a turn'
         );
     }
     const note = extra ? ('\n' + String(extra).replace(/^\n+/, '')) : '';
 
     return (
-        '```\n' +
         '      ✦ EVENTIDE ARENA ✦\n' +
         '         TIC · TAC · TOE\n' +
         '\n' +
-        '╭───────┬───────┬───────╮\n' +
+        '╭──────┬──────┬──────╮\n' +
         '│' + cell(0) + '│' + cell(1) + '│' + cell(2) + '│\n' +
-        '├───────┼───────┼───────┤\n' +
-        '│' + cell(3) + '│' + cell(4) + '│' + cell(5) + '│\n' +
-        '├───────┼───────┼───────┤\n' +
+        '├──────┼──────┼──────┤\n' +
+        '│' + cell(3) + '│' + cell(4) + '│' + cell(5) + '│ ├──────┼──────┼──────┤\n' +
         '│' + cell(6) + '│' + cell(7) + '│' + cell(8) + '│\n' +
-        '╰───────┴───────┴───────╯\n' +
+        '╰──────┴──────┴──────╯\n' +
         '\n' +
         '❌  ' + xName + '\n' +
         '⭕  ' + oLine + '\n' +
         '\n' +
         footer +
-        note +
-        '\n```'
+        note
     );
 }
+
 function getTttGame(phoneNumber, chatJid) {
     return tttGames.get(tttKey(phoneNumber, chatJid)) || null;
 }
