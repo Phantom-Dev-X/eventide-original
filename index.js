@@ -1202,11 +1202,12 @@ function tttBotMove(board, aiMark, difficulty) {
     return best;
 }
 
-function renderTttBoard(game) {
+function renderTttBoard(game, extra = '') {
+    // Monospace card. Each square is EXACTLY 7 chars so it matches
+    // the 7 dashes in the border. Empty "   N   "; emoji replaces
+    // the digit AND one space (WA emoji = 2 cols) → "   ❌  ".
     const win = tttWinner(game.board);
     const cell = (i) => {
-        // Empty is "   N   " (digit centered). ❌/⭕ are 2 cols in WhatsApp,
-        // so drop the digit AND one space, then drop the emoji in that hole.
         if (game.board[i] === 'X') return '   ❌  ';
         if (game.board[i] === 'O') return '   ⭕  ';
         return '   ' + (i + 1) + '   ';
@@ -1218,36 +1219,40 @@ function renderTttBoard(game) {
     const turnName = game.turn === 'X' ? xName : oName;
     let footer;
     if (game.status === 'pending') {
-        footer = '   waiting for the challenged to accept…';
+        footer = 'waiting for accept…';
     } else if (win?.mark === 'DRAW') {
-        footer = '   ●  draw. the grid holds.';
+        footer = '●  draw. the grid holds.';
     } else if (win?.mark) {
         const champ = win.mark === 'X' ? xName : oName;
-        footer = '   ●  ' + (win.mark === 'X' ? '❌' : '⭕') + '  ' + champ + '  wins';
+        footer = '●  ' + (win.mark === 'X' ? '❌' : '⭕') + '  ' + champ + '  wins';
     } else {
         footer = (
-            '   ●  ' + turnMark + '  ' + turnName + '\n' +
-            '   your move · reply 1–9\n' +
-            '   1 min a turn'
+            '●  ' + turnMark + '  ' + turnName + '  to move\n' +
+            'reply to THIS board with 1–9\n' +
+            '1 min a turn'
         );
     }
+    const note = extra ? ('\n' + String(extra).replace(/^\n+/, '')) : '';
 
     return (
+        '```\n' +
         '      ✦ EVENTIDE ARENA ✦\n' +
         '         TIC · TAC · TOE\n' +
         '\n' +
-        '    ╭──────┬──────┬──────╮\n' +
-        '    │' + cell(0) + '│' + cell(1) + '│' + cell(2) + '│\n' +
-        '    ├──────┼──────┼──────┤\n' +
-        '    │' + cell(3) + '│' + cell(4) + '│' + cell(5) + '│\n' +
-        '    ├──────┼──────┼──────┤\n' +
-        '    │' + cell(6) + '│' + cell(7) + '│' + cell(8) + '│\n' +
-        '    ╰──────┴──────┴──────╯\n' +
+        '╭───────┬───────┬───────╮\n' +
+        '│' + cell(0) + '│' + cell(1) + '│' + cell(2) + '│\n' +
+        '├───────┼───────┼───────┤\n' +
+        '│' + cell(3) + '│' + cell(4) + '│' + cell(5) + '│\n' +
+        '├───────┼───────┼───────┤\n' +
+        '│' + cell(6) + '│' + cell(7) + '│' + cell(8) + '│\n' +
+        '╰───────┴───────┴───────╯\n' +
         '\n' +
-        '    ❌  ' + xName + '\n' +
-        '    ⭕  ' + oLine + '\n' +
+        '❌  ' + xName + '\n' +
+        '⭕  ' + oLine + '\n' +
         '\n' +
-        footer
+        footer +
+        note +
+        '\n```'
     );
 }
 function getTttGame(phoneNumber, chatJid) {
@@ -1278,8 +1283,7 @@ function tttIsReplyToBoard(msg, game) {
 }
 
 async function tttPaint(sock, phoneNumber, game, { extra = '', rematch = false } = {}) {
-    let body = renderTttBoard(game);
-    if (extra) body += '\n' + extra;
+    const body = renderTttBoard(game, extra);
     try {
         if (game.boardKey?.id) {
             await sock.sendMessage(game.chatJid, { text: body, edit: game.boardKey });
