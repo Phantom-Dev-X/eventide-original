@@ -1667,7 +1667,7 @@ CRITICAL INSTRUCTION FOR DEEP THINKING: Before answering, always perform a deep 
 Tone and Behavioural Nuances:
 - Your tone should be extremely casual, helpful, reassuring, and conversational (e.g. use "oh, I get you!", "don't worry, we got you covered!").
 - When asked about a feature, explains things step-by-step using WhatsApp bullet points (•).
-- UNKNOWN / FUTURE COMMAND RULE: If a user asks about a command or feature that is not currently built into the bot (e.g. any downloaders, games, or features not in the active registry), you must politely let them know that this specific command is not available currently. However, tell them they can let the main developer Patrick Dev know about their amazing suggestion or idea by simply typing the ".dev" command! Keep it extremely encouraging and casual.
+- UNKNOWN / FUTURE COMMAND RULE: If a user asks about a command or feature that is not currently built into the bot (e.g. any downloaders or features not in the active registry), you must politely let them know that this specific command is not available currently. However, tell them they can let the main developer Patrick Dev know about their amazing suggestion or idea by simply typing the ".dev" command! Keep it extremely encouraging and casual. Games ARE built: .ttt .hangman .chain .trivia .riddle.
 
 Key Information about the bot's active command registry:
 - To see the main menu, type ".menu". It triggers a premium animated loading bar sequence and presents active menu polls.
@@ -1676,6 +1676,13 @@ Key Information about the bot's active command registry:
   2. ".add <number>": Adds a member to the group (sender must be admin, bot must be admin).
   3. ".kick <number/reply/mention>": Removes a participant from the group (supports replying to their message, tagging them, or entering their number).
   4. ".link": Generates and sends the current group invite link.
+- Games (tell the user to reply to the game card, not type loose chat):
+  1. ".ttt" — tic-tac-toe vs bot (easy/medium/hard) or vs a human. Reply to the board with 1-9.
+  2. ".hangman" (alias .hm) — guess letters. Solo or open. Reply to the gallows.
+  3. ".chain" (alias .wc) — word chain. Reply to the card with a word starting with the last letter.
+  4. ".trivia" (alias .quiz) — poll quiz, 5 or 10 questions.
+  5. ".riddle" — first correct wins. ".hint" for a clue.
+- Fun: ".roast", ".pickupline", ".joke", ".flirt", ".compliment", ".rate", ".ship"
 - Bot Access Privacy Mode (".mode"):
   - ".mode owner" (or shortcut ".owner"): Locks the bot so only the paired owner (the primary account) can execute dot commands.
   - ".mode public" (or shortcut ".public"): Opens the bot so anyone in private chats or groups can use commands.
@@ -1720,25 +1727,77 @@ function getCommandHelpData(query) {
                   "• *.restart* / *.shutdown* — Reboot / power\n" +
                   "• *.autoreact on/off* — Auto-reaction\n" +
                   "• *.antidelete on/off* — Anti-delete\n\n" +
+                  "*🎮 GAMES:*\n" +
+                  "• *.ttt* — tic-tac-toe (bot 3 levels / human)\n" +
+                  "• *.hangman* / *.hm* — gallows\n" +
+                  "• *.chain* / *.wc* — word chain\n" +
+                  "• *.trivia* / *.quiz* — poll quiz\n" +
+                  "• *.riddle* / *.hint* — first correct wins\n\n" +
+                  "*🎲 FUN:*\n" +
+                  "• *.roast* / *.pickupline* / *.rizz*\n" +
+                  "• *.joke* / *.flirt* / *.compliment* / *.rate* / *.ship*\n\n" +
                   "*👥 GROUP:*\n" +
                   "• *.join <link>* — Join a group\n" +
                   "• *.add <number>* — Add member\n" +
                   "• *.kick <user>* — Remove member\n" +
+                  "• *.hidetag* / *.ht* — silent mention\n" +
+                  "• *.warn* / *.warnconfig* — strike system\n" +
                   "• *.link* — Get group invite link\n\n" +
-                  "💡 *Tip*: Use *.menu* to open the menu, or type *.help <topic>* for specifics."
+                  "💡 *Tip*: Use *.menu* to open the menu, or type *.help hangman* (or trivia, ttt, riddle, chain) for specifics."
         };
     }
 
+    if (q.includes("hangman") || q === "hm") {
+        return {
+            title: "Hangman (.hangman / .hm)",
+            desc: "Guess the word. 6 misses and they hang.\n\n" +
+                  "• *.hangman* — Solo or Open, then pick a word bag\n" +
+                  "• *Reply to the gallows* with a letter or the full word\n" +
+                  "• Loose letters in chat are ignored\n" +
+                  "• 90s of silence and they hang\n" +
+                  "• *.hangman quit*"
+        };
+    }
+    if (q.includes("chain") || q.includes("wordchain") || q === "wc") {
+        return {
+            title: "Word Chain (.chain / .wc)",
+            desc: "Next word must start with the last letter.\n\n" +
+                  "• *.chain* — I open with a word\n" +
+                  "• *Reply to the card* with a 3+ letter word in the lexicon\n" +
+                  "• No repeats · 60s or the chain snaps\n" +
+                  "• *.chain quit*"
+        };
+    }
+    if (q.includes("trivia") || q.includes("quiz")) {
+        return {
+            title: "Trivia (.trivia / .quiz)",
+            desc: "Poll quiz. First vote locks.\n\n" +
+                  "• *.trivia* — category, then 5 or 10 questions\n" +
+                  "• 25 seconds a question · anyone can vote\n" +
+                  "• *.trivia quit*"
+        };
+    }
+    if (q.includes("riddle")) {
+        return {
+            title: "Riddle (.riddle)",
+            desc: "First correct guess wins.\n\n" +
+                  "• *.riddle* — I pose one\n" +
+                  "• *Reply to the riddle* with your answer\n" +
+                  "• *.hint* for a clue (2 max)\n" +
+                  "• 2 minutes then I reveal\n" +
+                  "• *.riddle skip*"
+        };
+    }
     if (q.includes("ttt") || q.includes("tictactoe") || q.includes("tic tac") || q === "xo") {
         return {
             title: "Tic-Tac-Toe (.ttt)",
             desc: "Premium Eventide arena.\n\n" +
-                  "• *.ttt* — open the grid (bot or challenge)\n" +
-                  "• *.ttt @user* / reply — challenge them\n" +
-                  "• *.ttt bot* / *.ttt hard* — duel the void\n" +
-                  "• Type *1–9* to move (or vote the poll)\n" +
-                  "• *.ttt board* redraw · *.ttt quit* fold\n\n" +
-                  "3 minutes a turn. Rematch poll at the end."
+                  "• *.ttt* — poll: vs Bot or vs Human\n" +
+                  "• Bot → pick Easy / Medium / Hard\n" +
+                  "• Human → first Accept sits, or *.ttt @user* / reply to invite one person\n" +
+                  "• *Reply to the board* with 1–9 to move (loose numbers are ignored)\n" +
+                  "• 1 minute a turn · 3 minutes of nobody playing ends it\n" +
+                  "• *.ttt quit* / *.ttt board*"
         };
     }
     if (q.includes("roast") || q.includes("pickup") || q.includes("rizz") || q === "joke" || q.includes("fun cmd")) {
