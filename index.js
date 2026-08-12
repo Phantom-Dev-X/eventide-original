@@ -1217,8 +1217,9 @@ function renderTttBoard(game, extra = '') {
     ];
     const cell = (i) => {
         const raw = EMPTY[i];
-        if (game.board[i] === 'X') return raw.replace(String(i + 1) + ' ', '❌');
-        if (game.board[i] === 'O') return raw.replace(String(i + 1) + ' ', '⭕');
+        // Sticker is 2 cols on WhatsApp: drop the digit AND two spaces.
+        if (game.board[i] === 'X') return raw.replace(String(i + 1) + '  ', '❌');
+        if (game.board[i] === 'O') return raw.replace(String(i + 1) + '  ', '⭕');
         return raw;
     };
     const win = tttWinner(game.board);
