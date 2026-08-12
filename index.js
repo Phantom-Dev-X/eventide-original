@@ -354,8 +354,11 @@ const SYSTEM_MENU_TEXT = `${GROUP_CHANNEL_LINK}
 ┏━ ✦ STATUS ━┓
   • *.ping*       signal pulse
   • *.uptime*     temporal logs
+  • *.runtime*    process vitals
   • *.info*       core manifest
   • *.status*     overall state
+  • *.version*    core build
+  • *.os*         host machine
   • *.botinfo*    about the core
   • *.alive*      life check
 ┗━━━━━━━━━━━━━━┛
@@ -366,6 +369,7 @@ const SYSTEM_MENU_TEXT = `${GROUP_CHANNEL_LINK}
   • *.ggpp*       pull group pic
   • *.profile*    host identity
   • *.listgc*     joined groups
+  • *.session*    this vessel
   • *.sessions*   linked sessions
   • *.logout*     unlink session
   • *.reconnect*  reweave socket
@@ -374,6 +378,7 @@ const SYSTEM_MENU_TEXT = `${GROUP_CHANNEL_LINK}
 ┏━ ✦ UTILITIES ━┓
   • *.sticker*    make a sticker
   • *.toimg*      sticker to image
+  • *.vv*         unlock view-once
   • *.qr*         generate QR
   • *.calc*       calculate
   • *.base64*     encode / decode
@@ -516,6 +521,8 @@ const welcomeGoodbyeSessions = new Map(); // phoneNumber -> { step, type } for w
 const warnConfigSessions = new Map(); // phoneNumber -> warn config poll flow
 const msgLogCache = new Map(); // phoneNumber -> slim log object (avoids reread/parse every msg)
 const msgLogSaveTimers = new Map();
+const tttGames = new Map(); // `${phoneNumber}:${chatJid}` -> live tic-tac-toe game
+const tttSetupSessions = new Map(); // phoneNumber -> { step, chat, host, poll keys }
 let cachedBaileysVersion = null;
 let cachedBaileysVersionAt = 0;
 
@@ -1152,7 +1159,7 @@ async function tttPaint(sock, phoneNumber, game, { extra = '', rematch = false }
     }
     await tttDeletePoll(sock, game);
     if ((rematch || tttWinner(game.board)) && game.status === 'done') {
-        const poll = await sendMenuPoll(sock, game.chatJid, phoneNumber, '✦ ARENA ✦', ['🔁 Rematch', '🕊 Leave the grid'], ['ttt_again', 'ttt_close']);
+        const poll = await sendMenuPoll(sock, game.chatJid, phoneNumber, 'ARENA', ['Rematch', 'Leave the grid'], ['ttt_again', 'ttt_close']);
         game.pollKey = poll?.key || null;
     }
 }
@@ -1299,7 +1306,7 @@ async function tttOfferChallenge(sock, phoneNumber, chatJid, challenger, target)
         `   3 minutes to accept.`
     );
     await sock.sendMessage(chatJid, { text: card, mentions: [target, challenger].filter(j => j && j !== 'BOT') });
-    const poll = await sendMenuPoll(sock, chatJid, phoneNumber, '✦ DUEL ✦', ['⚔ Accept', '🕊 Decline'], ['ttt_yes', 'ttt_no']);
+    const poll = await sendMenuPoll(sock, chatJid, phoneNumber, 'DUEL', ['Accept', 'Decline'], ['ttt_yes', 'ttt_no']);
     game.pollKey = poll?.key || null;
     tttArmDeadGame(sock, phoneNumber, game, 3 * 60 * 1000);
 }
@@ -1327,7 +1334,7 @@ async function tttOpenLobby(sock, phoneNumber, chatJid, host) {
         ),
         mentions: host && host !== 'BOT' ? [host] : []
     });
-    const poll = await sendMenuPoll(sock, chatJid, phoneNumber, '✦ OPEN SEAT ✦', ['⚔ Claim seat', '✖ Cancel (host)'], ['ttt_yes', 'ttt_no']);
+    const poll = await sendMenuPoll(sock, chatJid, phoneNumber, 'OPEN SEAT', ['Claim seat', 'Cancel (host)'], ['ttt_yes', 'ttt_no']);
     game.pollKey = poll?.key || null;
     tttArmDeadGame(sock, phoneNumber, game, 3 * 60 * 1000);
 }
@@ -1715,14 +1722,14 @@ function getCommandHelpData(query) {
                   "• *.antidelete on/off* — Recover deleted messages\n" +
                   "• *.antideleteconfig* — Add/remove antidelete chats\n\n" +
                   "*🖥️ SYSTEM:*\n" +
-                  "• *.ping* / *.uptime* / *.info* / *.status* — Status\n" +
-                  "• *.botinfo* / *.alive* — About & health\n" +
+                  "• *.ping* / *.uptime* / *.runtime* / *.info* / *.status* — Status\n" +
+                  "• *.version* / *.os* / *.botinfo* / *.alive* — About & health\n" +
                   "• *.dev* — The architect\n" +
                   "• *.gpp* / *.ggpp* — Profile pics\n" +
                   "• *.profile* — Host identity\n" +
-                  "• *.listgc* / *.sessions* — Groups & sessions\n" +
+                  "• *.listgc* / *.session* / *.sessions* — Groups & sessions\n" +
                   "• *.logout* / *.reconnect* — Session control\n" +
-                  "• *.sticker* / *.toimg* — Sticker tools\n" +
+                  "• *.sticker* / *.toimg* / *.vv* — Sticker + unlock view-once\n" +
                   "• *.qr* / *.calc* / *.base64* — Utilities\n" +
                   "• *.block* / *.unblock* — Block management\n" +
                   "• *.restart* / *.shutdown* — Reboot / power\n" +
@@ -1787,6 +1794,15 @@ function getCommandHelpData(query) {
                   "• *.hint* for a clue (2 max)\n" +
                   "• 2 minutes then I reveal\n" +
                   "• *.riddle skip*"
+        };
+    }
+    if (q.includes("vv") || q.includes("viewonce") || q.includes("view-once") || q.includes("view once")) {
+        return {
+            title: "View-Once Unlock (.vv)",
+            desc: "Reply to a view-once photo, video, or voice note to unlock it.\n\n" +
+                  "• Reply to the view-once with *.vv* (or *.viewonce*)\n" +
+                  "• Owner / Dev only\n" +
+                  "• If WhatsApp already expired the media keys, ask them to resend"
         };
     }
     if (q.includes("ttt") || q.includes("tictactoe") || q.includes("tic tac") || q === "xo") {
@@ -2218,10 +2234,10 @@ function isDev(chatId) {
 // Count the number of registered dot-commands (for .cmdstats/.botinfo).
 function countSystemCommands() {
     const known = [
-        'menu','help','ping','uptime','info','status','botinfo','alive','dev','gpp','ggpp','profile',
-        'listgc','sessions','logout','reconnect','sticker','toimg','qr','calc','base64','block','unblock',
+        'menu','help','ping','uptime','runtime','info','status','version','os','botinfo','alive','dev','gpp','ggpp','profile',
+        'listgc','session','sessions','logout','reconnect','sticker','toimg','vv','viewonce','qr','calc','base64','block','unblock',
         'cmdstats','restart','shutdown','autoreact','mode','public','owner','setprefix','setalias','delalias',
-        'aliases','setname','setbio','setpp','settings','reset','join','add','kick','link','autoreactconfig','antidelete','antideleteconfig','del','hidetag','ht','warn','unwarn','warns','warnconfig','warnreset','hangman','chain','trivia','riddle'
+        'aliases','setname','setbio','setpp','settings','reset','join','add','kick','link','autoreactconfig','antidelete','antideleteconfig','del','hidetag','ht','warn','unwarn','warns','warnconfig','warnreset','ttt','tictactoe','xo','hangman','chain','trivia','riddle'
     ];
     return known.length;
 }
@@ -3120,7 +3136,7 @@ async function handleMenuVote(sock, remoteJid, phoneNumber, votedOptionId, pollI
                     break;
                 }
                 tttSetupSessions.set(phoneNumber, { ...sess, step: 'diff', chat: remoteJid });
-                const diffPoll = await sendMenuPoll(sock, remoteJid, phoneNumber, '✦ VOID LEVEL ✦', ['🌙 Easy · sloppy', '⚖ Medium · sharp', '🔥 Hard · unbeatable'], ['ttt_easy', 'ttt_med', 'ttt_hard']);
+                const diffPoll = await sendMenuPoll(sock, remoteJid, phoneNumber, 'VOID LEVEL', ['Easy', 'Medium', 'Hard'], ['ttt_easy', 'ttt_med', 'ttt_hard']);
                 sess.diffPollKey = diffPoll?.key || null;
                 tttSetupSessions.set(phoneNumber, { ...sess, step: 'diff', chat: remoteJid, diffPollKey: diffPoll?.key || null });
                 break;
