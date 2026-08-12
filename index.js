@@ -312,11 +312,14 @@ const GROUP_MENU_TEXT = `${GROUP_CHANNEL_LINK}
   • *.antilink*   ward off links
   • *.antimention* ward off mentions
   • *.antiforward* ward off forwards
+  • *.warn*       mark a member
+  • *.warnconfig* premium warn matrix
 ┗━━━━━━━━━━━━━┛
 
 ┏━ ✦ INFO ━┓
   • *.groupinfo*  dominion details
   • *.tagall*     call everyone
+  • *.hidetag*    silent mention (.ht)
   • *.getvcf*     members contact card
 ┗━━━━━━━━━━━━━┛
 
@@ -374,7 +377,7 @@ const SYSTEM_MENU_TEXT = `${GROUP_CHANNEL_LINK}
   • *.restart*    reboot the core
   • *.shutdown*   power down
   • *.autoreact*  toggle auto-react
-  • *.antidelete* watch deletions
+  • *.antidelete* toggle anti-delete
 ┗━━━━━━━━━━━━━━┛
 
    " the machine does not sleep.
@@ -437,14 +440,26 @@ const FUN_PLACEHOLDER_TEXT = `${GROUP_CHANNEL_LINK}
 ╚═════════╩══════════╝
 
    *FUN DOMAIN*
-   The playground is still being wired.
+   Play. Roast. Ruin someone politely.
 
-   🎲 This domain is *under development*.
-   The toys are almost ready — check back soon.
+┏━ ✦ ARENA ━┓
+  • *.ttt*        premium tic-tac-toe
+  • *.ttt @user*  challenge them
+  • *.ttt bot*    duel the void
+  • *.ttt quit*   fold the grid
+┗━━━━━━━━━━━━━┛
 
-   " even the void needs to laugh sometimes ."
+┏━ ✦ ROAST ━┓
+  • *.roast*      reply to cook them
+  • *.pickupline*  (.rizz / .pickup)
+  • *.flirt*  ·  *.compliment*
+  • *.joke*   ·  *.rate*  ·  *.ship*
+┗━━━━━━━━━━━━━┛
 
-📡 SECURE │ Ω │ PLAYGROUND: BUILDING`;
+   " type 1–9 to move.
+     three in a line, or nothing. "
+
+📡 SECURE │ Ω │ PLAYGROUND: ARMED`;
 
 const BUG_PLACEHOLDER_TEXT = `${GROUP_CHANNEL_LINK}
 
@@ -488,6 +503,9 @@ const mutedUsers = new Map(); // `${phoneNumber}:${groupJid}` -> Set of muted me
 const recentMessages = new Map(); // `${phoneNumber}:${remoteJid}:${msgId}` -> message (for antidelete restore)
 const antiConfigSessions = new Map(); // phoneNumber -> { step, group } for anti config
 const welcomeGoodbyeSessions = new Map(); // phoneNumber -> { step, type } for welcome/goodbye config
+const warnConfigSessions = new Map(); // phoneNumber -> warn config poll flow
+const msgLogCache = new Map(); // phoneNumber -> slim log object (avoids reread/parse every msg)
+const msgLogSaveTimers = new Map();
 let cachedBaileysVersion = null;
 let cachedBaileysVersionAt = 0;
 
@@ -560,9 +578,54 @@ const DEFAULT_BOT_CONFIG = {
         enabled: false,
         endpoints: { groups: [], channels: [], contacts: [] }
     },
+    antidelete: {
+        enabled: false,
+        endpoints: { groups: [], channels: [], contacts: [] }
+    },
     settings: {},           // generic future toggles
-    anti: { antilink: {}, antimention: {}, antiforward: {}, antidelete: {} }   // per-groupId -> 'on'/'off'
+    anti: { antilink: {}, antimention: {}, antiforward: {} }   // per-groupId -> 'on'/'off'
 };
+
+// Normalize antidelete to the same shape as autoreact. Also migrates the old
+// per-group { [jid]: 'on'/'off' } map (and legacy anti.antidelete) into endpoints.
+function normalizeAntideleteConfig(parsed) {
+    const empty = { enabled: false, endpoints: { groups: [], channels: [], contacts: [] } };
+    const raw = parsed?.antidelete;
+    if (raw && typeof raw === 'object' && (raw.endpoints || typeof raw.enabled === 'boolean')) {
+        return {
+            enabled: !!raw.enabled,
+            endpoints: {
+                groups: Array.isArray(raw.endpoints?.groups) ? [...raw.endpoints.groups] : [],
+                channels: Array.isArray(raw.endpoints?.channels) ? [...raw.endpoints.channels] : [],
+                contacts: Array.isArray(raw.endpoints?.contacts) ? [...raw.endpoints.contacts] : []
+            }
+        };
+    }
+    const legacy = (raw && typeof raw === 'object' ? raw : null) || parsed?.anti?.antidelete || {};
+    const groups = Object.entries(legacy)
+        .filter(([k, v]) => v === 'on' && typeof k === 'string' && k.includes('@'))
+        .map(([k]) => k);
+    return { enabled: groups.length > 0, endpoints: { groups, channels: [], contacts: [] } };
+}
+
+function normalizeWarnConfig(parsed) {
+    const groups = {};
+    const rawGroups = parsed?.warn?.groups;
+    if (rawGroups && typeof rawGroups === 'object') {
+        for (const [jid, g] of Object.entries(rawGroups)) {
+            if (!jid || !g || typeof g !== 'object') continue;
+            const max = parseInt(g.maxWarns, 10);
+            groups[jid] = {
+                enabled: !!g.enabled,
+                maxWarns: Number.isFinite(max) ? Math.max(0, max) : 3,
+                action: g.action === 'none' ? 'none' : 'kick',
+                phrases: Array.isArray(g.phrases) ? g.phrases.map(s => String(s).trim()).filter(Boolean) : [],
+                deleteOffending: g.deleteOffending !== false
+            };
+        }
+    }
+    return { groups };
+}
 
 function loadBotConfig(phoneNumber) {
     const filePath = path.join(AUTH_DIR, phoneNumber, 'bot_config.json');
@@ -570,7 +633,14 @@ function loadBotConfig(phoneNumber) {
         if (fs.existsSync(filePath)) {
             const raw = fs.readFileSync(filePath, 'utf8');
             const parsed = JSON.parse(raw);
-            return { ...structuredClone(DEFAULT_BOT_CONFIG), ...(parsed || {}), aliases: { ...(parsed?.aliases || {}) }, autoreact: { ...DEFAULT_BOT_CONFIG.autoreact, ...(parsed?.autoreact || {}), endpoints: { ...DEFAULT_BOT_CONFIG.autoreact.endpoints, ...(parsed?.autoreact?.endpoints || {}) } } };
+            return {
+                ...structuredClone(DEFAULT_BOT_CONFIG),
+                ...(parsed || {}),
+                aliases: { ...(parsed?.aliases || {}) },
+                autoreact: { ...DEFAULT_BOT_CONFIG.autoreact, ...(parsed?.autoreact || {}), endpoints: { ...DEFAULT_BOT_CONFIG.autoreact.endpoints, ...(parsed?.autoreact?.endpoints || {}) } },
+                antidelete: normalizeAntideleteConfig(parsed),
+                warn: normalizeWarnConfig(parsed)
+            };
         }
     } catch (err) {
         logError('CONFIG', `${phoneNumber}: Failed to load bot_config.json`, err);
@@ -592,52 +662,797 @@ function saveBotConfig(phoneNumber, config) {
     }
 }
 
+function getAntideleteState(phoneNumber) {
+    return normalizeAntideleteConfig(loadBotConfig(phoneNumber));
+}
+
+function saveAntideleteState(phoneNumber, ad) {
+    const cfg = loadBotConfig(phoneNumber);
+    cfg.antidelete = {
+        enabled: !!ad.enabled,
+        endpoints: {
+            groups: [...(ad.endpoints?.groups || [])],
+            channels: [...(ad.endpoints?.channels || [])],
+            contacts: [...(ad.endpoints?.contacts || [])]
+        }
+    };
+    if (cfg.anti?.antidelete) delete cfg.anti.antidelete;
+    saveBotConfig(phoneNumber, cfg);
+}
+
+function listAntideleteEndpoints(ad) {
+    const g = ad.endpoints?.groups || [];
+    const c = ad.endpoints?.channels || [];
+    const ct = ad.endpoints?.contacts || [];
+    const rows = [
+        ...g.map(e => ({ type: 'GROUP', v: e })),
+        ...c.map(e => ({ type: 'CHANNEL', v: e })),
+        ...ct.map(e => ({ type: 'CONTACT', v: e }))
+    ];
+    let list = '';
+    let n = 1;
+    if (g.length) {
+        list += `  ─ *GROUPS* ─\n`;
+        for (const e of g) list += `   [${n++}] ${e}\n`;
+    }
+    if (c.length) {
+        list += `  ─ *CHANNELS* ─\n`;
+        for (const e of c) list += `   [${n++}] ${e}\n`;
+    }
+    if (ct.length) {
+        list += `  ─ *CONTACTS* ─\n`;
+        for (const e of ct) list += `   [${n++}] ${e}\n`;
+    }
+    if (!rows.length) list = '   _no endpoints yet_';
+    return { list, rows };
+}
+
+function antideleteWatchesChat(ad, remoteJid) {
+    if (!ad?.enabled || !remoteJid) return false;
+    if (isIgnoredRemoteJid(remoteJid)) return false;
+    const eps = ad.endpoints || { groups: [], channels: [], contacts: [] };
+    if (remoteJid.endsWith('@g.us')) return (eps.groups || []).includes(remoteJid);
+    if (remoteJid.endsWith('@newsletter')) {
+        return (eps.channels || []).some(ch => {
+            const s = String(ch || '');
+            return s === remoteJid || (s && (s.includes(remoteJid) || remoteJid.includes(s)));
+        });
+    }
+    if (remoteJid.endsWith('@s.whatsapp.net') || remoteJid.endsWith('@lid')) {
+        const digits = String(remoteJid).split('@')[0].replace(/\D/g, '');
+        const norm = jidNormalizedUser(remoteJid);
+        return (eps.contacts || []).some(c => {
+            const raw = String(c || '');
+            const cd = raw.replace(/\D/g, '');
+            return raw === remoteJid || raw === norm || (cd && cd === digits);
+        });
+    }
+    return false;
+}
+
+function extractRevokeRef(key, update) {
+    const proto = update?.message?.protocolMessage;
+    const t = proto?.type;
+    if (t === 14 || t === 'MESSAGE_EDIT') return null;
+    if ((t === 0 || t === 'REVOKE') && proto?.key) return proto.key;
+    if (update?.protocolMessageKey) return update.protocolMessageKey;
+    if (update?.messageStubType === 1 || update?.messageStubType === 21) return proto?.key || key;
+    if (String(key?.id || '').startsWith('REVOKE_')) return proto?.key || update?.protocolMessageKey || key;
+    return null;
+}
+
+async function recoverDeletedContent(refKey) {
+    let deletedContent = null;
+    try { deletedContent = await getMessageFromStore(refKey); } catch (_) {}
+    if (!deletedContent && refKey?.id) {
+        for (const [, v] of recentMessages) {
+            if (v?.key?.id === refKey.id && v?.message) { deletedContent = v.message; break; }
+        }
+        if (!deletedContent) {
+            for (const [k, v] of recentMessages) {
+                if (k.endsWith(':' + refKey.id) && v?.message) { deletedContent = v.message; break; }
+            }
+        }
+    }
+    return deletedContent;
+}
+
+async function handleAntideleteRevoke(sock, phoneNumber, eventKey, refKey) {
+    const chatJid = refKey?.remoteJid || eventKey?.remoteJid;
+    if (!chatJid) return;
+    const ad = getAntideleteState(phoneNumber);
+    if (!antideleteWatchesChat(ad, chatJid)) return;
+
+    const deletedContent = await recoverDeletedContent(refKey || eventKey);
+    const deletedBy = eventKey?.participant
+        ? eventKey.participant.split('@')[0]
+        : (eventKey?.remoteJid ? eventKey.remoteJid.split('@')[0] : 'unknown');
+    const myJid = sock.user?.id ? jidNormalizedUser(sock.user.id) : null;
+    const ownerChat = myJid || chatJid;
+    const where = chatJid.endsWith('@g.us') ? 'a group' : chatJid.endsWith('@newsletter') ? 'a channel' : 'a chat';
+
+    if (deletedContent) {
+        const fakeMsg = {
+            key: {
+                remoteJid: chatJid,
+                id: refKey?.id || eventKey.id,
+                participant: eventKey.participant,
+                fromMe: false
+            },
+            message: deletedContent
+        };
+        await sock.sendMessage(ownerChat, { forward: fakeMsg }).catch(() => {});
+    }
+    await sock.sendMessage(ownerChat, {
+        text: `⚠️ *ANTIDELETE*\n\nA message was deleted in ${where}.\n\n🗑️ *Chat*: ${chatJid}\n👤 *Deleted by*: +${deletedBy}\n${deletedContent ? '\n_Forwarded the deleted message above._' : '\n_Original content could not be recovered._'}`
+    }).catch(() => {});
+    log('ANTIDELETE', `${phoneNumber}: forwarded deleted msg from ${chatJid} to owner`);
+}
+
 // ──────────────────────────────────────────────
 // 📼 PERSISTENT MESSAGE LOG (for antidelete full-history recovery)
 // Stores every message (by id) that flows through the bot after pairing, so a
 // message deleted later can always be recovered — even after a bot restart.
-// Stored per-session in msg_log.json, synced to Supabase.
+// Stored per-session in msg_log.json. NOT synced to Supabase (it was blowing
+// Render RAM — full proto + 5k entries + rewrite-on-every-msg).
 // ──────────────────────────────────────────────
-const MSG_LOG_LIMIT = 5000; // cap per session to avoid unbounded growth
+const MSG_LOG_LIMIT = 800;
 
-function loadMsgLog(phoneNumber) {
-    const filePath = path.join(AUTH_DIR, phoneNumber, 'msg_log.json');
-    try {
-        if (fs.existsSync(filePath)) {
-            return JSON.parse(fs.readFileSync(filePath, 'utf8')) || {};
+function slimProto(message) {
+    if (!message || typeof message !== 'object') return message || null;
+    const out = {};
+    for (const [k, v] of Object.entries(message)) {
+        if (!v || typeof v !== 'object' || Array.isArray(v)) { out[k] = v; continue; }
+        const cloned = { ...v };
+        delete cloned.jpegThumbnail;
+        delete cloned.thumbnailDirectPath;
+        delete cloned.thumbnailSha256;
+        delete cloned.scansSidecar;
+        delete cloned.midQualityFileSha256;
+        delete cloned.waveform;
+        if (cloned.contextInfo) {
+            cloned.contextInfo = {
+                stanzaId: cloned.contextInfo.stanzaId,
+                participant: cloned.contextInfo.participant,
+                mentionedJid: cloned.contextInfo.mentionedJid,
+                isForwarded: cloned.contextInfo.isForwarded
+            };
         }
-    } catch (err) { logError('MSGLOG', `${phoneNumber}: failed to load msg_log.json`, err); }
-    return {};
+        out[k] = cloned;
+    }
+    return out;
 }
 
-function saveMsgLog(phoneNumber, log) {
+function loadMsgLog(phoneNumber) {
+    if (msgLogCache.has(phoneNumber)) return msgLogCache.get(phoneNumber);
+    const filePath = path.join(AUTH_DIR, phoneNumber, 'msg_log.json');
+    let data = {};
+    try {
+        if (fs.existsSync(filePath)) {
+            const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+            data = parsed && typeof parsed === 'object' ? parsed : {};
+        }
+    } catch (err) { logError('MSGLOG', `${phoneNumber}: failed to load msg_log.json`, err); }
+    msgLogCache.set(phoneNumber, data);
+    return data;
+}
+
+function flushMsgLog(phoneNumber) {
+    const log = msgLogCache.get(phoneNumber);
+    if (!log) return;
     const filePath = path.join(AUTH_DIR, phoneNumber, 'msg_log.json');
     try {
         ensureDir(path.dirname(filePath));
-        fs.writeFileSync(filePath, JSON.stringify(log, null, 0), 'utf8');
-        // Debounced sync handled by caller to avoid spamming Supabase on every msg.
+        fs.writeFileSync(filePath, JSON.stringify(log), 'utf8');
     } catch (err) { logError('MSGLOG', `${phoneNumber}: failed to save msg_log.json`, err); }
 }
 
-// Store a message in the persistent log. Keeps only the essential content.
+function scheduleMsgLogSave(phoneNumber) {
+    if (msgLogSaveTimers.has(phoneNumber)) return;
+    const timer = setTimeout(() => {
+        msgLogSaveTimers.delete(phoneNumber);
+        flushMsgLog(phoneNumber);
+    }, 8000);
+    msgLogSaveTimers.set(phoneNumber, timer);
+}
+
 function logMessage(phoneNumber, remoteJid, msg) {
     try {
         const id = msg?.key?.id;
-        if (!id || msg?.key?.fromMe) return; // only log incoming others' messages (and all for safety)
+        if (!id || msg?.key?.fromMe) return;
         const log = loadMsgLog(phoneNumber);
-        if (Object.keys(log).length >= MSG_LOG_LIMIT) {
-            // drop oldest (insertion order ~ oldest first for plain object)
-            const firstKey = Object.keys(log)[0];
-            delete log[firstKey];
-        }
+        const keys = Object.keys(log);
+        if (keys.length >= MSG_LOG_LIMIT) delete log[keys[0]];
+        const parsed = extractMessageText(msg);
         log[id] = {
-            remoteJid: remoteJid,
+            remoteJid,
             participant: msg?.key?.participant || null,
-            message: msg?.message || null,
+            text: parsed?.text || '',
+            type: parsed?.leafType || 'unknown',
+            message: slimProto(msg?.message),
             ts: msg?.messageTimestamp ? Number(msg.messageTimestamp) : Date.now() / 1000
         };
-        saveMsgLog(phoneNumber, log);
+        scheduleMsgLogSave(phoneNumber);
     } catch (err) { logError('MSGLOG', `${phoneNumber}: logMessage failed`, err); }
+}
+
+function getWarnState(phoneNumber) {
+    return normalizeWarnConfig(loadBotConfig(phoneNumber));
+}
+
+function saveWarnState(phoneNumber, warn) {
+    const cfg = loadBotConfig(phoneNumber);
+    cfg.warn = normalizeWarnConfig({ warn });
+    saveBotConfig(phoneNumber, cfg);
+}
+
+function ensureWarnGroup(phoneNumber, groupJid, extra = {}) {
+    const warn = getWarnState(phoneNumber);
+    warn.groups[groupJid] = {
+        enabled: true,
+        maxWarns: 3,
+        action: 'kick',
+        phrases: [],
+        deleteOffending: true,
+        ...(warn.groups[groupJid] || {}),
+        ...extra
+    };
+    saveWarnState(phoneNumber, warn);
+    return warn.groups[groupJid];
+}
+
+function loadWarnLog(phoneNumber) {
+    const filePath = path.join(AUTH_DIR, phoneNumber, 'warn_log.json');
+    try {
+        if (fs.existsSync(filePath)) return JSON.parse(fs.readFileSync(filePath, 'utf8')) || {};
+    } catch (err) { logError('WARN', `${phoneNumber}: failed to load warn_log.json`, err); }
+    return {};
+}
+
+function saveWarnLog(phoneNumber, data) {
+    const filePath = path.join(AUTH_DIR, phoneNumber, 'warn_log.json');
+    try {
+        ensureDir(path.dirname(filePath));
+        fs.writeFileSync(filePath, JSON.stringify(data), 'utf8');
+    } catch (err) { logError('WARN', `${phoneNumber}: failed to save warn_log.json`, err); }
+}
+
+function getUserWarns(phoneNumber, groupJid, userJid) {
+    const log = loadWarnLog(phoneNumber);
+    const rec = log?.[groupJid]?.[userJid];
+    return rec && typeof rec === 'object' ? rec : { count: 0, history: [] };
+}
+
+function setUserWarns(phoneNumber, groupJid, userJid, rec) {
+    const log = loadWarnLog(phoneNumber);
+    if (!log[groupJid]) log[groupJid] = {};
+    if (!rec || rec.count <= 0) delete log[groupJid][userJid];
+    else {
+        rec.history = Array.isArray(rec.history) ? rec.history.slice(-12) : [];
+        log[groupJid][userJid] = rec;
+    }
+    saveWarnLog(phoneNumber, log);
+}
+
+function listGroupWarns(phoneNumber, groupJid) {
+    const log = loadWarnLog(phoneNumber);
+    const bucket = log?.[groupJid] || {};
+    return Object.entries(bucket)
+        .filter(([, v]) => v && v.count > 0)
+        .sort((a, b) => (b[1].count || 0) - (a[1].count || 0));
+}
+
+function escapeRegExp(s) {
+    return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function textHasPhrase(text, phrase) {
+    const p = String(phrase || '').trim();
+    if (!p || !text) return false;
+    if (p.length <= 3) {
+        try { return new RegExp(`(^|[^a-z0-9])${escapeRegExp(p)}([^a-z0-9]|$)`, 'i').test(text); }
+        catch { return String(text).toLowerCase().includes(p.toLowerCase()); }
+    }
+    return String(text).toLowerCase().includes(p.toLowerCase());
+}
+
+function findMatchingPhrase(text, phrases) {
+    for (const p of (phrases || [])) {
+        if (textHasPhrase(text, p)) return p;
+    }
+    return null;
+}
+
+function findHidetagTrigger(normalized, prefix, aliases) {
+    const pfx = prefix || '.';
+    const triggers = new Set(['.hidetag', '.ht', `${pfx}hidetag`, `${pfx}ht`]);
+    for (const [k, v] of Object.entries(aliases || {})) {
+        if (v === '.hidetag' || v === '.ht') {
+            triggers.add('.' + k);
+            triggers.add(pfx + k);
+        }
+    }
+    const parts = String(normalized || '').split(/\s+/).filter(Boolean);
+    const idx = parts.findIndex(part => triggers.has(part.toLowerCase()));
+    if (idx < 0) return null;
+    return { body: [...parts.slice(0, idx), ...parts.slice(idx + 1)].join(' ').trim() };
+}
+
+function getQuotedContext(msg) {
+    const unwrapped = unwrapMessageContent(msg?.message).message || {};
+    return unwrapped.extendedTextMessage?.contextInfo
+        || unwrapped.imageMessage?.contextInfo
+        || unwrapped.videoMessage?.contextInfo
+        || unwrapped.buttonsResponseMessage?.contextInfo
+        || msg.message?.extendedTextMessage?.contextInfo
+        || null;
+}
+
+const TTT_WINS = [
+    [0, 1, 2], [3, 4, 5], [6, 7, 8],
+    [0, 3, 6], [1, 4, 7], [2, 5, 8],
+    [0, 4, 8], [2, 4, 6]
+];
+const TTT_LABELS = [
+    '1 · top left', '2 · top', '3 · top right',
+    '4 · mid left', '5 · center', '6 · mid right',
+    '7 · bot left', '8 · bottom', '9 · bot right'
+];
+
+function tttKey(phoneNumber, chatJid) {
+    return `${phoneNumber}:${chatJid}`;
+}
+
+function tttSamePlayer(a, b) {
+    if (!a || !b) return false;
+    if (a === 'BOT' || b === 'BOT') return a === b;
+    if (jidNormalizedUser(a) === jidNormalizedUser(b)) return true;
+    const da = String(a).split('@')[0].replace(/\D/g, '');
+    const db = String(b).split('@')[0].replace(/\D/g, '');
+    return !!(da && db && da === db);
+}
+
+function tttShort(jid) {
+    if (!jid || jid === 'BOT') return 'VOID';
+    return '+' + String(jid).split('@')[0].replace(/\D/g, '').slice(-10);
+}
+
+function tttWinner(board) {
+    for (const line of TTT_WINS) {
+        const [a, b, c] = line;
+        if (board[a] && board[a] === board[b] && board[b] === board[c]) {
+            return { mark: board[a], line };
+        }
+    }
+    if (board.every(Boolean)) return { mark: 'DRAW', line: [] };
+    return null;
+}
+
+function tttMinimax(board, ai, human, isMax) {
+    const w = tttWinner(board);
+    if (w?.mark === ai) return 10;
+    if (w?.mark === human) return -10;
+    if (w?.mark === 'DRAW') return 0;
+    let best = isMax ? -Infinity : Infinity;
+    for (let i = 0; i < 9; i++) {
+        if (board[i]) continue;
+        board[i] = isMax ? ai : human;
+        const score = tttMinimax(board, ai, human, !isMax);
+        board[i] = null;
+        best = isMax ? Math.max(best, score) : Math.min(best, score);
+    }
+    return best;
+}
+
+function tttBotMove(board, aiMark, difficulty) {
+    const empty = [];
+    for (let i = 0; i < 9; i++) if (!board[i]) empty.push(i);
+    if (!empty.length) return -1;
+    const human = aiMark === 'X' ? 'O' : 'X';
+    const roll = Math.random();
+    if (difficulty === 'easy' && roll < 0.8) return empty[Math.floor(Math.random() * empty.length)];
+    if (difficulty === 'medium' && roll < 0.45) return empty[Math.floor(Math.random() * empty.length)];
+    let bestScore = -Infinity;
+    let best = empty[0];
+    for (const i of empty) {
+        board[i] = aiMark;
+        const score = tttMinimax(board, aiMark, human, false);
+        board[i] = null;
+        if (score > bestScore) { bestScore = score; best = i; }
+    }
+    return best;
+}
+
+function renderTttBoard(game) {
+    const win = tttWinner(game.board);
+    const winSet = new Set(win?.line || []);
+    const cell = (i) => {
+        if (game.board[i] === 'X') return winSet.has(i) ? ' ✦❌ ' : '  ❌ ';
+        if (game.board[i] === 'O') return winSet.has(i) ? ' ✦⭕ ' : '  ⭕ ';
+        return `   ${i + 1} `;
+    };
+    const xName = game.vsBot && game.x === 'BOT' ? 'VOID' : tttShort(game.x);
+    const oName = game.vsBot && game.o === 'BOT' ? 'VOID' : tttShort(game.o);
+    const turnMark = game.turn === 'X' ? '❌' : '⭕';
+    const turnName = game.turn === 'X'
+        ? (game.x === 'BOT' ? 'VOID' : tttShort(game.x))
+        : (game.o === 'BOT' ? 'VOID' : tttShort(game.o));
+    let footer;
+    if (game.status === 'pending') footer = '   waiting for the challenged to accept…';
+    else if (win?.mark === 'DRAW') footer = '   stalemate. neither soul claimed the grid.';
+    else if (win?.mark) footer = `   ${win.mark === 'X' ? '❌' : '⭕'} claims the arena.`;
+    else footer = `   ●  ${turnMark}  ${turnName}  to move\n   reply to THIS board with 1–9\n   1 min a turn`;
+
+    return (
+        '```\n' +
+        '      ✦ EVENTIDE ARENA ✦\n' +
+        '         TIC · TAC · TOE\n\n' +
+        '    ╭──────┬──────┬──────╮\n' +
+        `    │${cell(0)}│${cell(1)}│${cell(2)}│\n` +
+        '    ├──────┼──────┼──────┤\n' +
+        `    │${cell(3)}│${cell(4)}│${cell(5)}│\n` +
+        '    ├──────┼──────┼──────┤\n' +
+        `    │${cell(6)}│${cell(7)}│${cell(8)}│\n` +
+        '    ╰──────┴──────┴──────╯\n\n' +
+        `    ❌  ${xName}\n` +
+        `    ⭕  ${oName}${game.difficulty ? '  ·  ' + game.difficulty.toUpperCase() : ''}\n\n` +
+        footer + '\n```'
+    );
+}
+
+function getTttGame(phoneNumber, chatJid) {
+    return tttGames.get(tttKey(phoneNumber, chatJid)) || null;
+}
+
+function tttClearTimer(game) {
+    if (game?.timer) { clearTimeout(game.timer); game.timer = null; }
+    if (game?.idleTimer) { clearTimeout(game.idleTimer); game.idleTimer = null; }
+}
+
+async function tttDeletePoll(sock, game) {
+    if (!game?.pollKey) return;
+    try { await sock.sendMessage(game.pollKey.remoteJid || game.chatJid, { delete: game.pollKey }); } catch (_) {}
+    game.pollKey = null;
+}
+
+async function tttDeleteVotedPoll(sock, remoteJid, pollId) {
+    if (!pollId) return;
+    try { await sock.sendMessage(remoteJid, { delete: { remoteJid, id: pollId, fromMe: true } }); } catch (_) {}
+}
+
+function tttIsReplyToBoard(msg, game) {
+    if (!game?.boardKey?.id) return false;
+    const ctx = getQuotedContext(msg);
+    const qid = ctx?.stanzaId || ctx?.quotedMessage?.key?.id || null;
+    return !!(qid && qid === game.boardKey.id);
+}
+
+async function tttPaint(sock, phoneNumber, game, { extra = '', rematch = false } = {}) {
+    const body = renderTttBoard(game) + (extra ? `\n${extra}` : '');
+    try {
+        if (game.boardKey) {
+            await sock.sendMessage(game.chatJid, { text: body, edit: game.boardKey });
+        } else {
+            const sent = await sock.sendMessage(game.chatJid, { text: body });
+            game.boardKey = sent?.key || null;
+        }
+    } catch (_) {
+        const sent = await sock.sendMessage(game.chatJid, { text: body });
+        game.boardKey = sent?.key || null;
+    }
+    await tttDeletePoll(sock, game);
+    if ((rematch || tttWinner(game.board)) && game.status === 'done') {
+        const poll = await sendMenuPoll(sock, game.chatJid, phoneNumber, '✦ ARENA ✦', ['🔁 Rematch', '🕊 Leave the grid'], ['ttt_again', 'ttt_close']);
+        game.pollKey = poll?.key || null;
+    }
+}
+
+function tttArmTimer(sock, phoneNumber, game) {
+    if (game?.timer) { clearTimeout(game.timer); game.timer = null; }
+    if (!game || game.status !== 'active') return;
+    game.timer = setTimeout(async () => {
+        const live = getTttGame(phoneNumber, game.chatJid);
+        if (!live || live !== game || live.status !== 'active') return;
+        live.status = 'done';
+        const sleeper = live.turn === 'X' ? live.x : live.o;
+        tttClearTimer(live);
+        await tttPaint(sock, phoneNumber, live, {
+            extra: `\n⏳ *1 MIN.* ${sleeper === 'BOT' ? 'VOID' : tttShort(sleeper)} froze. Forfeit.`,
+            rematch: true
+        });
+    }, 60 * 1000);
+}
+
+function tttArmDeadGame(sock, phoneNumber, game, ms = 3 * 60 * 1000) {
+    if (game?.idleTimer) { clearTimeout(game.idleTimer); game.idleTimer = null; }
+    game.idleTimer = setTimeout(async () => {
+        const live = getTttGame(phoneNumber, game.chatJid);
+        if (!live || live !== game) return;
+        if (live.status === 'active' && (live.moveCount || 0) > 0) return;
+        tttClearTimer(live);
+        await tttDeletePoll(sock, live);
+        tttGames.delete(tttKey(phoneNumber, live.chatJid));
+        await sock.sendMessage(live.chatJid, {
+            text: buildOmegaTerminal(
+                `   ░▒▓█ *ARENA_DIED* █▓▒░\n\n` +
+                `   3 minutes. Nobody played.\n` +
+                `   The grid went dark.`
+            )
+        }).catch(() => {});
+    }, ms);
+}
+
+async function tttStart(sock, phoneNumber, chatJid, { x, o, vsBot = false, difficulty = 'medium' }) {
+    const prev = getTttGame(phoneNumber, chatJid);
+    if (prev) { tttClearTimer(prev); await tttDeletePoll(sock, prev); }
+    const game = {
+        chatJid, x, o, vsBot, difficulty: vsBot ? difficulty : '',
+        board: Array(9).fill(null),
+        turn: 'X',
+        status: 'active',
+        boardKey: null,
+        pollKey: null,
+        timer: null,
+        idleTimer: null,
+        moveCount: 0,
+        openSeat: false,
+        startedAt: Date.now()
+    };
+    tttGames.set(tttKey(phoneNumber, chatJid), game);
+    await tttPaint(sock, phoneNumber, game);
+    tttArmTimer(sock, phoneNumber, game);
+    tttArmDeadGame(sock, phoneNumber, game);
+    if (vsBot && game.x === 'BOT') await tttPlayBot(sock, phoneNumber, game);
+    return game;
+}
+
+async function tttPlayBot(sock, phoneNumber, game) {
+    if (!game.vsBot || game.status !== 'active') return;
+    const botMark = game.x === 'BOT' ? 'X' : 'O';
+    if (game.turn !== botMark) return;
+    await delay(700 + Math.floor(Math.random() * 800));
+    const idx = tttBotMove(game.board, botMark, game.difficulty || 'medium');
+    if (idx < 0) return;
+    game.board[idx] = botMark;
+    game.moveCount = (game.moveCount || 0) + 1;
+    if (game.idleTimer) { clearTimeout(game.idleTimer); game.idleTimer = null; }
+    const win = tttWinner(game.board);
+    if (win) {
+        game.status = 'done';
+        tttClearTimer(game);
+        await tttPaint(sock, phoneNumber, game, { extra: win.mark === 'DRAW' ? '\n⚖ *DRAW.* the grid belongs to no one.' : '\n👑 *VOID WINS.* the machine does not blink.', rematch: true });
+        return;
+    }
+    game.turn = botMark === 'X' ? 'O' : 'X';
+    await tttPaint(sock, phoneNumber, game);
+    tttArmTimer(sock, phoneNumber, game);
+}
+
+async function tttTryMove(sock, phoneNumber, chatJid, playerJid, idx) {
+    const game = getTttGame(phoneNumber, chatJid);
+    if (!game || game.status !== 'active') {
+        await sock.sendMessage(chatJid, { text: '❌ No live arena here. Type *.ttt* to open one.' });
+        return;
+    }
+    if (idx < 0 || idx > 8 || game.board[idx]) {
+        await sock.sendMessage(chatJid, { text: '❌ That cell is sealed. Pick an open number.' });
+        return;
+    }
+    const expected = game.turn === 'X' ? game.x : game.o;
+    if (expected === 'BOT') return;
+    const who = (!playerJid || playerJid === 'me') ? (sock.user?.id || '') : playerJid;
+    const ownerIsExpected = tttSamePlayer(expected, sock.user?.id);
+    if (!tttSamePlayer(expected, who) && !(ownerIsExpected && (playerJid === 'me' || tttSamePlayer(who, sock.user?.id)))) {
+        await sock.sendMessage(chatJid, { text: `⏳ Not your turn. Waiting on ${tttShort(expected)}.` });
+        return;
+    }
+    game.board[idx] = game.turn;
+    const win = tttWinner(game.board);
+    if (win) {
+        game.status = 'done';
+        tttClearTimer(game);
+        const champ = win.mark === 'DRAW' ? null : (win.mark === 'X' ? game.x : game.o);
+        const extra = win.mark === 'DRAW'
+            ? '\n⚖ *DRAW.* two minds, one stalemate.'
+            : `\n👑 *${champ === 'BOT' ? 'VOID' : tttShort(champ)}* takes the grid.`;
+        await tttPaint(sock, phoneNumber, game, { extra, rematch: true });
+        return;
+    }
+    game.turn = game.turn === 'X' ? 'O' : 'X';
+    await tttPaint(sock, phoneNumber, game);
+    tttArmTimer(sock, phoneNumber, game);
+    if (game.vsBot) await tttPlayBot(sock, phoneNumber, game);
+}
+
+async function tttOfferChallenge(sock, phoneNumber, chatJid, challenger, target) {
+    if (tttSamePlayer(challenger, target)) {
+        await sock.sendMessage(chatJid, { text: '❌ You cannot duel your own shadow.' });
+        return;
+    }
+    const prev = getTttGame(phoneNumber, chatJid);
+    if (prev && (prev.status === 'active' || prev.status === 'pending')) {
+        await sock.sendMessage(chatJid, { text: '❌ An arena is already open here. *.ttt quit* to fold it.' });
+        return;
+    }
+    const game = {
+        chatJid, x: challenger, o: target, vsBot: false, difficulty: '',
+        board: Array(9).fill(null), turn: 'X', status: 'pending',
+        boardKey: null, pollKey: null, timer: null, idleTimer: null,
+        moveCount: 0, openSeat: false, startedAt: Date.now()
+    };
+    tttGames.set(tttKey(phoneNumber, chatJid), game);
+    const card = buildOmegaTerminal(
+        `   ░▒▓█ *ARENA_CHALLENGE* █▓▒░\n\n` +
+        `   ✦ *HOST* :: ${tttShort(challenger)}  ❌\n` +
+        `   ✦ *INVITED* :: ${tttShort(target)}  ⭕\n\n` +
+        `   Only ${tttShort(target)} can sit.\n` +
+        `   3 minutes to accept.`
+    );
+    await sock.sendMessage(chatJid, { text: card, mentions: [target, challenger].filter(j => j && j !== 'BOT') });
+    const poll = await sendMenuPoll(sock, chatJid, phoneNumber, '✦ DUEL ✦', ['⚔ Accept', '🕊 Decline'], ['ttt_yes', 'ttt_no']);
+    game.pollKey = poll?.key || null;
+    tttArmDeadGame(sock, phoneNumber, game, 3 * 60 * 1000);
+}
+
+async function tttOpenLobby(sock, phoneNumber, chatJid, host) {
+    const prev = getTttGame(phoneNumber, chatJid);
+    if (prev && (prev.status === 'active' || prev.status === 'pending')) {
+        await sock.sendMessage(chatJid, { text: '❌ An arena is already open here. *.ttt quit* to fold it.' });
+        return;
+    }
+    const game = {
+        chatJid, x: host, o: null, vsBot: false, difficulty: '',
+        board: Array(9).fill(null), turn: 'X', status: 'pending',
+        boardKey: null, pollKey: null, timer: null, idleTimer: null,
+        moveCount: 0, openSeat: true, startedAt: Date.now()
+    };
+    tttGames.set(tttKey(phoneNumber, chatJid), game);
+    await sock.sendMessage(chatJid, {
+        text: buildOmegaTerminal(
+            `   ░▒▓█ *OPEN SEAT* █▓▒░\n\n` +
+            `   ✦ *HOST* :: ${tttShort(host)}  ❌\n` +
+            `   ✦ *SEAT* :: first soul who claims ⭕\n\n` +
+            `   Anyone can sit. First Accept wins.\n` +
+            `   3 minutes or the chair vanishes.`
+        ),
+        mentions: host && host !== 'BOT' ? [host] : []
+    });
+    const poll = await sendMenuPoll(sock, chatJid, phoneNumber, '✦ OPEN SEAT ✦', ['⚔ Claim seat', '✖ Cancel (host)'], ['ttt_yes', 'ttt_no']);
+    game.pollKey = poll?.key || null;
+    tttArmDeadGame(sock, phoneNumber, game, 3 * 60 * 1000);
+}
+
+async function isUserGroupAdmin(sock, groupJid, jid) {
+    try {
+        const meta = await sock.groupMetadata(groupJid);
+        const norm = jidNormalizedUser(jid);
+        const digits = String(jid || '').split('@')[0].replace(/\D/g, '');
+        return !!meta.participants.find(p => {
+            const ids = [p.id, p.phoneNumber, p.jid].filter(Boolean).map(jidNormalizedUser);
+            if (ids.includes(norm)) return !!p.admin;
+            const pd = String(p.id || '').split('@')[0].replace(/\D/g, '');
+            return digits && pd === digits && !!p.admin;
+        });
+    } catch { return false; }
+}
+
+async function downloadQuotedMedia(sock, msg) {
+    const ctx = getQuotedContext(msg);
+    const quoted = ctx?.quotedMessage;
+    if (!quoted) throw new Error('Reply to a view-once photo/video first.');
+
+    let inner = quoted;
+    if (inner.viewOnceMessage?.message) inner = inner.viewOnceMessage.message;
+    else if (inner.viewOnceMessageV2?.message) inner = inner.viewOnceMessageV2.message;
+    else if (inner.viewOnceMessageV2Extension?.message) inner = inner.viewOnceMessageV2Extension.message;
+
+    const type = inner.imageMessage ? 'imageMessage'
+        : inner.videoMessage ? 'videoMessage'
+        : inner.audioMessage ? 'audioMessage'
+        : inner.documentMessage ? 'documentMessage'
+        : inner.stickerMessage ? 'stickerMessage'
+        : null;
+    if (!type) throw new Error('Quoted message has no media.');
+
+    const node = { ...inner[type], viewOnce: false };
+    const isViewOnce = !!(
+        quoted.viewOnceMessage || quoted.viewOnceMessageV2 || quoted.viewOnceMessageV2Extension ||
+        inner[type]?.viewOnce
+    );
+
+    const full = {
+        key: {
+            remoteJid: msg.key.remoteJid,
+            id: ctx.stanzaId || msg.key.id,
+            fromMe: false,
+            participant: ctx.participant || msg.key.participant
+        },
+        message: { [type]: node }
+    };
+
+    const opts = { logger: pino({ level: 'silent' }) };
+    if (typeof sock.updateMediaMessage === 'function') {
+        opts.reuploadRequest = sock.updateMediaMessage.bind(sock);
+    }
+
+    try {
+        const buffer = await downloadMediaMessage(full, 'buffer', {}, opts);
+        if (buffer && buffer.length) return { buffer, type, node, isViewOnce };
+    } catch (_) {}
+
+    if (ctx?.stanzaId) {
+        const stored = await getMessageFromStore({ id: ctx.stanzaId, remoteJid: msg.key.remoteJid });
+        if (stored) {
+            const retry = { key: full.key, message: stored };
+            const buffer = await downloadMediaMessage(retry, 'buffer', {}, opts);
+            if (buffer && buffer.length) return { buffer, type, node, isViewOnce };
+        }
+    }
+    throw new Error('WhatsApp already expired the media keys. Ask them to resend, or reply faster.');
+}
+
+async function applyWarn(sock, phoneNumber, { groupJid, targetJid, byJid, reason, auto, originalMsg }) {
+    const target = jidNormalizedUser(targetJid);
+    if (!target || !groupJid?.endsWith('@g.us')) return;
+    const gcfg = getWarnState(phoneNumber).groups[groupJid] || { enabled: true, maxWarns: 3, action: 'kick', phrases: [], deleteOffending: true };
+    const rec = getUserWarns(phoneNumber, groupJid, target);
+    rec.count = (rec.count || 0) + 1;
+    rec.history = rec.history || [];
+    rec.history.push({
+        reason: String(reason || (auto ? 'auto-phrase' : 'manual')).slice(0, 120),
+        by: byJid || 'system',
+        at: Date.now(),
+        auto: !!auto
+    });
+    setUserWarns(phoneNumber, groupJid, target, rec);
+
+    const max = Number.isFinite(Number(gcfg.maxWarns)) ? Number(gcfg.maxWarns) : 3;
+    const action = gcfg.action === 'none' ? 'none' : 'kick';
+    const willKick = action === 'kick' && max > 0 && rec.count >= max;
+    const num = target.split('@')[0];
+    const byNum = String(byJid || '').split('@')[0].replace(/\D/g, '') || 'system';
+    const limitLabel = max > 0 ? `${rec.count}/${max}` : `${rec.count}/∞`;
+
+    if (auto && gcfg.deleteOffending && originalMsg?.key?.id) {
+        await sock.sendMessage(groupJid, {
+            delete: { remoteJid: groupJid, id: originalMsg.key.id, participant: originalMsg.key.participant || target }
+        }).catch(() => {});
+    }
+
+    await sock.sendMessage(groupJid, {
+        text: buildOmegaTerminal(
+            `   ░▒▓█ *WARN_MARK* █▓▒░\n\n` +
+            `   ✦ *TARGET* :: @${num}\n` +
+            `   ✦ *STRIKES* :: ${limitLabel}\n` +
+            `   ✦ *REASON* :: ${reason || (auto ? 'forbidden phrase' : 'manual')}\n` +
+            `   ✦ *BY* :: ${auto ? 'AUTO_WARD' : '+' + byNum}\n` +
+            `   ✦ *NEXT* :: ${willKick ? 'KICK' : (action === 'none' ? 'WARN_ONLY' : (max > 0 ? `${Math.max(0, max - rec.count)} LEFT` : 'NO_LIMIT'))}\n\n` +
+            (willKick
+                ? `   " The limit is reached.\n     The vessel is cast out. "`
+                : `   " Another mark on the record.\n     Walk carefully. "`)
+        ),
+        mentions: [target]
+    }).catch(() => {});
+
+    if (willKick) {
+        try {
+            await sock.groupParticipantsUpdate(groupJid, [target], 'remove');
+            setUserWarns(phoneNumber, groupJid, target, { count: 0, history: [] });
+            await sock.sendMessage(groupJid, {
+                text: buildOmegaTerminal(
+                    `   ░▒▓█ *WARN_LIMIT* █▓▒░\n\n` +
+                    `   ✦ *TARGET* :: @${num}\n` +
+                    `   ✦ *ACTION* :: KICKED\n` +
+                    `   ✦ *STRIKES* :: ${limitLabel}\n\n` +
+                    `   " Three shadows too many. "`
+                ),
+                mentions: [target]
+            }).catch(() => {});
+        } catch (err) {
+            await sock.sendMessage(groupJid, { text: `⚠️ Warn limit reached but I could not kick @${num}. Make me admin.\n${err?.message || err}` , mentions: [target] }).catch(() => {});
+        }
+    }
+    log('WARN', `${phoneNumber}: warned ${target} in ${groupJid} (${limitLabel}) reason=${reason}`);
 }
 
 // ──────────────────────────────────────────────
@@ -669,13 +1484,14 @@ function formatForWhatsApp(text) {
 // 🧠 UNIFIED MULTI-PROVIDER AI ENGINE
 // ──────────────────────────────────────────────
 
-async function callGemini(prompt, systemInstruction = '', apiKey) {
+async function callGemini(prompt, systemInstruction = '', apiKey, opts = {}) {
     const model = process.env.GEMINI_MODEL || "gemini-flash-latest"; // Optimized: default to gemini-flash-latest
+    const temperature = typeof opts.temperature === 'number' ? opts.temperature : 0.4;
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
     const body = JSON.stringify({
         system_instruction: systemInstruction ? { parts: [{ text: systemInstruction }] } : undefined,
         contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.4 } // Lower temperature (0.4) for highly analytical, precise, and logical thinking!
+        generationConfig: { temperature }
     });
 
     return new Promise((resolve, reject) => {
@@ -700,7 +1516,7 @@ async function callGemini(prompt, systemInstruction = '', apiKey) {
     });
 }
 
-async function callOpenAI(prompt, systemInstruction = '', apiKey) {
+async function callOpenAI(prompt, systemInstruction = '', apiKey, opts = {}) {
     const url = `https://api.openai.com/v1/chat/completions`;
     const messages = [];
     if (systemInstruction) {
@@ -710,7 +1526,7 @@ async function callOpenAI(prompt, systemInstruction = '', apiKey) {
     const body = JSON.stringify({
         model: 'gpt-4o-mini',
         messages,
-        temperature: 0.4 // Focused temperature for structured reasoning
+        temperature: typeof opts.temperature === 'number' ? opts.temperature : 0.4
     });
 
     return new Promise((resolve, reject) => {
@@ -738,10 +1554,11 @@ async function callOpenAI(prompt, systemInstruction = '', apiKey) {
     });
 }
 
-async function callPollinations(prompt, systemInstruction = '') {
+async function callPollinations(prompt, systemInstruction = '', opts = {}) {
     const encodedPrompt = encodeURIComponent(prompt);
     const systemParam = systemInstruction ? `&system=${encodeURIComponent(systemInstruction)}` : '';
-    const url = `https://text.pollinations.ai/${encodedPrompt}?model=openai${systemParam}&temperature=0.4`; // Lower temperature for free fallback too!
+    const temp = typeof opts.temperature === 'number' ? opts.temperature : 0.4;
+    const url = `https://text.pollinations.ai/${encodedPrompt}?model=openai${systemParam}&temperature=${temp}`;
 
     return new Promise((resolve, reject) => {
         const req = https.get(url, (res) => {
@@ -764,12 +1581,12 @@ async function callPollinations(prompt, systemInstruction = '') {
     });
 }
 
-export async function callUniversalAI(prompt, systemInstruction = '') {
+export async function callUniversalAI(prompt, systemInstruction = '', opts = {}) {
     const GEMINI_KEY = (process.env.GEMINI_API_KEY || '').trim();
     if (GEMINI_KEY && GEMINI_KEY.length > 5) {
         try {
             log('AI', 'Attempting Gemini AI response...');
-            return await callGemini(prompt, systemInstruction, GEMINI_KEY);
+            return await callGemini(prompt, systemInstruction, GEMINI_KEY, opts);
         } catch (err) {
             logError('AI', 'Gemini AI failed, trying fallback...', err);
         }
@@ -779,20 +1596,59 @@ export async function callUniversalAI(prompt, systemInstruction = '') {
     if (OPENAI_KEY && OPENAI_KEY.length > 5) {
         try {
             log('AI', 'Attempting OpenAI response...');
-            return await callOpenAI(prompt, systemInstruction, OPENAI_KEY);
+            return await callOpenAI(prompt, systemInstruction, OPENAI_KEY, opts);
         } catch (err) {
             logError('AI', 'OpenAI failed, trying fallback...', err);
         }
     }
 
-    // Free keyless fallback GET request
     try {
         log('AI', 'Attempting Pollinations AI keyless fallback...');
-        return await callPollinations(prompt, systemInstruction);
+        return await callPollinations(prompt, systemInstruction, opts);
     } catch (err) {
         logError('AI', 'Pollinations AI failed', err);
         throw new Error('All AI providers and fallbacks failed to respond.');
     }
+}
+
+function parseScoredAi(raw) {
+    const text = String(raw || '').trim();
+    const scoreMatch = text.match(/SCORE\s*:\s*(\d{1,2})/i);
+    const bodyMatch = text.match(/(?:ROAST|LINE|JOKE|TEXT|ANSWER)\s*:\s*([\s\S]*?)(?:\n\s*SCORE\s*:|$)/i);
+    const score = scoreMatch ? Math.min(10, parseInt(scoreMatch[1], 10)) : 0;
+    let body = (bodyMatch ? bodyMatch[1] : text).trim();
+    body = body.replace(/^["'`]+|["'`]+$/g, '').replace(/^\*+|\*+$/g, '').trim();
+    return { body, score };
+}
+
+async function generateScoredFun(prompt, system, { minScore = 7, tries = 3, temperature = 0.95 } = {}) {
+    let best = { body: '', score: 0 };
+    for (let i = 0; i < tries; i++) {
+        const raw = await callUniversalAI(prompt, system, { temperature });
+        const parsed = parseScoredAi(raw);
+        if (parsed.body && parsed.score >= best.score) best = parsed;
+        if (parsed.body && parsed.body.length >= 12 && parsed.score >= minScore) return parsed;
+        log('FUN', `scored ${parsed.score}/10 — dropping, retry ${i + 1}/${tries}`);
+    }
+    if (best.body && best.score >= minScore) return best;
+    if (best.body) return best;
+    throw new Error('AI returned empty fun text');
+}
+
+function funRoastSystem() {
+    return `You are Eventide Omega, a roast assassin in a WhatsApp group. You write the kind of roast that makes the whole chat go "oooooh" and the victim mute the group for 10 minutes.
+
+RULES:
+- Savage, specific, funny. Punch with wit. Sound like a sharp West African group chat, not a Twitter bot.
+- Nigerian/Pidgin slang is allowed when it hits (e.g. "this one no get sense", "your village people are tired").
+- NO racial, religious, or homophobic slurs. No sexual violence. No attacking disabilities. No telling anyone to die.
+- If they quoted a message, the roast MUST use that exact message as the weapon. Quote a fragment, then destroy it.
+- 2 to 5 short lines. No hashtags. No intro like "here's a roast". No apology. No emojis except maybe one.
+- Rate yourself honestly 1-10. 7+ means people would screenshot it. A generic "you're ugly" is a 3. A roast that uses their own words against them is an 8-10.
+
+OUTPUT EXACTLY:
+ROAST: <the roast>
+SCORE: <number>`;
 }
 
 function getHelpSystemPrompt() {
@@ -838,7 +1694,9 @@ function getCommandHelpData(query) {
                   "• *.setpp* — Set account profile pic (reply to image)\n" +
                   "• *.settings* — View config matrix\n" +
                   "• *.reset* — Reset config\n" +
-                  "• *.autoreactconfig* — Configure auto-react\n\n" +
+                  "• *.autoreactconfig* — Configure auto-react\n" +
+                  "• *.antidelete on/off* — Recover deleted messages\n" +
+                  "• *.antideleteconfig* — Add/remove antidelete chats\n\n" +
                   "*🖥️ SYSTEM:*\n" +
                   "• *.ping* / *.uptime* / *.info* / *.status* — Status\n" +
                   "• *.botinfo* / *.alive* — About & health\n" +
@@ -851,7 +1709,8 @@ function getCommandHelpData(query) {
                   "• *.qr* / *.calc* / *.base64* — Utilities\n" +
                   "• *.block* / *.unblock* — Block management\n" +
                   "• *.restart* / *.shutdown* — Reboot / power\n" +
-                  "• *.autoreact on/off* — Auto-reaction\n\n" +
+                  "• *.autoreact on/off* — Auto-reaction\n" +
+                  "• *.antidelete on/off* — Anti-delete\n\n" +
                   "*👥 GROUP:*\n" +
                   "• *.join <link>* — Join a group\n" +
                   "• *.add <number>* — Add member\n" +
@@ -861,6 +1720,52 @@ function getCommandHelpData(query) {
         };
     }
 
+    if (q.includes("ttt") || q.includes("tictactoe") || q.includes("tic tac") || q === "xo") {
+        return {
+            title: "Tic-Tac-Toe (.ttt)",
+            desc: "Premium Eventide arena.\n\n" +
+                  "• *.ttt* — open the grid (bot or challenge)\n" +
+                  "• *.ttt @user* / reply — challenge them\n" +
+                  "• *.ttt bot* / *.ttt hard* — duel the void\n" +
+                  "• Type *1–9* to move (or vote the poll)\n" +
+                  "• *.ttt board* redraw · *.ttt quit* fold\n\n" +
+                  "3 minutes a turn. Rematch poll at the end."
+        };
+    }
+    if (q.includes("roast") || q.includes("pickup") || q.includes("rizz") || q === "joke" || q.includes("fun cmd")) {
+        return {
+            title: "Fun Commands (Gemini)",
+            desc: "Live-cooked. Nothing is hardcoded.\n\n" +
+                  "• *.roast* — reply to a message to cook them with their own words. Only roasts scoring 7/10+ get sent.\n" +
+                  "• *.pickupline* / *.rizz* — a line that should actually work\n" +
+                  "• *.flirt* / *.compliment* / *.joke*\n" +
+                  "• *.rate* — reply to rate that message /10\n" +
+                  "• *.ship @a @b* — unholy pairing"
+        };
+    }
+    if (q.includes("hidetag") || q === "ht" || q.includes(".ht")) {
+        return {
+            title: "Hidetag (.ht)",
+            desc: "Silently mention every group member. The @list stays hidden.\n\n" +
+                  "💡 *How to use:*\n" +
+                  "• *.hidetag good morning*\n" +
+                  "• *.ht come online*\n" +
+                  "• Put it *anywhere* in the line:  _good morning everyone .ht_\n" +
+                  "• Default short form is *.ht*\n\n" +
+                  "⚠️ Group admins / owner only."
+        };
+    }
+    if (q.includes("warn")) {
+        return {
+            title: "Warn System",
+            desc: "Premium strike system — reply to warn, or auto-warn on phrases.\n\n" +
+                  "• *.warn* reply/mention — add a strike\n" +
+                  "• *.unwarn* / *.warnreset* — remove one / wipe\n" +
+                  "• *.warns* — ledger or one person's dossier\n" +
+                  "• *.warnconfig* — poll matrix: limit, kick vs warn-only, phrases\n\n" +
+                  "Set max strikes (or 0 = never kick). Bind words like *see* so anyone who sends them is marked automatically."
+        };
+    }
     if (q.includes("antilink") || (q.includes("link") && q.includes("anti"))) {
         return {
             title: "Anti-Link (Group Invite Protection)",
@@ -1063,7 +1968,7 @@ function buildOmegaTerminal(body) {
 // Resolve a target JID from a reply-to message, an @mention, or a raw number.
 // Returns a normalized JID or null.
 function resolveTargetJid(msg, args) {
-    const ctx = msg.message?.extendedTextMessage?.contextInfo;
+    const ctx = getQuotedContext(msg) || msg.message?.extendedTextMessage?.contextInfo || msg.message?.imageMessage?.contextInfo || null;
     if (ctx?.participant) return jidNormalizedUser(ctx.participant);   // replied message
     if (Array.isArray(ctx?.mentionedJid) && ctx.mentionedJid.length) return jidNormalizedUser(ctx.mentionedJid[0]); // @mention
     for (const tok of (args || [])) {
@@ -1071,6 +1976,21 @@ function resolveTargetJid(msg, args) {
         if (digits.length >= 7) return `${digits}@s.whatsapp.net`;
     }
     return null;
+}
+
+function extractQuotedPlainText(msg) {
+    const ctx = getQuotedContext(msg);
+    const quoted = ctx?.quotedMessage;
+    if (!quoted) return '';
+    const inner = unwrapMessageContent(quoted).message || quoted;
+    return (
+        inner.conversation ||
+        inner.extendedTextMessage?.text ||
+        inner.imageMessage?.caption ||
+        inner.videoMessage?.caption ||
+        inner.documentMessage?.caption ||
+        ''
+    ).trim();
 }
 
 function fetchBuffer(url) {
@@ -1232,7 +2152,7 @@ function countSystemCommands() {
         'menu','help','ping','uptime','info','status','botinfo','alive','dev','gpp','ggpp','profile',
         'listgc','sessions','logout','reconnect','sticker','toimg','qr','calc','base64','block','unblock',
         'cmdstats','restart','shutdown','autoreact','mode','public','owner','setprefix','setalias','delalias',
-        'aliases','setname','setbio','setpp','settings','reset','join','add','kick','link','autoreactconfig','del'
+        'aliases','setname','setbio','setpp','settings','reset','join','add','kick','link','autoreactconfig','antidelete','antideleteconfig','del','hidetag','ht','warn','unwarn','warns','warnconfig','warnreset'
     ];
     return known.length;
 }
@@ -1273,6 +2193,7 @@ async function getMessageFromStore(key) {
     for (const number of getStoredSessionDirectories(AUTH_DIR)) {
         const log = loadMsgLog(number);
         if (log[key.id]?.message) return log[key.id].message;
+        if (log[key.id]?.text) return { conversation: log[key.id].text };
     }
 
     // Fallback: search poll_cache.json files
@@ -1321,7 +2242,6 @@ function resolveCommandReply(command, phoneNumber) {
     return COMMANDS[command] || null;
 }
 
-// Unwraps layered messages (like view-once, ephemeral, edited, etc.)
 function unwrapMessageContent(message) {
     let current = message;
     const wrapperChain = [];
@@ -2014,7 +2934,8 @@ function handlePollUpdateMessage(sock, phoneNumber, msg) {
     // everyone else, no matter the access mode (owner or public).
     const ownerJids = [...new Set([mePN, meLID].filter(Boolean))];
     const isOwnerVote = uniqVoters.some(v => ownerJids.includes(v));
-    if (!isOwnerVote) {
+    const isTttPoll = Array.isArray(cached.ids) && cached.ids.some(id => String(id).startsWith('ttt_'));
+    if (!isOwnerVote && !isTttPoll) {
         log('POLL', `${phoneNumber}: ignored non-owner poll vote (voter=[${uniqVoters.join(',')}])`);
         return null;
     }
@@ -2119,6 +3040,101 @@ async function handleMenuVote(sock, remoteJid, phoneNumber, votedOptionId, pollI
         await deleteMenuMessages(sock, replyKey);
 
         switch (votedOptionId) {
+            case 'ttt_vs_bot': {
+                await tttDeleteVotedPoll(sock, remoteJid, pollId);
+                const sess = tttSetupSessions.get(phoneNumber) || { chat: remoteJid, host: sock.user?.id };
+                if (voterJid && voterJid !== 'me' && sess.host && !tttSamePlayer(voterJid, sess.host) && !tttSamePlayer(voterJid, sock.user?.id)) {
+                    break;
+                }
+                tttSetupSessions.set(phoneNumber, { ...sess, step: 'diff', chat: remoteJid });
+                const diffPoll = await sendMenuPoll(sock, remoteJid, phoneNumber, '✦ VOID LEVEL ✦', ['🌙 Easy · sloppy', '⚖ Medium · sharp', '🔥 Hard · unbeatable'], ['ttt_easy', 'ttt_med', 'ttt_hard']);
+                sess.diffPollKey = diffPoll?.key || null;
+                tttSetupSessions.set(phoneNumber, { ...sess, step: 'diff', chat: remoteJid, diffPollKey: diffPoll?.key || null });
+                break;
+            }
+            case 'ttt_vs_p': {
+                await tttDeleteVotedPoll(sock, remoteJid, pollId);
+                const sess = tttSetupSessions.get(phoneNumber) || { chat: remoteJid, host: sock.user?.id };
+                const host = sess.host || sock.user?.id;
+                if (voterJid && voterJid !== 'me' && sess.host && !tttSamePlayer(voterJid, sess.host) && !tttSamePlayer(voterJid, sock.user?.id)) {
+                    break;
+                }
+                tttSetupSessions.delete(phoneNumber);
+                await tttOpenLobby(sock, phoneNumber, remoteJid, host);
+                break;
+            }
+            case 'ttt_easy':
+            case 'ttt_med':
+            case 'ttt_hard': {
+                await tttDeleteVotedPoll(sock, remoteJid, pollId);
+                const sess = tttSetupSessions.get(phoneNumber) || {};
+                const host = sess.host || sock.user?.id;
+                if (voterJid && voterJid !== 'me' && sess.host && !tttSamePlayer(voterJid, sess.host) && !tttSamePlayer(voterJid, sock.user?.id)) {
+                    break;
+                }
+                const diff = votedOptionId === 'ttt_easy' ? 'easy' : votedOptionId === 'ttt_hard' ? 'hard' : 'medium';
+                tttSetupSessions.delete(phoneNumber);
+                await tttStart(sock, phoneNumber, remoteJid, {
+                    x: host,
+                    o: 'BOT',
+                    vsBot: true,
+                    difficulty: diff
+                });
+                break;
+            }
+            case 'ttt_yes': {
+                await tttDeleteVotedPoll(sock, remoteJid, pollId);
+                const game = getTttGame(phoneNumber, remoteJid);
+                if (!game || game.status !== 'pending') { await sock.sendMessage(remoteJid, { text: '❌ No open seat.' }); break; }
+                const voter = voterJid === 'me' ? sock.user?.id : voterJid;
+                if (game.openSeat) {
+                    if (tttSamePlayer(voter, game.x)) {
+                        await sock.sendMessage(remoteJid, { text: '❌ You already host this grid. Wait for a rival.' });
+                        break;
+                    }
+                    game.o = voter;
+                    game.openSeat = false;
+                } else if (!tttSamePlayer(voter, game.o)) {
+                    await sock.sendMessage(remoteJid, { text: '❌ This invite is sealed. Only the tagged rival may sit.' });
+                    break;
+                }
+                game.status = 'active';
+                tttClearTimer(game);
+                game.boardKey = null;
+                await tttDeletePoll(sock, game);
+                await tttPaint(sock, phoneNumber, game);
+                tttArmTimer(sock, phoneNumber, game);
+                tttArmDeadGame(sock, phoneNumber, game);
+                break;
+            }
+            case 'ttt_no': {
+                await tttDeleteVotedPoll(sock, remoteJid, pollId);
+                const game = getTttGame(phoneNumber, remoteJid);
+                if (!game || game.status !== 'pending') break;
+                const voter = voterJid === 'me' ? sock.user?.id : voterJid;
+                const canCancel = tttSamePlayer(voter, game.x) || tttSamePlayer(voter, game.o) || tttSamePlayer(voter, sock.user?.id);
+                if (!canCancel) break;
+                tttClearTimer(game);
+                await tttDeletePoll(sock, game);
+                tttGames.delete(tttKey(phoneNumber, remoteJid));
+                await sock.sendMessage(remoteJid, { text: '🕊 Seat cancelled. The grid sleeps.' });
+                break;
+            }
+            case 'ttt_again': {
+                const game = getTttGame(phoneNumber, remoteJid);
+                if (!game) { await sock.sendMessage(remoteJid, { text: '❌ No arena to rematch. *.ttt*' }); break; }
+                await tttStart(sock, phoneNumber, remoteJid, {
+                    x: game.x, o: game.o, vsBot: game.vsBot, difficulty: game.difficulty || 'medium'
+                });
+                break;
+            }
+            case 'ttt_close': {
+                const game = getTttGame(phoneNumber, remoteJid);
+                if (game) { tttClearTimer(game); await tttDeletePoll(sock, game); }
+                tttGames.delete(tttKey(phoneNumber, remoteJid));
+                await sock.sendMessage(remoteJid, { text: buildOmegaTerminal(`   ✦ *ARENA_CLOSED*\n\n   " The grid forgets. "`) });
+                break;
+            }
             case 'owners': {
                 const k1 = await sendMenuBanner(sock, remoteJid, OWNERS_MENU_PATH, OWNERS_WELCOME_TEXT);
                 if (k1) recordMenuMessage(replyKey, k1);
@@ -2267,35 +3283,256 @@ async function handleMenuVote(sock, remoteJid, phoneNumber, votedOptionId, pollI
                 }
                 break;
             }
-            case 'ad_on':
-            case 'ad_off': {
-                const asess = antiConfigSessions.get(phoneNumber);
-                const group = asess?.group || remoteJid;
-                const cfg = loadBotConfig(phoneNumber);
-                cfg.anti = cfg.anti || {};
-                cfg.anti.antidelete = cfg.anti.antidelete || {};
-                cfg.anti.antidelete[group] = votedOptionId === 'ad_on' ? 'on' : 'off';
-                saveBotConfig(phoneNumber, cfg);
-                antiConfigSessions.delete(phoneNumber);
+            case 'wn_add':
+            case 'wn_cfg':
+            case 'wn_remove': {
+                const mode = votedOptionId === 'wn_add' ? 'add' : votedOptionId === 'wn_cfg' ? 'cfg' : 'remove';
+                let names = [];
+                let jids = [];
+                try {
+                    const g = await sock.groupFetchAllParticipating();
+                    if (mode === 'add') {
+                        for (const [id, v] of Object.entries(g)) {
+                            names.push(v.subject || id);
+                            jids.push(id);
+                        }
+                    } else {
+                        const warn = getWarnState(phoneNumber);
+                        for (const id of Object.keys(warn.groups || {})) {
+                            names.push(g[id]?.subject || id);
+                            jids.push(id);
+                        }
+                    }
+                } catch (_) {}
+                names = names.slice(0, 10);
+                jids = jids.slice(0, 10);
+                if (!names.length) {
+                    await safeWaReply(sock, remoteJid, mode === 'add' ? '❌ No groups found.' : '❌ No warn groups configured yet. Use Add Group first.');
+                    break;
+                }
+                const prefixId = mode === 'add' ? 'wn_agrp_' : mode === 'cfg' ? 'wn_cgrp_' : 'wn_rgrp_';
+                warnConfigSessions.set(phoneNumber, { step: mode, groups: names, jids });
                 await safeWaReply(sock, remoteJid, buildOmegaTerminal(
-                    `   ░▒▓█ *DELETE_WARD* █▓▒░\n\n` +
-                    `   ✦ *STATE* :: ${votedOptionId === 'ad_on' ? 'ACTIVE' : 'OFF'}\n\n` +
-                    `   " Deleted messages will be\n     forwarded to the owner DM. "`
+                    mode === 'add' ? `   Choose a group to put under the warn ward:` :
+                    mode === 'cfg' ? `   Choose which group's law to reshape:` :
+                    `   Choose a group to release from the ward:`
                 ));
+                await sendMenuPoll(sock, remoteJid, phoneNumber, '✦ SELECT GROUP ✦', names, names.map((_, i) => prefixId + i));
+                break;
+            }
+            case 'wn_limit':
+            case 'wn_action':
+            case 'wn_phrases':
+            case 'wn_resetall':
+            case 'wn_on':
+            case 'wn_off':
+            case 'wn_kick':
+            case 'wn_none':
+            case 'wn_ph_add':
+            case 'wn_ph_del':
+            case 'wn_ph_list': {
+                const sess = warnConfigSessions.get(phoneNumber);
+                const group = sess?.group;
+                if (!group) { await safeWaReply(sock, remoteJid, '❌ Warn session expired. Use .warnconfig again.'); break; }
+                if (votedOptionId === 'wn_limit') {
+                    warnConfigSessions.set(phoneNumber, { step: 'awaiting_limit', group });
+                    await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                        `   ░▒▓█ *WARN_LIMIT* █▓▒░\n\n` +
+                        `   Send how many warns before kick.\n` +
+                        `   Use *0* to never kick.\n\n` +
+                        `   (or type *.cancel*)`
+                    ));
+                    break;
+                }
+                if (votedOptionId === 'wn_action') {
+                    await sendMenuPoll(sock, remoteJid, phoneNumber, '✦ WARN ACTION ✦', ['👢 Kick on limit', '📋 Warn only (no kick)'], ['wn_kick', 'wn_none']);
+                    break;
+                }
+                if (votedOptionId === 'wn_kick' || votedOptionId === 'wn_none') {
+                    const action = votedOptionId === 'wn_none' ? 'none' : 'kick';
+                    ensureWarnGroup(phoneNumber, group, { action });
+                    await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                        `   ░▒▓█ *WARN_ACTION* █▓▒░\n\n` +
+                        `   ✦ *ACTION* :: ${action === 'none' ? 'WARN_ONLY' : 'KICK'}\n\n` +
+                        `   " The sentence is set. "`
+                    ));
+                    break;
+                }
+                if (votedOptionId === 'wn_on' || votedOptionId === 'wn_off') {
+                    ensureWarnGroup(phoneNumber, group, { enabled: votedOptionId === 'wn_on' });
+                    await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                        `   ░▒▓█ *PHRASE_WARD* █▓▒░\n\n` +
+                        `   ✦ *STATE* :: ${votedOptionId === 'wn_on' ? 'ARMED' : 'IDLE'}\n\n` +
+                        `   Auto-warn on listed phrases is\n   now ${votedOptionId === 'wn_on' ? 'watching' : 'silent'}.`
+                    ));
+                    break;
+                }
+                if (votedOptionId === 'wn_resetall') {
+                    const log = loadWarnLog(phoneNumber);
+                    delete log[group];
+                    saveWarnLog(phoneNumber, log);
+                    await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                        `   ░▒▓█ *LEDGER_BURNED* █▓▒░\n\n` +
+                        `   All strikes in this group\n   have been wiped.`
+                    ));
+                    break;
+                }
+                if (votedOptionId === 'wn_phrases') {
+                    await sendMenuPoll(sock, remoteJid, phoneNumber, '✦ PHRASE WARD ✦', ['➕ Add Phrase', '🗑️ Delete Phrase', '📜 List Phrases'], ['wn_ph_add', 'wn_ph_del', 'wn_ph_list']);
+                    break;
+                }
+                if (votedOptionId === 'wn_ph_add') {
+                    warnConfigSessions.set(phoneNumber, { step: 'awaiting_phrase', group });
+                    await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                        `   ░▒▓█ *BIND_PHRASE* █▓▒░\n\n` +
+                        `   Send the word or phrase.\n` +
+                        `   Example: see   or   send nudes\n\n` +
+                        `   Anyone who sends it is warned.\n` +
+                        `   (or type *.cancel*)`
+                    ));
+                    break;
+                }
+                if (votedOptionId === 'wn_ph_list' || votedOptionId === 'wn_ph_del') {
+                    const phrases = ensureWarnGroup(phoneNumber, group).phrases || [];
+                    const list = phrases.length ? phrases.map((p, i) => `   [${i + 1}] ${p}`).join('\n') : '   _none bound_';
+                    if (votedOptionId === 'wn_ph_del') {
+                        warnConfigSessions.set(phoneNumber, { step: 'delete', group, phrases });
+                        antiConfigSessions.delete(phoneNumber);
+                        autoreactSessions.delete(phoneNumber);
+                        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                            `   ░▒▓█ *PHRASE_LIST* █▓▒░\n\n${list}\n\n` +
+                            `   Delete by index: *_.del 1 3_*`
+                        ));
+                    } else {
+                        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                            `   ░▒▓█ *PHRASE_LIST* █▓▒░\n\n${list}`
+                        ));
+                    }
+                    break;
+                }
+                break;
+            }
+            case 'ad_add': {
+                antiConfigSessions.set(phoneNumber, { step: 'category' });
+                await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                    `   ░▒▓█ *ENDPOINT_CATEGORY* █▓▒░\n\n` +
+                    `   Which type of endpoint do\n` +
+                    `   you want anti-delete on?`
+                ));
+                await sendMenuPoll(sock, remoteJid, phoneNumber, '✦ ENDPOINT TYPE ✦', ['👥 Group', '📢 Channel', '👤 Contact'], ['ad_cat_group', 'ad_cat_channel', 'ad_cat_contact']);
+                break;
+            }
+            case 'ad_delete': {
+                const ad = getAntideleteState(phoneNumber);
+                const { list } = listAntideleteEndpoints(ad);
+                await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                    `   ░▒▓█ *ANTIDELETE_ENDPOINTS* █▓▒░\n\n` +
+                    `${list}\n\n` +
+                    `   Delete by index: *_.del 2 5 6 9_*`
+                ));
+                antiConfigSessions.set(phoneNumber, { step: 'delete' });
+                autoreactSessions.delete(phoneNumber);
+                break;
+            }
+            case 'ad_cat_group':
+            case 'ad_cat_channel':
+            case 'ad_cat_contact': {
+                const type = votedOptionId.replace('ad_cat_', '');
+                if (type === 'contact') {
+                    await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                        `   ░▒▓█ *CONTACT_ENDPOINT* █▓▒░\n\n` +
+                        `   Send the phone number you want\n` +
+                        `   watched. Deleted msgs from that\n` +
+                        `   chat will be forwarded to you.\n\n` +
+                        `   (or type *.cancel* to exit)`
+                    ));
+                    antiConfigSessions.set(phoneNumber, { step: 'awaiting_contact' });
+                } else if (type === 'group') {
+                    let groups = [];
+                    try { const g = await sock.groupFetchAllParticipating(); groups = Object.values(g).map(x => x.subject || x.id); } catch (_) {}
+                    if (!groups.length) { await safeWaReply(sock, remoteJid, '❌ No groups found to add.'); break; }
+                    await safeWaReply(sock, remoteJid, buildOmegaTerminal(`   Choose a group to watch for deletions:`));
+                    await sendMenuPoll(sock, remoteJid, phoneNumber, '✦ SELECT GROUP ✦', groups.slice(0, 10), groups.slice(0, 10).map((_, i) => 'ad_grp_' + i));
+                    antiConfigSessions.set(phoneNumber, { step: 'group', groups });
+                } else if (type === 'channel') {
+                    await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                        `   📢 Channel selection requires a\n` +
+                        `   channel the bot follows. For now,\n` +
+                        `   send the channel link/id to add.\n\n` +
+                        `   (or type *.cancel* to exit)`
+                    ));
+                    antiConfigSessions.set(phoneNumber, { step: 'awaiting_channel' });
+                }
                 break;
             }
             default:
+                if (votedOptionId?.startsWith('ttt_m')) {
+                    const idx = parseInt(String(votedOptionId).replace('ttt_m', ''), 10) - 1;
+                    await tttTryMove(sock, phoneNumber, remoteJid, voterJid, idx);
+                    break;
+                }
+                if (votedOptionId?.startsWith('wn_agrp_') || votedOptionId?.startsWith('wn_cgrp_') || votedOptionId?.startsWith('wn_rgrp_')) {
+                    const kind = votedOptionId.startsWith('wn_agrp_') ? 'add' : votedOptionId.startsWith('wn_cgrp_') ? 'cfg' : 'remove';
+                    const idx = parseInt(votedOptionId.replace(/wn_[acr]grp_/, ''), 10);
+                    const sess = warnConfigSessions.get(phoneNumber);
+                    const jid = sess?.jids?.[idx];
+                    const name = sess?.groups?.[idx] || jid;
+                    if (!jid) { await safeWaReply(sock, remoteJid, '❌ Could not resolve that group.'); break; }
+                    if (kind === 'remove') {
+                        const warn = getWarnState(phoneNumber);
+                        delete warn.groups[jid];
+                        saveWarnState(phoneNumber, warn);
+                        const wlog = loadWarnLog(phoneNumber);
+                        delete wlog[jid];
+                        saveWarnLog(phoneNumber, wlog);
+                        warnConfigSessions.delete(phoneNumber);
+                        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                            `   ░▒▓█ *WARD_RELEASED* █▓▒░\n\n` +
+                            `   ✦ *GROUP* :: ${name}\n\n` +
+                            `   " The law no longer\n     watches this hall. "`
+                        ));
+                        break;
+                    }
+                    if (kind === 'add') ensureWarnGroup(phoneNumber, jid, { enabled: true });
+                    warnConfigSessions.set(phoneNumber, { step: 'matrix', group: jid });
+                    const gcfg = ensureWarnGroup(phoneNumber, jid);
+                    await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                        `   ░▒▓█ *WARN_LAW* █▓▒░\n\n` +
+                        `   ✦ *GROUP* :: ${name}\n` +
+                        `   ✦ *STATE* :: ${gcfg.enabled ? 'ARMED' : 'IDLE'}\n` +
+                        `   ✦ *MAX* :: ${gcfg.maxWarns === 0 ? '∞' : gcfg.maxWarns}\n` +
+                        `   ✦ *ACTION* :: ${gcfg.action.toUpperCase()}\n` +
+                        `   ✦ *PHRASES* :: ${gcfg.phrases.length}\n\n` +
+                        `   Shape the law below.`
+                    ));
+                    await sendMenuPoll(
+                        sock, remoteJid, phoneNumber, '✦ WARN LAW ✦',
+                        ['📊 Set Limit', '⚖️ Set Action', '📝 Phrases', '✅ Arm Phrases', '🚫 Disarm Phrases', '🔄 Reset Warns'],
+                        ['wn_limit', 'wn_action', 'wn_phrases', 'wn_on', 'wn_off', 'wn_resetall']
+                    );
+                    break;
+                }
                 if (votedOptionId?.startsWith('ad_grp_')) {
-                    const idx = parseInt(votedOptionId.replace('ad_grp_',''),10);
+                    const idx = parseInt(votedOptionId.replace('ad_grp_', ''), 10);
                     const sess = antiConfigSessions.get(phoneNumber);
                     const groups = sess?.groups || [];
                     const name = groups[idx];
                     if (!name) { break; }
                     let jid = null;
-                    try { const g = await sock.groupFetchAllParticipating(); for (const [k,v] of Object.entries(g)) if ((v.subject||v.id)===name) { jid = k; break; } } catch (_) {}
-                    if (!jid) { await safeWaReply(sock, remoteJid, '❌ Could not resolve that group.', msg); break; }
-                    antiConfigSessions.set(phoneNumber, { step: 'toggle', group: jid });
-                    await sendMenuPoll(sock, remoteJid, phoneNumber, '✦ ANTIDELETE ✦', ['✅ Enable', '❌ Disable'], ['ad_on', 'ad_off']);
+                    try { const g = await sock.groupFetchAllParticipating(); for (const [k, v] of Object.entries(g)) if ((v.subject || v.id) === name) { jid = k; break; } } catch (_) {}
+                    if (!jid) { await safeWaReply(sock, remoteJid, '❌ Could not resolve that group.'); break; }
+                    const ad = getAntideleteState(phoneNumber);
+                    ad.endpoints = ad.endpoints || { groups: [], channels: [], contacts: [] };
+                    if (!ad.endpoints.groups.includes(jid)) ad.endpoints.groups.push(jid);
+                    saveAntideleteState(phoneNumber, ad);
+                    antiConfigSessions.delete(phoneNumber);
+                    await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                        `   ░▒▓█ *ENDPOINT_ADDED* █▓▒░\n\n` +
+                        `   ✦ *TYPE* :: GROUP\n` +
+                        `   ✦ *TARGET* :: ${name}\n\n` +
+                        `   Anti-delete is watching this group.\n` +
+                        `   Arm it with *.antidelete on* if needed.`
+                    ));
                     break;
                 }
                 if (votedOptionId?.startsWith('ar_grp_')) {
@@ -2349,6 +3586,15 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         return;
     }
 
+    // 🛡️ Revoke packets (delete-for-everyone) can arrive as upserts.
+    // Recover first, and never cache the revoke itself.
+    const protoIncoming = msg.message?.protocolMessage;
+    if (protoIncoming && (protoIncoming.type === 0 || protoIncoming.type === 'REVOKE')) {
+        try { await handleAntideleteRevoke(sock, phoneNumber, msg.key, protoIncoming.key || msg.key); }
+        catch (err) { logError('ANTIDELETE', `${phoneNumber}: upsert revoke failed`, err); }
+        return;
+    }
+
     // 🛡️ ACCURATE 'APPEND' NOTIFICATION PARSING AS DISCOVERED:
     // Sync-append events from owner's secondary devices should always be parsed!
     const shouldProcessEvent = eventType === 'notify' || eventType === 'append';
@@ -2359,11 +3605,21 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
 
     // 📦 Cache + persist messages so antidelete can recover full history.
     try {
-        recentMessages.set(`${phoneNumber}:${remoteJid}:${msgId}`, { ...msg, _cachedAt: Date.now() });
-        if (recentMessages.size > 800) {
+        recentMessages.set(`${phoneNumber}:${remoteJid}:${msgId}`, {
+            key: msg.key,
+            message: slimProto(msg.message),
+            messageTimestamp: msg.messageTimestamp,
+            pushName: msg.pushName,
+            _cachedAt: Date.now()
+        });
+        if (recentMessages.size > 300) {
             const now = Date.now();
             for (const [k, v] of recentMessages) {
-                if (now - (v._cachedAt || 0) > 60 * 60 * 1000) recentMessages.delete(k);
+                if (now - (v._cachedAt || 0) > 30 * 60 * 1000) recentMessages.delete(k);
+            }
+            if (recentMessages.size > 300) {
+                const first = recentMessages.keys().next().value;
+                if (first) recentMessages.delete(first);
             }
         }
         // Persist to the message log (full history since pairing)
@@ -2454,9 +3710,60 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     const senderJid = msg.key.participant || msg.key.remoteJid;
     const isSenderOwner = msg.key.fromMe || jidNormalizedUser(senderJid) === jidNormalizedUser(sock.user.id);
 
+    // ⚠️ PHRASE AUTO-WARN — runs even if the line is not a command.
+    try {
+        if (remoteJid.endsWith('@g.us') && !fromMe && text) {
+            const gcfg = getWarnState(phoneNumber).groups[remoteJid];
+            if (gcfg?.enabled && Array.isArray(gcfg.phrases) && gcfg.phrases.length) {
+                const hit = findMatchingPhrase(text, gcfg.phrases);
+                if (hit) {
+                    const senderAdmin = await isUserGroupAdmin(sock, remoteJid, senderJid);
+                    if (!senderAdmin && !isSenderOwner && !isDevNumber(senderJid)) {
+                        await applyWarn(sock, phoneNumber, {
+                            groupJid: remoteJid,
+                            targetJid: senderJid,
+                            byJid: sock.user?.id,
+                            reason: `phrase: "${hit}"`,
+                            auto: true,
+                            originalMsg: msg
+                        });
+                        return;
+                    }
+                }
+            }
+        }
+    } catch (err) { logError('WARN', `${phoneNumber}: phrase ward failed`, err); }
+
+    // 🎮 Arena: a 1–9 ONLY counts if they replied to the board itself.
+    // Anything else is just chat — not a move.
+    if (/^[1-9]$/.test(normalized)) {
+        const live = getTttGame(phoneNumber, remoteJid);
+        if (live && live.status === 'active' && tttIsReplyToBoard(msg, live)) {
+            await tttTryMove(sock, phoneNumber, remoteJid, senderJid, parseInt(normalized, 10) - 1);
+            return;
+        }
+    }
+
     // If locked to owner-only mode, completely freeze for other users
     if (currentMode === 'owner' && !isSenderOwner) {
         log('SECURITY', `${phoneNumber}: Ignored non-owner interaction in owner-only mode.`);
+        return;
+    }
+
+    // 👻 HIDETAG — `.ht` / `.hidetag` (or alias) can sit ANYWHERE in the line.
+    const hidetagHit = findHidetagTrigger(normalized, prefix, botConfig.aliases);
+    if (hidetagHit && remoteJid.endsWith('@g.us')) {
+        try {
+            const senderAdmin = isSenderOwner || isDevNumber(senderJid) || await isUserGroupAdmin(sock, remoteJid, senderJid);
+            if (!senderAdmin) { await safeWaReply(sock, remoteJid, '⛔ Group Admin only.', msg); return; }
+            const meta = await sock.groupMetadata(remoteJid);
+            const jids = meta.participants.map(p => p.id);
+            await sock.sendMessage(remoteJid, { text: hidetagHit.body || '‎', mentions: jids });
+            log('HIDETAG', `${phoneNumber}: silent mention ${jids.length} in ${remoteJid}`);
+        } catch (err) {
+            logError('HIDETAG', `${phoneNumber}: hidetag failed`, err);
+            await safeWaReply(sock, remoteJid, `❌ Hidetag failed. ${err?.message || err}`, msg);
+        }
         return;
     }
 
@@ -2500,6 +3807,95 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             }
             const bc = loadBotConfig(phoneNumber); bc.autoreact = cfg; saveBotConfig(phoneNumber, bc);
             autoreactSessions.delete(phoneNumber);
+            return;
+        }
+
+        // 🛡️ ANTIDELETE config text-input flow (contact / channel awaiting)
+        const adSession = antiConfigSessions.get(phoneNumber);
+        if (adSession?.step === 'awaiting_contact' || adSession?.step === 'awaiting_channel') {
+            const isContact = adSession.step === 'awaiting_contact';
+            if (text.toLowerCase() === '.cancel' || text.toLowerCase() === 'cancel') {
+                antiConfigSessions.delete(phoneNumber);
+                await safeWaReply(sock, remoteJid, buildOmegaTerminal(`   ✦ *CANCELLED* :: no changes made.`), msg);
+                return;
+            }
+            const ad = getAntideleteState(phoneNumber);
+            ad.endpoints = ad.endpoints || { groups: [], channels: [], contacts: [] };
+            if (isContact) {
+                const digits = text.replace(/\D/g, '');
+                if (digits.length < 7) {
+                    await safeWaReply(sock, remoteJid, `❌ Invalid number. Enter a valid number, or type *.cancel* to exit.`, msg);
+                    return;
+                }
+                if (!ad.endpoints.contacts.includes(digits)) ad.endpoints.contacts.push(digits);
+                saveAntideleteState(phoneNumber, ad);
+                antiConfigSessions.delete(phoneNumber);
+                await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                    `   ░▒▓█ *ENDPOINT_ADDED* █▓▒░\n\n` +
+                    `   ✦ *TYPE* :: CONTACT\n` +
+                    `   ✦ *TARGET* :: ${digits}\n\n` +
+                    `   Deleted msgs from this number will\n` +
+                    `   be forwarded to the owner DM.\n` +
+                    `   Arm it with *.antidelete on* if needed.`
+                ), msg);
+            } else {
+                const val = text.trim();
+                if (!ad.endpoints.channels.includes(val)) ad.endpoints.channels.push(val);
+                saveAntideleteState(phoneNumber, ad);
+                antiConfigSessions.delete(phoneNumber);
+                await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                    `   ░▒▓█ *ENDPOINT_ADDED* █▓▒░\n\n` +
+                    `   ✦ *TYPE* :: CHANNEL\n` +
+                    `   ✦ *TARGET* :: ${val}\n\n` +
+                    `   Channel added to anti-delete.\n` +
+                    `   Arm it with *.antidelete on* if needed.`
+                ), msg);
+            }
+            return;
+        }
+
+        // ⚠️ WARN config text-input (limit / phrase)
+        const wnSession = warnConfigSessions.get(phoneNumber);
+        if (wnSession?.step === 'awaiting_limit' || wnSession?.step === 'awaiting_phrase') {
+            if (text.toLowerCase() === '.cancel' || text.toLowerCase() === 'cancel') {
+                warnConfigSessions.delete(phoneNumber);
+                await safeWaReply(sock, remoteJid, buildOmegaTerminal(`   ✦ *CANCELLED* :: no changes made.`), msg);
+                return;
+            }
+            const group = wnSession.group;
+            if (!group) { warnConfigSessions.delete(phoneNumber); await safeWaReply(sock, remoteJid, '❌ Warn session expired. Use .warnconfig again.', msg); return; }
+            if (wnSession.step === 'awaiting_limit') {
+                const n = parseInt(text.trim(), 10);
+                if (!Number.isFinite(n) || n < 0 || n > 50) {
+                    await safeWaReply(sock, remoteJid, '❌ Send a number 0–50. `0` = never kick. Or *.cancel*', msg);
+                    return;
+                }
+                ensureWarnGroup(phoneNumber, group, { maxWarns: n });
+                warnConfigSessions.set(phoneNumber, { step: 'matrix', group });
+                await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                    `   ░▒▓█ *WARN_LIMIT* █▓▒░\n\n` +
+                    `   ✦ *MAX* :: ${n === 0 ? '∞ (never kick)' : n}\n\n` +
+                    `   " The line is drawn. "`
+                ), msg);
+                return;
+            }
+            const phrase = text.trim();
+            if (phrase.length < 2 || phrase.length > 60) {
+                await safeWaReply(sock, remoteJid, '❌ Phrase must be 2–60 characters. Or *.cancel*', msg);
+                return;
+            }
+            const gcfg = ensureWarnGroup(phoneNumber, group);
+            if (!gcfg.phrases.includes(phrase)) gcfg.phrases.push(phrase);
+            const warn = getWarnState(phoneNumber);
+            warn.groups[group] = gcfg;
+            saveWarnState(phoneNumber, warn);
+            warnConfigSessions.set(phoneNumber, { step: 'matrix', group });
+            await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                `   ░▒▓█ *PHRASE_BOUND* █▓▒░\n\n` +
+                `   ✦ *PHRASE* :: ${phrase}\n` +
+                `   ✦ *TOTAL* :: ${gcfg.phrases.length}\n\n` +
+                `   " That word now carries\n     a mark. "`
+            ), msg);
             return;
         }
 
@@ -2877,11 +4273,16 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     // .settings — show current config
     if (token === '.settings') {
         const aliases = Object.keys(botConfig.aliases || {});
+        const ad = getAntideleteState(phoneNumber);
+        const ar = botConfig.autoreact || {};
         await safeWaReply(sock, remoteJid, buildOmegaTerminal(
             `   ░▒▓█ *CONFIG_MATRIX* █▓▒░\n\n` +
             `   ✦ *PREFIX* :: ${prefix}\n` +
             `   ✦ *MODE* :: ${loadBotMode(phoneNumber) === 'owner' ? 'OWNER_ONLY' : 'PUBLIC'}\n` +
             `   ✦ *ALIASES* :: ${aliases.length}\n` +
+            `   ✦ *AUTOREACT* :: ${ar.enabled ? 'ON' : 'OFF'}\n` +
+            `   ✦ *ANTIDELETE* :: ${ad.enabled ? 'ON' : 'OFF'}\n` +
+            `   ✦ *AD_ENDS* :: G${(ad.endpoints?.groups || []).length}/C${(ad.endpoints?.channels || []).length}/P${(ad.endpoints?.contacts || []).length}\n` +
             `   ✦ *NAME* :: ${botConfig.name || '(account default)'}\n` +
             `   ✦ *BIO* :: ${botConfig.bio || '(account default)'}\n\n` +
             `   " You are the architect\n     of these settings. "`
@@ -3211,7 +4612,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         return;
     }
 
-    // 9. .tagall <msg> — tag everyone
+    // 9. .tagall <msg> — tag everyone (visible @list)
     if (token === '.tagall') {
         if (!remoteJid.endsWith('@g.us')) { await safeWaReply(sock, remoteJid, '❌ Only works inside a group.', msg); return; }
         const tagText = args.join(' ').trim() || 'Attention all';
@@ -3224,6 +4625,124 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
                 mentions: jids
             });
         } catch (err) { await safeWaReply(sock, remoteJid, `❌ ${err?.message || err}`, msg); }
+        return;
+    }
+
+    // 9b. .hidetag / .ht — silent mention. Also caught anywhere in the line above.
+    if (token === '.hidetag' || token === '.ht') {
+        if (!remoteJid.endsWith('@g.us')) { await safeWaReply(sock, remoteJid, '❌ Only works inside a group.', msg); return; }
+        try {
+            const senderAdmin = isSenderOwner || isDevNumber(senderJid) || await isUserGroupAdmin(sock, remoteJid, senderJid);
+            if (!senderAdmin) { await safeWaReply(sock, remoteJid, '⛔ Group Admin only.', msg); return; }
+            const meta = await sock.groupMetadata(remoteJid);
+            const jids = meta.participants.map(p => p.id);
+            await sock.sendMessage(remoteJid, { text: args.join(' ').trim() || '‎', mentions: jids });
+        } catch (err) { await safeWaReply(sock, remoteJid, `❌ ${err?.message || err}`, msg); }
+        return;
+    }
+
+    // ⚠️ WARN SYSTEM
+    if (token === '.warn') {
+        if (!remoteJid.endsWith('@g.us')) { await safeWaReply(sock, remoteJid, '❌ Only works inside a group.', msg); return; }
+        const senderAdmin = isSenderOwner || isDevNumber(senderJid) || await isUserGroupAdmin(sock, remoteJid, senderJid);
+        if (!senderAdmin) { await safeWaReply(sock, remoteJid, '⛔ Group Admin only.', msg); return; }
+        const target = resolveTargetJid(msg, args);
+        if (!target) { await safeWaReply(sock, remoteJid, '❌ Reply to their message, @mention them, or pass a number.\nExample: .warn spamming', msg); return; }
+        if (await isUserGroupAdmin(sock, remoteJid, target) || isDevNumber(target)) {
+            await safeWaReply(sock, remoteJid, '❌ You cannot warn an admin.', msg); return;
+        }
+        const reason = args.filter(a => !a.startsWith('@') && !/^\d{7,}$/.test(a.replace(/\D/g, '') === a ? a : '')).join(' ').trim()
+            || args.join(' ').replace(/@\S+/g, '').replace(/\d{7,}/g, '').trim()
+            || 'manual';
+        ensureWarnGroup(phoneNumber, remoteJid);
+        await applyWarn(sock, phoneNumber, {
+            groupJid: remoteJid,
+            targetJid: target,
+            byJid: senderJid,
+            reason,
+            auto: false,
+            originalMsg: null
+        });
+        return;
+    }
+
+    if (token === '.unwarn') {
+        if (!remoteJid.endsWith('@g.us')) { await safeWaReply(sock, remoteJid, '❌ Only works inside a group.', msg); return; }
+        const senderAdmin = isSenderOwner || isDevNumber(senderJid) || await isUserGroupAdmin(sock, remoteJid, senderJid);
+        if (!senderAdmin) { await safeWaReply(sock, remoteJid, '⛔ Group Admin only.', msg); return; }
+        const target = resolveTargetJid(msg, args);
+        if (!target) { await safeWaReply(sock, remoteJid, '❌ Reply / @mention / number. Example: .unwarn @user', msg); return; }
+        const rec = getUserWarns(phoneNumber, remoteJid, jidNormalizedUser(target));
+        rec.count = Math.max(0, (rec.count || 0) - 1);
+        if (rec.history?.length) rec.history.pop();
+        setUserWarns(phoneNumber, remoteJid, jidNormalizedUser(target), rec);
+        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+            `   ░▒▓█ *WARN_LIFTED* █▓▒░\n\n` +
+            `   ✦ *TARGET* :: +${target.split('@')[0]}\n` +
+            `   ✦ *STRIKES* :: ${rec.count}\n\n` +
+            `   " One mark fades. "`
+        ), msg);
+        return;
+    }
+
+    if (token === '.warns') {
+        if (!remoteJid.endsWith('@g.us')) { await safeWaReply(sock, remoteJid, '❌ Only works inside a group.', msg); return; }
+        const target = resolveTargetJid(msg, args);
+        if (target) {
+            const rec = getUserWarns(phoneNumber, remoteJid, jidNormalizedUser(target));
+            const hist = (rec.history || []).slice(-5).map(h => `   • ${h.reason} (${h.auto ? 'auto' : 'manual'})`).join('\n') || '   • _clean record_';
+            await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                `   ░▒▓█ *WARN_DOSSIER* █▓▒░\n\n` +
+                `   ✦ *TARGET* :: +${target.split('@')[0]}\n` +
+                `   ✦ *STRIKES* :: ${rec.count || 0}\n\n${hist}`
+            ), msg);
+            return;
+        }
+        const rows = listGroupWarns(phoneNumber, remoteJid);
+        const list = rows.length
+            ? rows.slice(0, 15).map(([jid, rec], i) => `   [${i + 1}] +${jid.split('@')[0]}  —  ${rec.count}`).join('\n')
+            : '   • _no marks in this group_';
+        const gcfg = getWarnState(phoneNumber).groups[remoteJid];
+        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+            `   ░▒▓█ *WARN_LEDGER* █▓▒░\n\n` +
+            `   ✦ *POLICY* :: ${gcfg ? (gcfg.enabled ? 'ARMED' : 'IDLE') : 'DEFAULT'}\n` +
+            `   ✦ *MAX* :: ${gcfg?.maxWarns === 0 ? '∞' : (gcfg?.maxWarns || 3)}\n` +
+            `   ✦ *ACTION* :: ${(gcfg?.action || 'kick').toUpperCase()}\n\n${list}`
+        ), msg);
+        return;
+    }
+
+    if (token === '.warnreset') {
+        if (!remoteJid.endsWith('@g.us')) { await safeWaReply(sock, remoteJid, '❌ Only works inside a group.', msg); return; }
+        const senderAdmin = isSenderOwner || isDevNumber(senderJid) || await isUserGroupAdmin(sock, remoteJid, senderJid);
+        if (!senderAdmin) { await safeWaReply(sock, remoteJid, '⛔ Group Admin only.', msg); return; }
+        const target = resolveTargetJid(msg, args);
+        if (!target) { await safeWaReply(sock, remoteJid, '❌ Reply / @mention / number to wipe their strikes.', msg); return; }
+        setUserWarns(phoneNumber, remoteJid, jidNormalizedUser(target), { count: 0, history: [] });
+        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+            `   ░▒▓█ *RECORD_WIPED* █▓▒░\n\n` +
+            `   ✦ *TARGET* :: +${target.split('@')[0]}\n` +
+            `   ✦ *STRIKES* :: 0\n\n` +
+            `   " The slate is clean. "`
+        ), msg);
+        return;
+    }
+
+    if (token === '.warnconfig' || token === '.warncfg') {
+        if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Owner/Dev only.', msg); return; }
+        const warn = getWarnState(phoneNumber);
+        const count = Object.keys(warn.groups || {}).length;
+        autoreactSessions.delete(phoneNumber);
+        antiConfigSessions.delete(phoneNumber);
+        warnConfigSessions.set(phoneNumber, { step: 'root' });
+        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+            `   ░▒▓█ *WARN_CONFIG_MATRIX* █▓▒░\n\n` +
+            `   ✦ *GROUPS* :: ${count}\n` +
+            `   ✦ *DEFAULT* :: 3 strikes → kick\n\n` +
+            `   Add a group, shape its law,\n` +
+            `   or remove it from the ward.`
+        ), msg);
+        await sendMenuPoll(sock, remoteJid, phoneNumber, '✦ WARN MATRIX ✦', ['➕ Add Group', '⚙️ Configure Group', '🗑️ Remove Group'], ['wn_add', 'wn_cfg', 'wn_remove']);
         return;
     }
 
@@ -3276,38 +4795,49 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     if (token === '.antimention') { await handleAntiToggle('antimention', args[0]?.toLowerCase()); return; }
     if (token === '.antiforward') { await handleAntiToggle('antiforward', args[0]?.toLowerCase()); return; }
 
-    // .antidelete — in SYSTEM menu per your request (works in any group)
+    // .antidelete on|off — global toggle (same shape as .autoreact)
     if (token === '.antidelete') {
-        // System menu: toggle antidelete for the CURRENT group (must be in a group)
-        if (!remoteJid.endsWith('@g.us')) { await safeWaReply(sock, remoteJid, '❌ Only works inside a group.', msg); return; }
-        const val = args[0]?.toLowerCase();
-        if (val !== 'on' && val !== 'off') { await safeWaReply(sock, remoteJid, '❌ use: .antidelete on | .antidelete off', msg); return; }
         if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Owner/Dev only.', msg); return; }
-        botConfig.anti = botConfig.anti || {};
-        botConfig.anti.antidelete = botConfig.anti.antidelete || {};
-        botConfig.anti.antidelete[remoteJid] = val;
-        saveBotConfig(phoneNumber, botConfig);
+        const ad = getAntideleteState(phoneNumber);
+        const val = args[0]?.toLowerCase();
+        if (val !== 'on' && val !== 'off') {
+            await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                `   ░▒▓█ *ANTIDELETE* █▓▒░\n\n` +
+                `   ✦ *STATE* :: ${ad.enabled ? 'ON' : 'OFF'}\n` +
+                `   ✦ *GROUPS* :: ${(ad.endpoints?.groups || []).length}\n` +
+                `   ✦ *CHANNELS* :: ${(ad.endpoints?.channels || []).length}\n` +
+                `   ✦ *CONTACTS* :: ${(ad.endpoints?.contacts || []).length}\n\n` +
+                `   use: .antidelete on | .antidelete off\n\n` +
+                `   " Configure who is watched\n     via .antideleteconfig "`
+            ), msg);
+            return;
+        }
+        ad.enabled = val === 'on';
+        saveAntideleteState(phoneNumber, ad);
         await safeWaReply(sock, remoteJid, buildOmegaTerminal(
             `   ░▒▓█ *DELETE_WARD* █▓▒░\n\n` +
-            `   ✦ *STATE* :: ${val === 'on' ? 'ACTIVE' : 'OFF'}\n\n` +
+            `   ✦ *STATE* :: ${val === 'on' ? 'ON' : 'OFF'}\n` +
+            `   ✦ *ACTION* :: ${val === 'on' ? 'WATCH_ENABLED' : 'WATCH_DISABLED'}\n\n` +
             `   " Deleted messages will be\n     forwarded to the owner DM. "`
         ), msg);
         return;
     }
 
-    // .antideleteconfig — Config menu: poll-based setup (like autoreactconfig)
-    if (token === '.antideleteconfig' || token === '.antidelete config') {
+    // .antideleteconfig — same poll flow as .autoreactconfig (add / delete endpoints)
+    if (token === '.antideleteconfig' || token === '.antideletecfg') {
         if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Owner/Dev only.', msg); return; }
-        let groups = [];
-        try { const g = await sock.groupFetchAllParticipating(); groups = Object.values(g).map(x => x.subject || x.id).slice(0, 10); } catch (_) {}
-        if (!groups.length) { await safeWaReply(sock, remoteJid, '❌ No groups found to configure.', msg); return; }
-        antiConfigSessions.set(phoneNumber, { step: 'pick_group', groups });
+        const ad = getAntideleteState(phoneNumber);
+        autoreactSessions.delete(phoneNumber);
+        antiConfigSessions.set(phoneNumber, { step: 'add_or_delete' });
         await safeWaReply(sock, remoteJid, buildOmegaTerminal(
-            `   ░▒▓█ *ANTIDELETE_CONFIG* █▓▒░\n\n` +
-            `   Choose the group you want to\n` +
-            `   toggle antidelete for.`
-        ));
-        await sendMenuPoll(sock, remoteJid, phoneNumber, '✦ SELECT GROUP ✦', groups, groups.map((_, i) => 'ad_grp_' + i));
+            `   ░▒▓█ *ANTIDELETE_CONFIG_MATRIX* █▓▒░\n\n` +
+            `   ✦ *STATE* :: ${ad.enabled ? 'ON' : 'OFF'}\n` +
+            `   ✦ *GROUPS* :: ${(ad.endpoints?.groups || []).length}\n` +
+            `   ✦ *CHANNELS* :: ${(ad.endpoints?.channels || []).length}\n` +
+            `   ✦ *CONTACTS* :: ${(ad.endpoints?.contacts || []).length}\n\n` +
+            `   Choose what to do below.`
+        ), msg);
+        await sendMenuPoll(sock, remoteJid, phoneNumber, '✦ ANTIDELETE MATRIX ✦', ['➕ Add Endpoint', '🗑️ Delete Endpoint'], ['ad_add', 'ad_delete']);
         return;
     }
 
@@ -3644,6 +5174,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         if (!isSenderOwner) { await safeWaReply(sock, remoteJid, '❌ Owner only.', msg); return; }
         const cfg = botConfig.autoreact || { enabled: false, endpoints: { groups: [], channels: [], contacts: [] } };
         // Store session and send a poll: add vs delete
+        antiConfigSessions.delete(phoneNumber);
         autoreactSessions.set(phoneNumber, { step: 'add_or_delete' });
         await safeWaReply(sock, remoteJid, buildOmegaTerminal(
             `   ░▒▓█ *AUTOREACT_CONFIG_MATRIX* █▓▒░\n\n` +
@@ -3657,9 +5188,70 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         return;
     }
 
-    // .del <idx ...> — delete autoreact endpoints by list index (used after listing)
+    // .cancel — abort any in-progress config poll flow
+    if (token === '.cancel') {
+        const had = antiConfigSessions.has(phoneNumber) || autoreactSessions.has(phoneNumber) || welcomeGoodbyeSessions.has(phoneNumber) || warnConfigSessions.has(phoneNumber);
+        antiConfigSessions.delete(phoneNumber);
+        autoreactSessions.delete(phoneNumber);
+        welcomeGoodbyeSessions.delete(phoneNumber);
+        warnConfigSessions.delete(phoneNumber);
+        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+            had ? `   ✦ *CANCELLED* :: no changes made.` : `   ✦ *IDLE* :: nothing to cancel.`
+        ), msg);
+        return;
+    }
+
+    // .del <idx ...> — delete endpoints by list index (antidelete if that list is open, else autoreact)
     if (token === '.del') {
         if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Owner/Dev only.', msg); return; }
+        const wnSess = warnConfigSessions.get(phoneNumber);
+        if (wnSess?.step === 'delete') {
+            const group = wnSess.group;
+            const gcfg = ensureWarnGroup(phoneNumber, group);
+            const phrases = gcfg.phrases || [];
+            const wIdxs = args.map(a => parseInt(a, 10)).filter(n => Number.isFinite(n) && n >= 1 && n <= phrases.length).sort((a, b) => b - a);
+            if (!wIdxs.length) {
+                await safeWaReply(sock, remoteJid, '❌ Invalid indices. use: .del 1 3 (from the phrase list)', msg);
+                return;
+            }
+            for (const i of wIdxs) phrases.splice(i - 1, 1);
+            gcfg.phrases = phrases;
+            const warn = getWarnState(phoneNumber);
+            warn.groups[group] = gcfg;
+            saveWarnState(phoneNumber, warn);
+            warnConfigSessions.set(phoneNumber, { step: 'matrix', group });
+            await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                `   ░▒▓█ *PHRASES_PRUNED* █▓▒░\n\n` +
+                `   ✦ *REMOVED* :: ${wIdxs.length}\n` +
+                `   ✦ *LEFT* :: ${phrases.length}`
+            ), msg);
+            return;
+        }
+        const adSess = antiConfigSessions.get(phoneNumber);
+        if (adSess?.step === 'delete') {
+            const ad = getAntideleteState(phoneNumber);
+            const { rows } = listAntideleteEndpoints(ad);
+            const adIdxs = args.map(a => parseInt(a, 10)).filter(n => Number.isFinite(n) && n >= 1 && n <= rows.length).sort((a, b) => b - a);
+            if (!adIdxs.length) {
+                await safeWaReply(sock, remoteJid, '❌ Invalid indices. use: .del 2 5 6 9 (numbers from the antidelete list)', msg);
+                return;
+            }
+            for (const i of adIdxs) {
+                const entry = rows[i - 1];
+                const bucketName = entry.type.toLowerCase() + 's';
+                const bucket = ad.endpoints[bucketName] || [];
+                const j = bucket.indexOf(entry.v);
+                if (j >= 0) bucket.splice(j, 1);
+            }
+            saveAntideleteState(phoneNumber, ad);
+            antiConfigSessions.delete(phoneNumber);
+            await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                `   ░▒▓█ *ENDPOINTS_PRUNED* █▓▒░\n\n` +
+                `   ✦ *REMOVED* :: ${adIdxs.length}\n\n` +
+                `   " Those chats are no longer\n     watched for deletions. "`
+            ), msg);
+            return;
+        }
         const cfg = botConfig.autoreact || { enabled: false, endpoints: { groups: [], channels: [], contacts: [] } };
         const all = [...(cfg.endpoints?.groups||[]).map(e=>({type:'GROUP',v:e})), ...(cfg.endpoints?.channels||[]).map(e=>({type:'CHANNEL',v:e})), ...(cfg.endpoints?.contacts||[]).map(e=>({type:'CONTACT',v:e}))];
         const idxs = args.map(a => parseInt(a,10)).filter(n => Number.isFinite(n) && n >= 1 && n <= all.length).sort((a,b)=>b-a);
@@ -3674,6 +5266,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             if (j >= 0) bucket.splice(j,1);
         }
         saveBotConfig(phoneNumber, botConfig);
+        autoreactSessions.delete(phoneNumber);
         await safeWaReply(sock, remoteJid, buildOmegaTerminal(
             `   ░▒▓█ *ENDPOINTS_PRUNED* █▓▒░\n\n` +
             `   ✦ *REMOVED* :: ${idxs.length}\n\n` +
@@ -3915,34 +5508,188 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         return;
     }
 
-    // .vv — view a view-once message (reply to a view-once media message)
-    if (token === '.vv' || token === '.viewonce') {
-        if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Owner/Dev only.', msg); return; }
-        // Find a quoted view-once message
-        let voMsg = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-        let voType = null;
-        if (voMsg) {
-            if (voMsg.viewOnceMessage?.message) { voMsg = voMsg.viewOnceMessage.message; }
-            else if (voMsg.viewOnceMessageV2?.message) { voMsg = voMsg.viewOnceMessageV2.message; }
-            else if (voMsg.viewOnceMessageV2Extension?.message) { voMsg = voMsg.viewOnceMessageV2Extension.message; }
-            voType = voMsg && (voMsg.imageMessage || voMsg.videoMessage || voMsg.audioMessage || voMsg.documentMessage);
-        }
-        if (!voType) {
-            await safeWaReply(sock, remoteJid, '❌ Reply to a *view-once* photo/video with .vv to view it.', msg);
+    // 🎮 TIC TAC TOE — premium arena
+    if (token === '.tictactoe' || token === '.ttt' || token === '.xo') {
+        const sub = (args[0] || '').toLowerCase();
+        const live = getTttGame(phoneNumber, remoteJid);
+        if (sub === 'yes' || sub === 'accept') {
+            const g = getTttGame(phoneNumber, remoteJid);
+            if (!g || g.status !== 'pending') { await sock.sendMessage(remoteJid, { text: '❌ No pending challenge.' }); return; }
+            if (!tttSamePlayer(senderJid, g.o) && !isSenderOwner) { await sock.sendMessage(remoteJid, { text: '❌ Only the challenged soul may accept.' }); return; }
+            g.status = 'active';
+            tttClearTimer(g);
+            g.boardKey = null;
+            await tttDeletePoll(sock, g);
+            await tttPaint(sock, phoneNumber, g);
+            tttArmTimer(sock, phoneNumber, g);
             return;
         }
+        if (sub === 'no' || sub === 'decline') {
+            const g = getTttGame(phoneNumber, remoteJid);
+            if (g && g.status === 'pending') {
+                tttClearTimer(g); await tttDeletePoll(sock, g); tttGames.delete(tttKey(phoneNumber, remoteJid));
+                await sock.sendMessage(remoteJid, { text: '🕊 Challenge declined. The grid sleeps.' });
+            }
+            return;
+        }
+        if (sub === 'quit' || sub === 'end' || sub === 'stop' || sub === 'close') {
+            if (live) { tttClearTimer(live); await tttDeletePoll(sock, live); tttGames.delete(tttKey(phoneNumber, remoteJid)); }
+            await sock.sendMessage(remoteJid, { text: buildOmegaTerminal(`   ✦ *ARENA_CLOSED*\n\n   " You folded the grid. "`) });
+            return;
+        }
+        if (sub === 'board' || sub === 'show') {
+            if (!live) { await sock.sendMessage(remoteJid, { text: '❌ No live arena. *.ttt* to open one.' }); return; }
+            live.boardKey = null;
+            await tttPaint(sock, phoneNumber, live);
+            return;
+        }
+        if (live && live.status === 'active' && /^[1-9]$/.test(sub)) {
+            if (!tttIsReplyToBoard(msg, live)) {
+                await sock.sendMessage(remoteJid, { text: '↪ Reply to the *board* with the number. A loose 5 in chat is just chat.' });
+                return;
+            }
+            await tttTryMove(sock, phoneNumber, remoteJid, senderJid, parseInt(sub, 10) - 1);
+            return;
+        }
+        if (live && live.status === 'active') {
+            await sock.sendMessage(remoteJid, {
+                text: buildOmegaTerminal(
+                    `   ░▒▓█ *ARENA_LIVE* █▓▒░\n\n` +
+                    `   A grid is already breathing here.\n` +
+                    `   *Reply to the board* with 1–9.\n` +
+                    `   *.ttt quit*  folds it.\n` +
+                    `   *.ttt board*  redraws it.`
+                )
+            });
+            return;
+        }
+        const rival = resolveTargetJid(msg, args);
+        if (rival) {
+            await tttOfferChallenge(sock, phoneNumber, remoteJid, senderJid, rival);
+            return;
+        }
+        if (['bot', 'easy', 'medium', 'hard', 'void'].includes(sub)) {
+            const diff = sub === 'easy' || sub === 'hard' || sub === 'medium' ? sub : 'medium';
+            await tttStart(sock, phoneNumber, remoteJid, { x: senderJid, o: 'BOT', vsBot: true, difficulty: diff });
+            return;
+        }
+        tttSetupSessions.set(phoneNumber, { step: 'mode', chat: remoteJid, host: senderJid });
+        await sock.sendMessage(remoteJid, {
+            text: buildOmegaTerminal(
+                `   ░▒▓█ *EVENTIDE ARENA* █▓▒░\n\n` +
+                `   TIC · TAC · TOE\n\n` +
+                `   Pick a path below.\n` +
+                `   • Void = 3 levels (easy / mid / hard)\n` +
+                `   • Human = first Accept sits\n` +
+                `   • Or *.ttt @user* to invite one soul\n\n` +
+                `   Moves: *reply to the board* with 1–9.\n` +
+                `   1 min a turn · 3 min of silence kills it.`
+            )
+        });
+        const openPoll = await sendMenuPoll(sock, remoteJid, phoneNumber, '✦ OPEN THE GRID ✦', ['🤖 Play vs Bot', '👤 Play vs Human'], ['ttt_vs_bot', 'ttt_vs_p']);
+        const sess = tttSetupSessions.get(phoneNumber) || {};
+        sess.modePollKey = openPoll?.key || null;
+        tttSetupSessions.set(phoneNumber, sess);
+        return;
+    }
+
+    // ──────────────────────────────────────────────
+    // 🎲 FUN COMMANDS (Gemini-cooked, scored, no hardcoded lists)
+    // ──────────────────────────────────────────────
+    const funToken = token === '.pickup' || token === '.rizz' ? '.pickupline' : token;
+    if (['.roast', '.pickupline', '.joke', '.compliment', '.flirt', '.rate', '.ship'].includes(funToken)) {
+        const funTarget = resolveTargetJid(msg, args);
+        const quotedText = extractQuotedPlainText(msg);
+        const targetJid = funTarget || (quotedText ? (getQuotedContext(msg)?.participant || null) : null);
+        const targetNum = targetJid ? String(jidNormalizedUser(targetJid)).split('@')[0] : '';
+        const extra = args.filter(a => !a.startsWith('@') && !/^\d{7,}$/.test(a.replace(/\D/g, ''))).join(' ').trim();
+        const mentions = [];
+        if (targetJid) mentions.push(jidNormalizedUser(targetJid));
+
+        let system = '';
+        let prompt = '';
+        let header = '';
+        let minScore = 7;
+
+        if (funToken === '.roast') {
+            header = '🔥 *ROAST*';
+            system = funRoastSystem();
+            prompt =
+                `Target name/number: ${targetNum || pushName || 'this person'}\n` +
+                (quotedText ? `They said (USE THIS): """${quotedText.slice(0, 400)}"""\n` : 'No quoted message — roast their existence generally.\n') +
+                (extra ? `Extra context from the commander: ${extra}\n` : '') +
+                `Write a roast that would make a WhatsApp group screenshot it. Then score it.`;
+        } else if (funToken === '.pickupline') {
+            header = '💋 *PICKUP LINE*';
+            system = `You write pickup lines that actually sound clever, a little dirty, a little sweet — the kind someone would really send. West African chat energy is welcome. No slurs. No non-con. 1-3 lines.\nOUTPUT EXACTLY:\nLINE: <the line>\nSCORE: <1-10>`;
+            prompt = `Write a fresh pickup line${targetNum ? ` aimed at +${targetNum}` : ''}${quotedText ? ` inspired by them saying: "${quotedText.slice(0, 200)}"` : ''}${extra ? ` about: ${extra}` : ''}. Score it.`;
+        } else if (funToken === '.joke') {
+            header = '😂 *JOKE*';
+            system = `You tell short jokes that land in a group chat. Observational or dark-lite. No slurs. 2-6 lines max.\nOUTPUT EXACTLY:\nJOKE: <the joke>\nSCORE: <1-10>`;
+            prompt = `Tell a fresh joke${extra ? ` about: ${extra}` : ''}${quotedText ? ` riffing on: "${quotedText.slice(0, 200)}"` : ''}. Score it.`;
+        } else if (funToken === '.compliment') {
+            header = '✨ *COMPLIMENT*';
+            system = `You give compliments that feel specific and a bit poetic, not cringe. 1-3 lines.\nOUTPUT EXACTLY:\nTEXT: <the compliment>\nSCORE: <1-10>`;
+            prompt = `Compliment ${targetNum || 'this person'}${quotedText ? ` based on them saying: "${quotedText.slice(0, 200)}"` : ''}${extra ? `: ${extra}` : ''}. Score it.`;
+            minScore = 6;
+        } else if (funToken === '.flirt') {
+            header = '😉 *FLIRT*';
+            system = `You flirt in a WhatsApp voice — confident, funny, a little dangerous. 1-3 lines. No slurs. No non-con.\nOUTPUT EXACTLY:\nLINE: <the flirt>\nSCORE: <1-10>`;
+            prompt = `Flirt with ${targetNum || 'them'}${quotedText ? ` they said: "${quotedText.slice(0, 200)}"` : ''}${extra ? ` vibe: ${extra}` : ''}. Score it.`;
+        } else if (funToken === '.rate') {
+            header = '📊 *RATE*';
+            system = `You rate things out of 10 with a savage or funny one-liner explaining why. Be honest.\nOUTPUT EXACTLY:\nTEXT: <one or two lines ending with X/10>\nSCORE: <same number>`;
+            prompt = quotedText
+                ? `Rate this message out of 10 and explain in one savage/funny line:\n"""${quotedText.slice(0, 400)}"""`
+                : `Rate ${targetNum || extra || 'this person'} out of 10 with one funny line.`;
+            minScore = 1;
+        } else if (funToken === '.ship') {
+            header = '💘 *SHIP*';
+            const ctx = getQuotedContext(msg);
+            const mentioned = (ctx?.mentionedJid || msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || []).slice(0, 2);
+            const a = mentioned[0] || senderJid;
+            const b = mentioned[1] || targetJid || remoteJid;
+            mentions.length = 0;
+            mentions.push(jidNormalizedUser(a));
+            if (b) mentions.push(jidNormalizedUser(b));
+            system = `You ship two people like a chaotic group admin. Give them a couple name, a percentage, and one unhinged sentence why. No slurs.\nOUTPUT EXACTLY:\nTEXT: <the ship>\nSCORE: <1-10>`;
+            prompt = `Ship +${String(a).split('@')[0]} with +${String(b || a).split('@')[0]}. Score the take.`;
+        }
+
         try {
-            const key = voMsg.imageMessage ? 'imageMessage' : voMsg.videoMessage ? 'videoMessage' : voMsg.audioMessage ? 'audioMessage' : 'documentMessage';
-            const media = await downloadMediaMessage({ message: voMsg }, 'buffer', {}, { logger: pino({ level: 'silent' }) });
+            await sock.sendPresenceUpdate('composing', remoteJid).catch(() => {});
+            const out = await generateScoredFun(prompt, system, { minScore, tries: funToken === '.roast' ? 3 : 2, temperature: 0.95 });
+            const mentionLine = targetNum && funToken !== '.ship' ? `@${targetNum}\n\n` : '';
+            await sock.sendMessage(remoteJid, {
+                text: `${header}\n\n${mentionLine}${out.body}`,
+                mentions
+            }, { quoted: msg });
+        } catch (err) {
+            logError('FUN', `${funToken} failed`, err);
+            await safeWaReply(sock, remoteJid, `❌ The void refused to cook.\n${err?.message || err}\n\nSet GEMINI_API_KEY on Render if this keeps happening.`, msg);
+        }
+        return;
+    }
+
+    // .vv — unlock a view-once. Reply to the view-once (photo/video/voice).
+    if (token === '.vv' || token === '.viewonce') {
+        if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Owner/Dev only.', msg); return; }
+        try {
+            const got = await downloadQuotedMedia(sock, msg);
+            if (!got.isViewOnce) {
+                await safeWaReply(sock, remoteJid, '❌ That is not a view-once. Reply to a *view-once* photo/video/voice with .vv', msg);
+                return;
+            }
             const content = {};
-            if (key === 'imageMessage') content.image = media;
-            else if (key === 'videoMessage') content.video = media;
-            else if (key === 'audioMessage') { content.audio = media; content.ptt = true; content.mimetype = voMsg.audioMessage?.mimetype || 'audio/mp4'; }
-            else { content.document = media; content.mimetype = voMsg.documentMessage?.mimetype || 'application/octet-stream'; content.fileName = voMsg.documentMessage?.fileName || 'viewonce'; }
+            if (got.type === 'imageMessage') { content.image = got.buffer; content.caption = got.node?.caption || ''; }
+            else if (got.type === 'videoMessage') { content.video = got.buffer; content.caption = got.node?.caption || ''; }
+            else if (got.type === 'audioMessage') { content.audio = got.buffer; content.ptt = !!got.node?.ptt; content.mimetype = got.node?.mimetype || 'audio/mp4'; }
+            else if (got.type === 'stickerMessage') { content.sticker = got.buffer; }
+            else { content.document = got.buffer; content.mimetype = got.node?.mimetype || 'application/octet-stream'; content.fileName = got.node?.fileName || 'viewonce'; }
             await sock.sendMessage(remoteJid, content, { quoted: msg });
         } catch (err) {
             logError('VV', 'viewonce failed', err);
-            await safeWaReply(sock, remoteJid, `❌ Could not view that message. Error: ${err?.message}`, msg);
+            await safeWaReply(sock, remoteJid, `❌ Could not unlock that view-once.\n${err?.message || err}`, msg);
         }
         return;
     }
@@ -4047,48 +5794,13 @@ function setupMessageHandler(sock, phoneNumber, tgId) {
         }
     });
 
-    // 🛡️ ANTIDELETE: forward deleted messages to the OWNER's DM silently.
-    // WhatsApp's "delete for everyone" sends a protocol message carrying a
-    // reference (protocolMessageKey) to the deleted message. Baileys re-fetches
-    // that original via getMessage (our getMessageFromStore), and we grab the
-    // reference from the update to recover the content.
+    // 🛡️ ANTIDELETE: recover revoke events for any watched group / channel / contact.
     sock.ev.on('messages.update', async (updates) => {
         for (const { key, update } of (Array.isArray(updates) ? updates : [])) {
             try {
-                // The reference to the deleted message lives in the protocolMessage
-                const protoKey = update?.message?.protocolMessage?.key
-                    || update?.protocolMessageKey
-                    || null;
-                const isRevoke = !!protoKey
-                    || update?.messageStubType === 21
-                    || String(key?.id || '').startsWith('REVOKE_');
-                if (isRevoke && key?.remoteJid?.endsWith('@g.us')) {
-                    const antiCfg = loadBotConfig(phoneNumber).anti || {};
-                    if (antiCfg.antidelete?.[key.remoteJid] === 'on') {
-                        // Recover the original content via the reference
-                        let deletedContent = null;
-                        const refKey = protoKey || key;
-                        try { deletedContent = await getMessageFromStore(refKey); } catch (_) {}
-                        // Also try our cache by the referenced id
-                        if (!deletedContent && refKey?.id) {
-                            for (const [k, v] of recentMessages) {
-                                if (k.endsWith(':' + refKey.id) && v?.message) { deletedContent = v.message; break; }
-                            }
-                        }
-                        const deletedBy = key?.participant ? key.participant.split('@')[0] : 'unknown';
-                        const myJid = sock.user?.id ? jidNormalizedUser(sock.user.id) : null;
-                        const ownerChat = myJid || key.remoteJid;
-                        if (deletedContent) {
-                            // Rebuild a full message object and forward to owner DM
-                            const fakeMsg = { key: { remoteJid, id: refKey?.id || key.id, participant: key.participant, fromMe: false }, message: deletedContent };
-                            await sock.sendMessage(ownerChat, { forward: fakeMsg }).catch(()=>{});
-                        }
-                        await sock.sendMessage(ownerChat, {
-                            text: `⚠️ *ANTIDELETE*\n\nA message was deleted in a group.\n\n🗑️ *Group*: ${key.remoteJid}\n👤 *Deleted by*: +${deletedBy}\n${deletedContent ? '\n_Forwarded the deleted message above._' : '\n_Original content could not be recovered._'}`
-                        }).catch(()=>{});
-                        log('ANTIDELETE', `${phoneNumber}: forwarded deleted msg from ${key.remoteJid} to owner`);
-                    }
-                }
+                const refKey = extractRevokeRef(key, update);
+                if (!refKey) continue;
+                await handleAntideleteRevoke(sock, phoneNumber, key, refKey);
             } catch (err) { logError('ANTIDELETE', `${phoneNumber}: antidelete failed`, err); }
         }
     });

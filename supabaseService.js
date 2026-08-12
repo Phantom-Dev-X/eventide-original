@@ -120,9 +120,17 @@ export async function syncLocalToSupabase(phoneNumber, localDir) {
         });
 
         const sessionFiles = {};
+        const skipNames = new Set(['msg_log.json', 'warn_log.json']);
         for (const name of localFiles) {
+            if (skipNames.has(name)) continue;
             try {
-                const content = fs.readFileSync(path.join(localDir, name), 'utf8');
+                const full = path.join(localDir, name);
+                const stat = fs.statSync(full);
+                if (stat.size > 250 * 1024) {
+                    console.log(`[SUPABASE] Skipping oversized file ${name} (${stat.size} bytes) for ${phoneNumber}.`);
+                    continue;
+                }
+                const content = fs.readFileSync(full, 'utf8');
                 sessionFiles[name] = content;
             } catch (err) {
                 console.error(`[SUPABASE] Error reading local file ${name} for packaging:`, err.message);
