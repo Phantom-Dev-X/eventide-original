@@ -255,10 +255,10 @@ const CONFIG_MENU_PATH      = path.join(__dirname, 'assets', 'config_menu.png');
 // ──────────────────────────────────────────────
 const POLL_QUESTION = `╔════════╦════════╗\n        ⚠ EVENTIDE OMEGA\n╚════════╩════════╝`;
 const POLL_OPTIONS = [
-    '╰|1...2➤ [ 1. OWNERS MENU ]',
-    '╰|1...2➤ [ 2. GROUP MENU ]',
-    '╰|1...2➤ [ 3. FUN MENU ]',
-    '╰|1...2➤ [ 4. BUG MENU ]'
+    'OWNERS MENU',
+    'GROUP MENU',
+    'FUN MENU',
+    'BUG MENU'
 ];
 const MENU_POLL_IDS = ['owners', 'group', 'fun', 'bug'];
 
@@ -267,8 +267,8 @@ const MENU_POLL_IDS = ['owners', 'group', 'fun', 'bug'];
 // ──────────────────────────────────────────────
 const DOMAIN_POLL_QUESTION = `╔════════╦════════╗\n     CHOOSE YOUR DOMAIN\n╚════════╩════════╝`;
 const DOMAIN_POLL_OPTIONS = [
-    '╰|1...2➤ [ 1. SYSTEM MENU ]',
-    '╰|1...2➤ [ 2. CONFIG MENU ]'
+    'SYSTEM MENU',
+    'CONFIG MENU'
 ];
 const DOMAIN_POLL_IDS = ['system', 'config'];
 
