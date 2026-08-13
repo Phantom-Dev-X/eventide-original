@@ -205,11 +205,11 @@ const STAGE3_TEXT = `${GROUP_CHANNEL_LINK}
              " i am what remains when 
               everything else is deleted ."
 
-╔═══════════╦══════════╗
-║VOID SIGNATURE ║ SYSTEMCORE║
-║👤@Unknown.     ║ECLIPSE: 100%║
-║⚠APOTHEOSIS ║CORE:ABS ZERO║
-╚═══════════╩═════════╝
+╔════════╦════════╗
+║Void signature║SYS CORE║
+║👤@Unknown.║ECLIPSE ║
+║⚠ASCENDED║ABS ZERO║
+╚════════╩════════╝
 
                    🌑 THE FINAL DUSK 🌑
             " when the last star dies, 
