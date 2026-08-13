@@ -22,6 +22,7 @@ export function initWebApp(app, incoming) {
     deps = incoming || {};
     loadWebUsers();
     loadIdSessions();
+    deps.log?.('WEB', `loaded ${Object.keys(webUsers).length} web account(s) from disk`);
 
     app.use((req, res, next) => {
         const origin = req.headers.origin || '';
