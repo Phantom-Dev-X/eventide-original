@@ -5391,6 +5391,18 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         return;
     }
 
+    // .backup — snapshot accounts + sessions to backups/
+    if (token === '.backup') {
+        if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Owner/Dev only.', msg); return; }
+        const dest = runLocalBackup('command', log, logError);
+        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+            dest
+                ? `   ░▒▓█ *BACKUP_OK* █▓▒░\n\n   ✦ *SNAP* :: ${path.basename(dest)}\n   ✦ *WHERE* :: backups/\n\n   \" The disk remembers. \"`
+                : `   ░▒▓█ *BACKUP_FAIL* █▓▒░\n\n   Check the panel console.`
+        ), msg);
+        return;
+    }
+
     // .restart — owner-only reboot
     if (token === '.restart') {
         if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Dev only.', msg); return; }
@@ -6510,6 +6522,13 @@ async function main() {
     } else {
         log('BOOT', '⚠️ Supabase integration is DISABLED. Local storage will act as primary.');
     }
+    try {
+        const commitFile = path.join(__dirname, 'CURRENT_COMMIT.txt');
+        const commitLine = fs.existsSync(commitFile)
+            ? fs.readFileSync(commitFile, 'utf8').trim()
+            : '';
+        if (commitLine) log('BOOT', `📌 GitHub commit: ${commitLine}`);
+    } catch (_) {}
 
     const restoredCount = await restoreAllSessions();
     log('BOOT', `🔁 Session reconnection startup pass finished. Sessions queued: ${restoredCount}`);
