@@ -13,10 +13,16 @@ if (typeof global.WebSocket === 'undefined') {
 // ──────────────────────────────────────────────
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
+// Panel / Pterodactyl: set USE_SUPABASE=false so a copied Render env cannot
+// turn cloud sync back on. Sessions then live only on the persistent disk.
+const USE_SUPABASE_FLAG = String(process.env.USE_SUPABASE || '').trim().toLowerCase();
+const SUPABASE_FORCED_OFF = ['0', 'false', 'off', 'no', 'disabled'].includes(USE_SUPABASE_FLAG);
 
 let supabase = null;
 
-if (SUPABASE_URL && SUPABASE_KEY) {
+if (SUPABASE_FORCED_OFF) {
+    console.log('[SUPABASE] USE_SUPABASE=false — local disk only (panel mode). Cloud sync will not start.');
+} else if (SUPABASE_URL && SUPABASE_KEY) {
     try {
         supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
             auth: {
