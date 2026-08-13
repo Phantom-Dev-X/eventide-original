@@ -12,6 +12,26 @@ node index.js
 
 Node **18+**. Docker image: `node:20-bookworm` (or whatever your host has ≥18).
 
+## Environment (easiest: a `.env` file)
+
+Most panel.na eggs only show Git boxes. You do **not** need a hidden “Environment” page.
+
+**File Manager** → **New File** → name it exactly `.env` → paste:
+
+```
+USE_SUPABASE=false
+MAX_USERS=15
+DEV_NUMBERS=234xxxxxxxxxx
+```
+
+Do not put `PORT` in the file if the egg already injects `SERVER_PORT` (this bot reads that). If the site fails to open, add `PORT=20006` (your allocation).
+
+**Or** put it on the start command (Startup → Command Run):
+
+```bash
+USE_SUPABASE=false MAX_USERS=15 npm start
+```
+
 ## Environment (Server → Startup)
 
 | Key | Value | Notes |
