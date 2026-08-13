@@ -1,18 +1,40 @@
 # Eventide Omega — Netlify = website only.
 # The WhatsApp bot stays on the Pterodactyl panel (or Render).
 #
-# After you know the panel public URL, edit the redirect "to" below.
-# Example: http://123.45.67.89:8080/api/:splat
-#      or: https://bot.yourdomain.com/api/:splat
+# The panel's public IP is set below. If it ever changes, update the
+# "to" line in the last redirect to match the new address.
 
 [build]
   publish = "public"
   command = "echo 'static public/ — no build'"
 
-# Same-origin /api → panel (login, pair, dashboard keep working)
+# Account creation, login, session check and logout run as Netlify Functions
+# backed by Netlify Database — no external panel required for these.
+[[redirects]]
+  from = "/api/auth/signup"
+  to = "/.netlify/functions/auth-signup"
+  status = 200
+
+[[redirects]]
+  from = "/api/auth/login"
+  to = "/.netlify/functions/auth-login"
+  status = 200
+
+[[redirects]]
+  from = "/api/auth/me"
+  to = "/.netlify/functions/auth-me"
+  status = 200
+
+[[redirects]]
+  from = "/api/auth/logout"
+  to = "/.netlify/functions/auth-logout"
+  status = 200
+
+# Everything else under /api (WhatsApp pairing, dashboard) still needs the
+# separately-hosted panel — set its real public host below.
 [[redirects]]
   from = "/api/*"
-  to = "https://REPLACE_ME_PANEL_HOST/api/:splat"
+  to = "http://95.111.228.231:20006/api/:splat"
   status = 200
   force = true
   headers = { X-From = "netlify" }
