@@ -6,6 +6,7 @@ package-lock.json
 sessions/
 web_users.json
 web_id_sessions.json
+backups/
 
 # Logs
 *.log

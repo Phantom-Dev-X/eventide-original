@@ -38,6 +38,7 @@ import {
     isGameCommand
 } from './games.js';
 import { initWebApp } from './webApp.js';
+import { startLocalBackups, runLocalBackup } from './backup.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -6490,6 +6491,7 @@ async function main() {
     ensureDir(AUTH_DIR);
     normalizeAuthDirStructure();
     await loadUserMap({ clearExisting: true });
+    startLocalBackups({ log, logError });
 
     log('BOOT', '🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷🔷');
     log('BOOT', '🤖 WHATSAPP MULTI-BOT');
