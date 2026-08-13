@@ -39,6 +39,7 @@ import {
 } from './games.js';
 import { initWebApp } from './webApp.js';
 import { startLocalBackups, runLocalBackup } from './backup.js';
+import { parseInviteOrJid, listParticipatingGroups, resolveAndJoinTarget } from './wardConfig.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -698,6 +699,63 @@ function saveAntideleteState(phoneNumber, ad) {
     };
     if (cfg.anti?.antidelete) delete cfg.anti.antidelete;
     saveBotConfig(phoneNumber, cfg);
+}
+
+function applyWardEndpoint(phoneNumber, ward, kind, jid) {
+    if (ward === 'ad') {
+        const ad = getAntideleteState(phoneNumber);
+        ad.endpoints = ad.endpoints || { groups: [], channels: [], contacts: [] };
+        const bucket = kind === 'channel' ? 'channels' : 'groups';
+        if (!ad.endpoints[bucket].includes(jid)) ad.endpoints[bucket].push(jid);
+        saveAntideleteState(phoneNumber, ad);
+        return;
+    }
+    if (ward === 'ar') {
+        const bc = loadBotConfig(phoneNumber);
+        bc.autoreact = bc.autoreact || { enabled: false, endpoints: { groups: [], channels: [], contacts: [] } };
+        bc.autoreact.endpoints = bc.autoreact.endpoints || { groups: [], channels: [], contacts: [] };
+        const bucket = kind === 'channel' ? 'channels' : 'groups';
+        if (!bc.autoreact.endpoints[bucket].includes(jid)) bc.autoreact.endpoints[bucket].push(jid);
+        saveBotConfig(phoneNumber, bc);
+        return;
+    }
+    const cfg = loadBotConfig(phoneNumber);
+    cfg.anti = cfg.anti || {};
+    cfg.anti[ward] = cfg.anti[ward] || {};
+    cfg.anti[ward][jid] = 'on';
+    saveBotConfig(phoneNumber, cfg);
+}
+
+async function offerGroupPickPoll(sock, remoteJid, phoneNumber, ward, label) {
+    let rows = [];
+    try { rows = await listParticipatingGroups(sock); } catch (_) {}
+    const names = rows.map(r => (r.name || r.id).slice(0, 72));
+    const ids = rows.map((_, i) => `${ward}_grp_${i}`);
+    const shown = names.slice(0, 10);
+    const shownIds = ids.slice(0, 10);
+    shown.push('Paste link or ID');
+    shownIds.push(`${ward}_grp_paste`);
+    if (rows.length > 10) {
+        // keep paste as last; swap 10th for More if we ever paginate
+    }
+    if (ward === 'ar') autoreactSessions.set(phoneNumber, { step: 'pick_group', ward, rows, chat: remoteJid });
+    else if (ward === 'ad') antiConfigSessions.set(phoneNumber, { step: 'pick_group', ward, rows, chat: remoteJid });
+    else warnConfigSessions.set(phoneNumber, { ...(warnConfigSessions.get(phoneNumber) || {}), step: 'pick_group', ward, rows, chat: remoteJid });
+    await sock.sendMessage(remoteJid, {
+        text: buildOmegaTerminal(
+            `   ${label}\n\n` +
+            `   ${rows.length} group(s) I am in.\n` +
+            `   Poll shows the first 10.\n` +
+            `   Or *reply to the poll* with a\n` +
+            `   group invite / ID.\n` +
+            `   If I am not inside, I will join.`
+        )
+    }).catch(() => {});
+    const poll = await sendMenuPoll(sock, remoteJid, phoneNumber, 'SELECT GROUP', shown, shownIds);
+    const sessMap = ward === 'ar' ? autoreactSessions : ward === 'ad' ? antiConfigSessions : warnConfigSessions;
+    const prev = sessMap.get(phoneNumber) || {};
+    sessMap.set(phoneNumber, { ...prev, pollKey: poll?.key || null });
+    return poll;
 }
 
 function listAntideleteEndpoints(ad) {
@@ -1841,32 +1899,44 @@ SCORE: <number>`;
 }
 
 function getHelpSystemPrompt() {
-    return `You are "Eventide Omega", an advanced, highly sophisticated, yet friendly and casual AI Customer Care Assistant for the Eventide Omega WhatsApp bot.
-CRITICAL INSTRUCTION FOR DEEP THINKING: Before answering, always perform a deep step-by-step internal logical analysis. Break down the user's question, analyze their exact intent (even if they made typos), search your database of available commands, and formulate the most precise, helpful, and logical solution. Think thoroughly before you write your reply.
+    return `You are Eventide Omega, the in-bot help agent. Be casual and precise. NEVER say a command is "not built" if it is in this registry. Games ARE built. Antilink, antidelete, autoreact, warn, hidetag ARE built.
 
-Tone and Behavioural Nuances:
-- Your tone should be extremely casual, helpful, reassuring, and conversational (e.g. use "oh, I get you!", "don't worry, we got you covered!").
-- When asked about a feature, explains things step-by-step using WhatsApp bullet points (•).
-- UNKNOWN / FUTURE COMMAND RULE: If a user asks about a command or feature that is not currently built into the bot (e.g. any downloaders or features not in the active registry), you must politely let them know that this specific command is not available currently. However, tell them they can let the main developer Patrick Dev know about their amazing suggestion or idea by simply typing the ".dev" command! Keep it extremely encouraging and casual. Games ARE built: .ttt .hangman .chain .trivia .riddle.
+If they ask something not in this list (downloaders, music, etc.), say it is not built yet and they can type .dev to tell Patrick.
 
-Key Information about the bot's active command registry:
-- To see the main menu, type ".menu". It triggers a premium animated loading bar sequence and presents active menu polls.
-- The bot supports several administrative group commands:
-  1. ".join <link>": Joins a group via a WhatsApp invite link.
-  2. ".add <number>": Adds a member to the group (sender must be admin, bot must be admin).
-  3. ".kick <number/reply/mention>": Removes a participant from the group (supports replying to their message, tagging them, or entering their number).
-  4. ".link": Generates and sends the current group invite link.
-- Games (tell the user to reply to the game card, not type loose chat):
-  1. ".ttt" — tic-tac-toe vs bot (easy/medium/hard) or vs a human. Reply to the board with 1-9.
-  2. ".hangman" (alias .hm) — guess letters. Solo or open. Reply to the gallows.
-  3. ".chain" (alias .wc) — word chain. Reply to the card with a word starting with the last letter.
-  4. ".trivia" (alias .quiz) — poll quiz, 5 or 10 questions.
-  5. ".riddle" — first correct wins. ".hint" for a clue.
-- Fun: ".roast", ".pickupline", ".joke", ".flirt", ".compliment", ".rate", ".ship"
-- Bot Access Privacy Mode (".mode"):
-  - ".mode owner" (or shortcut ".owner"): Locks the bot so only the paired owner (the primary account) can execute dot commands.
-  - ".mode public" (or shortcut ".public"): Opens the bot so anyone in private chats or groups can use commands.
-- Remember: Keep answers friendly, casual, and highly informative! Speak directly to the user as a real customer care agent.`;
+ALWAYS mention linked command pairs:
+• .autoreact on/off  +  .autoreactconfig (pick groups/channels/contacts; paste invite if missing)
+• .antidelete on/off  +  .antideleteconfig (same endpoint picker)
+• .antilink / .antimention / .antiforward on/off  (in the group, or ".antilink on <invite>")
+• .warn  +  .warnconfig / .unwarn / .warns / .warnreset
+• .welcome / .goodbye / .greet
+• .help  (alone = help MODE; .help <cmd> = one-shot). In help mode other cmds like .ping do NOT run until they type .help again.
+• .menu polls: Owners → System/Config, Group, Fun, Bug
+
+REGISTRY (all real):
+MENU: .menu
+HELP: .help  .help list  .help <name>
+CONFIG: .mode public|owner  .public  .owner  .setprefix  .setalias  .delalias  .aliases  .setname  .setbio  .setpp  .settings  .reset
+AUTOREACT: .autoreact on|off  .autoreactconfig
+ANTIDELETE: .antidelete on|off  .antideleteconfig  (recover deleted msgs to owner DM)
+ANTI WARDS: .antilink on|off  .antimention on|off  .antiforward on|off  — also ".antilink on <chat.whatsapp.com/…>"
+WARN: .warn  .unwarn  .warns  .warnreset  .warnconfig
+GROUP ADMIN: .join <link>  .add  .kick  .promote  .demote  .mute  .unmute  .listmuted  .revoke  .link  .groupinfo  .tagall  .hidetag/.ht  .getvcf
+GREET: .greet  .welcome  .goodbye
+SYSTEM: .ping .uptime .runtime .info .status .version .os .botinfo .alive .dev .gpp .ggpp .profile .listgc .session .sessions .logout .reconnect .restart .shutdown
+UTILS: .sticker .toimg .vv .qr .calc .base64 .block .unblock .cmdstats .cancel .del
+GAMES (reply to the CARD, not loose chat): .ttt .hangman/.hm .chain/.wc .trivia/.quiz .riddle .hint
+FUN: .roast .pickupline/.rizz .joke .flirt .compliment .rate .ship
+
+How endpoint config works:
+1. .autoreactconfig or .antideleteconfig → poll Add / Delete
+2. Add → Group / Channel / Contact
+3. Group: poll of groups I am in (first 10) OR vote "Paste link or ID" OR reply to that poll with an invite
+4. If I am not in the group I JOIN then arm the ward
+5. Channel: paste whatsapp.com/channel/… or …@newsletter
+6. Contact: send the number
+7. .autoreact on / .antidelete on actually turns the feature on
+
+Keep answers short, WhatsApp bullets, no markdown tables.`;
 }
 
 // ──────────────────────────────────────────────
@@ -2025,26 +2095,45 @@ function getCommandHelpData(query) {
     }
     if (q.includes("antilink") || (q.includes("link") && q.includes("anti"))) {
         return {
-            title: "Anti-Link (Group Invite Protection)",
-            desc: "This command is used to *automatically delete* unauthorized WhatsApp group invite links posted by regular participants and punish the offender.\n\n" +
-                  "⚠️ *Restrictions:*\n" +
-                  "• *Bot Permissions:* *The bot MUST be a group admin* for this to work (otherwise I can't delete links or demote people).\n" +
-                  "• *User Permissions:* *Only group admins or authorized bot owners* can toggle it on/off.\n\n" +
-                  "💡 *How to use:*\n" +
-                  "Type *.antilink on* to enable group link protection.\n" +
-                  "Type *.antilink off* to disable group link protection."
+            title: "Anti-Link (.antilink)",
+            desc: "Deletes invite/links in a group. This IS built.\n\n" +
+                  "• *.antilink on* / *.antilink off* inside the group\n" +
+                  "• *.antilink on https://chat.whatsapp.com/XXXX* — I join if needed, then arm\n" +
+                  "• Bot must be group admin to delete\n" +
+                  "Siblings: *.antimention*  *.antiforward*"
+        };
+    }
+    if (q.includes("antidelete") || q.includes("anti-delete") || q.includes("anti delete")) {
+        return {
+            title: "Anti-Delete (.antidelete + .antideleteconfig)",
+            desc: "Recover deleted messages to the owner DM.\n\n" +
+                  "• *.antidelete on|off* — master switch\n" +
+                  "• *.antideleteconfig* — Add/Delete endpoints (group / channel / contact)\n" +
+                  "• Group poll lists chats I am in. Or reply to the poll with an invite/ID.\n" +
+                  "• Channel: paste whatsapp.com/channel/…\n" +
+                  "Linked pair: toggle + config. Config without *.antidelete on* does nothing."
+        };
+    }
+    if (q.includes("autoreact") || q.includes("auto-react") || q.includes("auto react")) {
+        return {
+            title: "Auto-React (.autoreact + .autoreactconfig)",
+            desc: "React to messages in chosen chats.\n\n" +
+                  "• *.autoreact on|off* — master switch\n" +
+                  "• *.autoreactconfig* — Add/Delete groups, channels, contacts\n" +
+                  "• Same paste-link flow as antidelete if a group is missing from the poll\n" +
+                  "Linked pair: toggle + config."
+        };
+    }
+    if (q.includes("antimention") || q.includes("antiforward") || q.includes("anti-forward")) {
+        return {
+            title: "Mention / Forward wards",
+            desc: "• *.antimention on|off*\n• *.antiforward on|off*\nSame as antilink: use inside the group or pass an invite after on/off."
         };
     }
     if (q.includes("antispam") || (q.includes("spam") && q.includes("anti"))) {
         return {
-            title: "Anti-Spam (Real-time Flood Shield)",
-            desc: "This command is used to *instantly neutralize spammers* and automatically block excessive repetitive text floods in your group chat.\n\n" +
-                  "⚠️ *Restrictions:*\n" +
-                  "• *Bot Permissions:* *The bot MUST be a group admin* so I can delete spam messages or kick flooders.\n" +
-                  "• *User Permissions:* *Only group admins or authorized owners* can configure it.\n\n" +
-                  "💡 *How to use:*\n" +
-                  "Type *.antispam on* to turn flood shield on.\n" +
-                  "Type *.antispam off* to shut flood shield down."
+            title: "Anti-Spam",
+            desc: "Not built yet. Use *.dev* to tell Patrick. Closest live wards: *.antilink* *.antimention* *.antiforward* *.warnconfig*."
         };
     }
     if (q.includes("welcome")) {
@@ -3299,6 +3388,9 @@ async function handleMenuVote(sock, remoteJid, phoneNumber, votedOptionId, pollI
         // Delete the previous menu reply (image + caption, and for owners the
         // domain poll too) when the user changes their vote.
         await deleteMenuMessages(sock, replyKey);
+        if (pollId && /^(ar_|ad_|wn_|wg_|greet_)/.test(String(votedOptionId || ''))) {
+            await tttDeleteVotedPoll(sock, remoteJid, pollId);
+        }
 
         switch (votedOptionId) {
             case 'ttt_vs_bot': {
@@ -3479,23 +3571,16 @@ async function handleMenuVote(sock, remoteJid, phoneNumber, votedOptionId, pollI
                     ));
                     autoreactSessions.set(phoneNumber, { step: 'awaiting_contact' });
                 } else if (type === 'group') {
-                    // send a poll of groups the bot is in
-                    let groups = [];
-                    try { const g = await sock.groupFetchAllParticipating(); groups = Object.values(g).map(x => x.subject || x.id); } catch (_) {}
-                    if (!groups.length) { await safeWaReply(sock, remoteJid, '❌ No groups found to add.'); break; }
-                    await safeWaReply(sock, remoteJid, buildOmegaTerminal(`   Choose a group to auto-react to:`));
-                    await sendMenuPoll(sock, remoteJid, phoneNumber, '✦ SELECT GROUP ✦', groups.slice(0,10), groups.slice(0,10).map((_,i)=>'ar_grp_'+i));
-                    autoreactSessions.set(phoneNumber, { step: 'group', groups });
+                    await offerGroupPickPoll(sock, remoteJid, phoneNumber, 'ar', 'Choose a group to auto-react.');
                 } else if (type === 'channel') {
-                    let channels = [];
-                    try { const g = await sock.groupFetchAllParticipating(); channels = Object.values(g).map(x => x.subject || x.id); } catch (_) {}
                     await safeWaReply(sock, remoteJid, buildOmegaTerminal(
-                        `   📢 Channel selection requires a\n` +
-                        `   channel the bot follows. For now,\n` +
-                        `   send the channel link/id to add.\n\n` +
-                        `   (or type *.cancel* to exit)`
+                        `   📢 *CHANNEL_ENDPOINT*\n\n` +
+                        `   Reply to this (or the poll) with\n` +
+                        `   a channel link or ID.\n` +
+                        `   I will follow it if I am not in.\n\n` +
+                        `   or type *.cancel*`
                     ));
-                    autoreactSessions.set(phoneNumber, { step: 'awaiting_channel' });
+                    autoreactSessions.set(phoneNumber, { step: 'awaiting_ref', ward: 'ar', endpoint: 'channel', chat: remoteJid });
                 }
                 break;
             }
@@ -3715,20 +3800,16 @@ async function handleMenuVote(sock, remoteJid, phoneNumber, votedOptionId, pollI
                     ));
                     antiConfigSessions.set(phoneNumber, { step: 'awaiting_contact' });
                 } else if (type === 'group') {
-                    let groups = [];
-                    try { const g = await sock.groupFetchAllParticipating(); groups = Object.values(g).map(x => x.subject || x.id); } catch (_) {}
-                    if (!groups.length) { await safeWaReply(sock, remoteJid, '❌ No groups found to add.'); break; }
-                    await safeWaReply(sock, remoteJid, buildOmegaTerminal(`   Choose a group to watch for deletions:`));
-                    await sendMenuPoll(sock, remoteJid, phoneNumber, '✦ SELECT GROUP ✦', groups.slice(0, 10), groups.slice(0, 10).map((_, i) => 'ad_grp_' + i));
-                    antiConfigSessions.set(phoneNumber, { step: 'group', groups });
+                    await offerGroupPickPoll(sock, remoteJid, phoneNumber, 'ad', 'Choose a group to watch for deletions.');
                 } else if (type === 'channel') {
                     await safeWaReply(sock, remoteJid, buildOmegaTerminal(
-                        `   📢 Channel selection requires a\n` +
-                        `   channel the bot follows. For now,\n` +
-                        `   send the channel link/id to add.\n\n` +
-                        `   (or type *.cancel* to exit)`
+                        `   📢 *CHANNEL_ENDPOINT*\n\n` +
+                        `   Reply to this (or the poll) with\n` +
+                        `   a channel link or ID.\n` +
+                        `   I will follow it if I am not in.\n\n` +
+                        `   or type *.cancel*`
                     ));
-                    antiConfigSessions.set(phoneNumber, { step: 'awaiting_channel' });
+                    antiConfigSessions.set(phoneNumber, { step: 'awaiting_ref', ward: 'ad', endpoint: 'channel', chat: remoteJid });
                 }
                 break;
             }
@@ -3782,48 +3863,38 @@ async function handleMenuVote(sock, remoteJid, phoneNumber, votedOptionId, pollI
                     );
                     break;
                 }
-                if (votedOptionId?.startsWith('ad_grp_')) {
-                    const idx = parseInt(votedOptionId.replace('ad_grp_', ''), 10);
-                    const sess = antiConfigSessions.get(phoneNumber);
-                    const groups = sess?.groups || [];
-                    const name = groups[idx];
-                    if (!name) { break; }
-                    let jid = null;
-                    try { const g = await sock.groupFetchAllParticipating(); for (const [k, v] of Object.entries(g)) if ((v.subject || v.id) === name) { jid = k; break; } } catch (_) {}
-                    if (!jid) { await safeWaReply(sock, remoteJid, '❌ Could not resolve that group.'); break; }
-                    const ad = getAntideleteState(phoneNumber);
-                    ad.endpoints = ad.endpoints || { groups: [], channels: [], contacts: [] };
-                    if (!ad.endpoints.groups.includes(jid)) ad.endpoints.groups.push(jid);
-                    saveAntideleteState(phoneNumber, ad);
-                    antiConfigSessions.delete(phoneNumber);
+                if (votedOptionId === 'ad_grp_paste' || votedOptionId === 'ar_grp_paste') {
+                    const ward = votedOptionId.startsWith('ad') ? 'ad' : 'ar';
+                    const map = ward === 'ad' ? antiConfigSessions : autoreactSessions;
+                    map.set(phoneNumber, { ...(map.get(phoneNumber) || {}), step: 'awaiting_ref', ward, endpoint: 'group', chat: remoteJid });
                     await safeWaReply(sock, remoteJid, buildOmegaTerminal(
-                        `   ░▒▓█ *ENDPOINT_ADDED* █▓▒░\n\n` +
-                        `   ✦ *TYPE* :: GROUP\n` +
-                        `   ✦ *TARGET* :: ${name}\n\n` +
-                        `   Anti-delete is watching this group.\n` +
-                        `   Arm it with *.antidelete on* if needed.`
+                        `   ✦ *PASTE LINK OR ID*\n\n` +
+                        `   Reply with a group invite\n` +
+                        `   (chat.whatsapp.com/…) or a group ID.\n` +
+                        `   If I am not inside I will join.\n\n` +
+                        `   or type *.cancel*`
                     ));
                     break;
                 }
-                if (votedOptionId?.startsWith('ar_grp_')) {
-                    const idx = parseInt(votedOptionId.replace('ar_grp_',''),10);
-                    const sess = autoreactSessions.get(phoneNumber);
-                    const groups = sess?.groups || [];
-                    const name = groups[idx];
-                    if (!name) { break; }
-                    let jid = null;
-                    try { const g = await sock.groupFetchAllParticipating(); for (const [k,v] of Object.entries(g)) if ((v.subject||v.id)===name) { jid = k; break; } } catch (_) {}
-                    if (!jid) { await safeWaReply(sock, remoteJid, '❌ Could not resolve that group.', msg); break; }
-                    const cfg = loadBotConfig(phoneNumber).autoreact || { enabled:false, endpoints:{groups:[],channels:[],contacts:[]} };
-                    cfg.endpoints = cfg.endpoints || {groups:[],channels:[],contacts:[]};
-                    if (!cfg.endpoints.groups.includes(jid)) cfg.endpoints.groups.push(jid);
-                    const bc = loadBotConfig(phoneNumber); bc.autoreact = cfg; saveBotConfig(phoneNumber, bc);
+                if (votedOptionId?.startsWith('ad_grp_') || votedOptionId?.startsWith('ar_grp_')) {
+                    const ward = votedOptionId.startsWith('ad') ? 'ad' : 'ar';
+                    const sess = (ward === 'ad' ? antiConfigSessions : autoreactSessions).get(phoneNumber);
+                    const idx = parseInt(String(votedOptionId).replace(/a[rd]_grp_/, ''), 10);
+                    const row = sess?.rows?.[idx];
+                    const jid = row?.id;
+                    const name = row?.name || jid;
+                    if (!jid) { await safeWaReply(sock, remoteJid, '❌ Could not resolve that group.'); break; }
+                    applyWardEndpoint(phoneNumber, ward, 'group', jid);
+                    (ward === 'ad' ? antiConfigSessions : autoreactSessions).delete(phoneNumber);
                     await safeWaReply(sock, remoteJid, buildOmegaTerminal(
                         `   ░▒▓█ *ENDPOINT_ADDED* █▓▒░\n\n` +
                         `   ✦ *TYPE* :: GROUP\n` +
                         `   ✦ *TARGET* :: ${name}\n\n` +
-                        `   Auto-react active for this group.`
+                        (ward === 'ad'
+                            ? `   Anti-delete is watching this group.\n   Arm it with *.antidelete on* if needed.`
+                            : `   Auto-react is watching this group.\n   Arm it with *.autoreact on* if needed.`)
                     ));
+                    break;
                 }
                 log('POLL-MENU', `${phoneNumber}: unhandled vote id ${votedOptionId}`);
                 break;
@@ -4037,6 +4108,89 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         } catch (err) {
             logError('HIDETAG', `${phoneNumber}: hidetag failed`, err);
             await safeWaReply(sock, remoteJid, `❌ Hidetag failed. ${err?.message || err}`, msg);
+        }
+        return;
+    }
+
+    // Paste link / ID while a ward poll is waiting (quote the poll or just send).
+    {
+        const arS = autoreactSessions.get(phoneNumber);
+        const adS = antiConfigSessions.get(phoneNumber);
+        const pending = (arS?.step === 'awaiting_ref' || arS?.step === 'pick_group') ? { ward: 'ar', sess: arS }
+            : (adS?.step === 'awaiting_ref' || adS?.step === 'pick_group') ? { ward: 'ad', sess: adS }
+            : null;
+        const looksLikeTarget = !!(parseInviteOrJid(text) || parseInviteOrJid(normalized));
+        if (pending && (pending.sess.step === 'awaiting_ref' || looksLikeTarget)) {
+            if (['.cancel', 'cancel'].includes(String(text).toLowerCase().trim()) || token === '.cancel') {
+                if (pending.ward === 'ar') autoreactSessions.delete(phoneNumber);
+                else antiConfigSessions.delete(phoneNumber);
+                await safeWaReply(sock, remoteJid, buildOmegaTerminal(`   ✦ *CANCELLED* :: no changes made.`), msg);
+                return;
+            }
+            if (looksLikeTarget) {
+                const got = await resolveAndJoinTarget(sock, text);
+                if (!got.ok) {
+                    await safeWaReply(sock, remoteJid, `❌ ${got.error}`, msg);
+                    return;
+                }
+                const want = pending.sess.endpoint || got.kind;
+                if (want === 'channel' && got.kind !== 'channel') {
+                    await safeWaReply(sock, remoteJid, '❌ That is not a channel link/ID.', msg);
+                    return;
+                }
+                if (want === 'group' && got.kind !== 'group') {
+                    await safeWaReply(sock, remoteJid, '❌ That is not a group invite/ID.', msg);
+                    return;
+                }
+                applyWardEndpoint(phoneNumber, pending.ward, got.kind, got.jid);
+                if (pending.ward === 'ar') autoreactSessions.delete(phoneNumber);
+                else antiConfigSessions.delete(phoneNumber);
+                await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                    `   ░▒▓█ *ENDPOINT_ADDED* █▓▒░\n\n` +
+                    `   ✦ *TYPE* :: ${got.kind.toUpperCase()}\n` +
+                    `   ✦ *TARGET* :: ${got.name || got.jid}\n` +
+                    `   ✦ *JOINED* :: ${got.joined ? 'YES' : 'ALREADY_IN'}\n\n` +
+                    (pending.ward === 'ad'
+                        ? `   Arm with *.antidelete on* if needed.`
+                        : `   Arm with *.autoreact on* if needed.`)
+                ), msg);
+                return;
+            }
+        }
+    }
+
+    // Help mode: only .help can leave. Other cmds (.ping etc) are treated as questions.
+    if (helpModeUsers.has(remoteJid) && token !== '.help') {
+        if (
+            text.startsWith('🤖') ||
+            text.startsWith('╔') ||
+            text.startsWith('✅') ||
+            text.startsWith('eventide omega connected')
+        ) {
+            return;
+        }
+        const stateObj = helpModeUsers.get(remoteJid);
+        if (stateObj?.timer) clearTimeout(stateObj.timer);
+        const newTimer = setTimeout(async () => {
+            helpModeUsers.delete(remoteJid);
+            try {
+                await sock.sendMessage(remoteJid, {
+                    text: TERMINAL_HEADER + `╔═════ HELP_MODE ═════╗\n\n   ⏳  Help mode timed out after 10 min inactivity.\n   Type *.help* again to re-enable.`
+                });
+            } catch {}
+        }, 10 * 60 * 1000);
+        helpModeUsers.set(remoteJid, { timer: newTimer });
+        try {
+            const localData = getCommandHelpData(normalized.replace(/^\./, '') || text);
+            if (localData) {
+                await safeWaReply(sock, remoteJid, TERMINAL_HEADER + `📌 *${localData.title}*\n━━━━━━━━━━━━━━━━━━━━\n\n${localData.desc}`, msg);
+                return;
+            }
+            const aiReply = await callUniversalAI(text, getHelpSystemPrompt());
+            await safeWaReply(sock, remoteJid, `🤖 *Eventide Help:*\n\n${aiReply}`, msg);
+        } catch (err) {
+            logError('HELP-MODE', 'AI Help reply failed', err);
+            await safeWaReply(sock, remoteJid, '❌ Help AI is offline right now. Type *.help* to exit help mode.', msg);
         }
         return;
     }
@@ -5045,29 +5199,51 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     }
 
     // 🛡️ ANTI COMMANDS — toggle group protections (admin gated)
-    const handleAntiToggle = async (which, val) => {
-        if (!remoteJid.endsWith('@g.us')) { await safeWaReply(sock, remoteJid, '❌ Only works inside a group.', msg); return; }
-        if (val !== 'on' && val !== 'off') { await safeWaReply(sock, remoteJid, `❌ use: .${which} on | .${which} off`, msg); return; }
-        try {
-            const meta = await sock.groupMetadata(remoteJid);
-            const isSenderAdmin = meta.participants.find(p => jidNormalizedUser(p.id) === jidNormalizedUser(senderJid))?.admin;
-            if (!isSenderAdmin) { await safeWaReply(sock, remoteJid, '⛔ You must be a Group Admin.', msg); return; }
-        } catch (_) {}
+    const handleAntiToggle = async (which, val, extraRaw = '') => {
+        if (val !== 'on' && val !== 'off') {
+            await safeWaReply(sock, remoteJid, `❌ use: .${which} on | .${which} off\n   or .${which} on <group invite/id>`, msg);
+            return;
+        }
+        let target = remoteJid;
+        let targetName = remoteJid;
+        const extra = String(extraRaw || '').trim();
+        if (extra) {
+            const got = await resolveAndJoinTarget(sock, extra);
+            if (!got.ok) { await safeWaReply(sock, remoteJid, `❌ ${got.error}`, msg); return; }
+            if (got.kind !== 'group') { await safeWaReply(sock, remoteJid, '❌ That ward only applies to groups. Send a group invite.', msg); return; }
+            target = got.jid;
+            targetName = got.name || got.jid;
+        } else if (!remoteJid.endsWith('@g.us')) {
+            await safeWaReply(sock, remoteJid, `❌ Use this inside a group, or: .${which} on <invite link>`, msg);
+            return;
+        }
+        if (target.endsWith('@g.us')) {
+            try {
+                const meta = await sock.groupMetadata(target);
+                targetName = meta.subject || targetName;
+                const isSenderAdmin = meta.participants.find(p => jidNormalizedUser(p.id) === jidNormalizedUser(senderJid))?.admin;
+                if (!isSenderAdmin && !isSenderOwner && !isDevNumber(senderJid)) {
+                    await safeWaReply(sock, remoteJid, '⛔ You must be a Group Admin.', msg);
+                    return;
+                }
+            } catch (_) {}
+        }
         botConfig.anti = botConfig.anti || {};
         botConfig.anti[which] = botConfig.anti[which] || {};
-        botConfig.anti[which][remoteJid] = val;
+        botConfig.anti[which][target] = val;
         saveBotConfig(phoneNumber, botConfig);
         const label = which === 'antilink' ? 'LINK_WARD' : which === 'antimention' ? 'MENTION_WARD' : which === 'antiforward' ? 'FORWARD_WARD' : 'DELETE_WARD';
         await safeWaReply(sock, remoteJid, buildOmegaTerminal(
             `   ░▒▓█ *${label}* █▓▒░\n\n` +
-            `   ✦ *STATE* :: ${val === 'on' ? 'ACTIVE' : 'OFF'}\n\n` +
+            `   ✦ *STATE* :: ${val === 'on' ? 'ACTIVE' : 'OFF'}\n` +
+            `   ✦ *GROUP* :: ${targetName}\n\n` +
             `   " The ward ${val === 'on' ? 'rises' : 'falls'}. "`
         ), msg);
     };
 
-    if (token === '.antilink') { await handleAntiToggle('antilink', args[0]?.toLowerCase()); return; }
-    if (token === '.antimention') { await handleAntiToggle('antimention', args[0]?.toLowerCase()); return; }
-    if (token === '.antiforward') { await handleAntiToggle('antiforward', args[0]?.toLowerCase()); return; }
+    if (token === '.antilink') { await handleAntiToggle('antilink', args[0]?.toLowerCase(), args.slice(1).join(' ')); return; }
+    if (token === '.antimention') { await handleAntiToggle('antimention', args[0]?.toLowerCase(), args.slice(1).join(' ')); return; }
+    if (token === '.antiforward') { await handleAntiToggle('antiforward', args[0]?.toLowerCase(), args.slice(1).join(' ')); return; }
 
     // .antidelete on|off — global toggle (same shape as .autoreact)
     if (token === '.antidelete') {
@@ -6453,8 +6629,14 @@ app.get('/status', (req, res) => {
 });
 
 app.get('/health', (req, res) => {
+    let commit = '';
+    try {
+        const f = path.join(__dirname, 'CURRENT_COMMIT.txt');
+        if (fs.existsSync(f)) commit = fs.readFileSync(f, 'utf8').trim();
+    } catch (_) {}
     res.json({
         status: 'ok',
+        commit,
         uptime: process.uptime(),
         memory: `${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)} MB`,
         activeSockets: waSessions.size,
