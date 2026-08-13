@@ -1,18 +1,13 @@
 # Eventide Omega — Netlify = website only.
-# The WhatsApp bot stays on the Pterodactyl panel (or Render).
-#
-# After you know the panel public URL, edit the redirect "to" below.
-# Example: http://123.45.67.89:8080/api/:splat
-#      or: https://bot.yourdomain.com/api/:splat
+# /api is proxied to the Pterodactyl panel (persistent disk).
+# Render does not use this file.
 
 [build]
   publish = "public"
-  command = "echo 'static public/ — no build'"
+  command = "echo static-public"
 
-# Same-origin /api → panel (login, pair, dashboard keep working)
 [[redirects]]
   from = "/api/*"
-  to = "https://REPLACE_ME_PANEL_HOST/api/:splat"
+  to = "http://95.111.228.231:20006/api/:splat"
   status = 200
   force = true
-  headers = { X-From = "netlify" }
