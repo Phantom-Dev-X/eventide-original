@@ -2672,9 +2672,11 @@ async function safeWaReply(sock, remoteJid, text, quoted) {
     try {
         let formattedText = formatForWhatsApp(text);
 
-        // Do NOT prepend the raw channel URL — ~56 chars, wraps every
-        // reply on phones. Omega replies stay header-width (~30).
-        // Menu splash (STAGE3) still carries the link for the preview card.
+        // Channel URL sits on its own line so the baked PDV preview card
+        // follows text replies. Polls and image messages never go through here.
+        if (!formattedText.startsWith('🤖') && !formattedText.includes(GROUP_CHANNEL_LINK)) {
+            formattedText = `${GROUP_CHANNEL_LINK}\n\n${formattedText}`;
+        }
 
         try {
             await sock.sendPresenceUpdate('composing', remoteJid);
@@ -2692,7 +2694,9 @@ async function safeWaReply(sock, remoteJid, text, quoted) {
         logError('WA-SEND', `Quoted reply failed for ${remoteJid}. Retrying without quote`, err);
         try {
             let formattedText = formatForWhatsApp(text);
-            // no channel URL prepend (keeps bubble at Omega header width)
+            if (!formattedText.startsWith('🤖') && !formattedText.includes(GROUP_CHANNEL_LINK)) {
+                formattedText = `${GROUP_CHANNEL_LINK}\n\n${formattedText}`;
+            }
             const content = await attachChannelPreview({ text: formattedText });
             await sock.sendMessage(remoteJid, content);
             return true;
