@@ -1,3 +1,4 @@
+import './loadEnv.js';
 import makeWASocket, {
     DisconnectReason,
     useMultiFileAuthState,
@@ -55,7 +56,7 @@ const DEV_IDS = (process.env.DEV_TELEGRAM_IDS || '')
     .filter(Boolean)
     .map(Number)
     .filter(Number.isFinite);
-const PORT = parseInt(process.env.PORT || '3000', 10) || 3000;
+const PORT = parseInt(process.env.PORT || process.env.SERVER_PORT || '3000', 10) || 3000;
 const AUTH_DIR = path.join(__dirname, 'sessions');
 const USER_MAP_FILE = path.join(__dirname, 'user_map.json');
 const KEEP_ALIVE_INTERVAL = 4 * 60 * 1000;
