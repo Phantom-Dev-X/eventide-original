@@ -1444,7 +1444,7 @@ async function tttPlayBot(sock, phoneNumber, game) {
     if (!game.vsBot || game.status !== 'active') return;
     const botMark = game.x === 'BOT' ? 'X' : 'O';
     if (game.turn !== botMark) return;
-    await delay(700 + Math.floor(Math.random() * 800));
+    await delay(250);
     const idx = tttBotMove(game.board, botMark, game.difficulty || 'medium');
     if (idx < 0) return;
     game.board[idx] = botMark;
@@ -2468,14 +2468,11 @@ async function safeWaReply(sock, remoteJid, text, quoted) {
             formattedText = `${GROUP_CHANNEL_LINK}\n\n${formattedText}`;
         }
 
-        try {
-            await sock.sendPresenceUpdate('composing', remoteJid);
-            const delayMs = Math.min(2700, Math.max(1000, formattedText.length * 15));
-            await delay(delayMs);
-            await sock.sendPresenceUpdate('paused', remoteJid);
-        } catch (presErr) {
-            logError('WA-SEND', 'Failed to send presence update', presErr);
-        }
+        // ⚡ Fixed 1s pacing: the reaction is already sent instantly by the
+        // command handler, then this reply lands ~1s later. Removed the old
+        // typing-presence round-trips and the length-based 1–2.7s delay —
+        // they made the bot feel slow and added socket traffic.
+        await delay(1000);
 
         const content = await attachChannelPreview({ text: formattedText });
         await sock.sendMessage(remoteJid, content, quoted ? { quoted } : undefined);
@@ -3207,7 +3204,7 @@ async function handleMenuVote(sock, remoteJid, phoneNumber, votedOptionId, pollI
             case 'owners': {
                 const k1 = await sendMenuBanner(sock, remoteJid, OWNERS_MENU_PATH, OWNERS_WELCOME_TEXT);
                 if (k1) recordMenuMessage(replyKey, k1);
-                await delay(1500);
+                await delay(400);
                 const pollMsg = await sendMenuPoll(sock, remoteJid, phoneNumber, DOMAIN_POLL_QUESTION, DOMAIN_POLL_OPTIONS, DOMAIN_POLL_IDS);
                 if (pollMsg?.key) recordMenuMessage(replyKey, pollMsg.key);
                 break;
@@ -4133,6 +4130,10 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         `${phoneNumber}: command flow | raw=${JSON.stringify(trimForLog(text, 250))} normalized=${JSON.stringify(trimForLog(normalized, 250))} token=${JSON.stringify(token)}`
     );
 
+    // ⚡ INSTANT REACTION on every command — fire-and-forget, never blocks.
+    // The actual reply lands ~1s later via safeWaReply.
+    sock.sendMessage(remoteJid, { react: { text: '⚡', key: msg.key } }).catch(() => {});
+
     // Wake the bot online for this command, then back offline shortly after.
     flashPresenceOnline(sock, phoneNumber);
 
@@ -4165,24 +4166,24 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             const sentMsg = await sock.sendMessage(remoteJid, { text: firstFrame });
             const messageKey = sentMsg.key;
 
-            // Step through frames 2 to 12 with a smooth 600ms transition
+            // Step through frames 2 to 12 with a snappy 150ms transition
             for (let i = 1; i < personaConfig.stages.stage1.length; i++) {
-                await delay(600);
+                await delay(150);
                 const nextFrame = generateLoadingFrame(personaConfig.stages.stage1[i]);
                 await sock.sendMessage(remoteJid, { text: nextFrame, edit: messageKey });
             }
 
             // Stage 2 (The Persona-specific Art/Message)
-            await delay(1500);
+            await delay(400);
             await sock.sendMessage(remoteJid, { text: personaConfig.stages.stage2Text, edit: messageKey });
 
             // Edit the animated message to point down to the banner image below
-            await delay(3000);
+            await delay(800);
             await sock.sendMessage(remoteJid, { text: STAGE3_ARROWS_TEXT, edit: messageKey });
 
             // Send the banner image as a NEW message, with the full terminal
             // text as its caption.
-            await delay(1000);
+            await delay(300);
             await sock.sendMessage(remoteJid, {
                 image: { url: MENU_BANNER_PATH },
                 caption: STAGE3_TEXT
@@ -4190,7 +4191,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             });
 
             // Send native Poll Menu (Owners / Group / Fun / Bug)
-            await delay(1500);
+            await delay(400);
             await sendMenuPoll(sock, remoteJid, phoneNumber, POLL_QUESTION, POLL_OPTIONS, MENU_POLL_IDS);
 
             log('WA-CMD', `${phoneNumber}: Menu animation & poll delivery completed successfully.`);
