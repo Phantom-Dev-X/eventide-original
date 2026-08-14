@@ -1939,307 +1939,6 @@ How endpoint config works:
 Keep answers short, WhatsApp bullets, no markdown tables.`;
 }
 
-// ──────────────────────────────────────────────
-// 📖 LOCAL COMMAND HELP DATA & KNOWLEDGE BASE
-// ──────────────────────────────────────────────
-function getCommandHelpData(query) {
-    const q = query.toLowerCase().trim();
-
-    // 💡 Handle dynamic requests to list all commands
-    if (q === 'list' || q.includes('all commands') || q.includes('commands list') || q.includes('list commands') || q.includes('help list')) {
-        return {
-            title: "Eventide Omega Codex (All Commands)",
-            desc: "Here is the complete registry of all active systems built into Eventide Omega:\n\n" +
-                  "*⚙️ CONFIG:*\n" +
-                  "• *.mode public/owner* — Privacy access lock\n" +
-                  "• *.public* / *.owner* — Shortcut mode toggles\n" +
-                  "• *.setprefix <char>* — Change command prefix\n" +
-                  "• *.setalias <t> <cmd>* / *.delalias* / *.aliases* — Command aliases\n" +
-                  "• *.setname <name>* — Rename the account\n" +
-                  "• *.setbio <text>* — Set account bio\n" +
-                  "• *.setpp* — Set account profile pic (reply to image)\n" +
-                  "• *.settings* — View config matrix\n" +
-                  "• *.reset* — Reset config\n" +
-                  "• *.autoreactconfig* — Configure auto-react\n" +
-                  "• *.antidelete on/off* — Recover deleted messages\n" +
-                  "• *.antideleteconfig* — Add/remove antidelete chats\n\n" +
-                  "*🖥️ SYSTEM:*\n" +
-                  "• *.ping* / *.uptime* / *.runtime* / *.info* / *.status* — Status\n" +
-                  "• *.version* / *.os* / *.botinfo* / *.alive* — About & health\n" +
-                  "• *.dev* — The architect\n" +
-                  "• *.gpp* / *.ggpp* — Profile pics\n" +
-                  "• *.profile* — Host identity\n" +
-                  "• *.listgc* / *.session* / *.sessions* — Groups & sessions\n" +
-                  "• *.logout* / *.reconnect* — Session control\n" +
-                  "• *.sticker* / *.toimg* / *.vv* — Sticker + unlock view-once\n" +
-                  "• *.qr* / *.calc* / *.base64* — Utilities\n" +
-                  "• *.block* / *.unblock* — Block management\n" +
-                  "• *.restart* / *.shutdown* — Reboot / power\n" +
-                  "• *.autoreact on/off* — Auto-reaction\n" +
-                  "• *.antidelete on/off* — Anti-delete\n\n" +
-                  "*🎮 GAMES:*\n" +
-                  "• *.ttt* — tic-tac-toe (bot 3 levels / human)\n" +
-                  "• *.hangman* / *.hm* — gallows\n" +
-                  "• *.chain* / *.wc* — word chain\n" +
-                  "• *.trivia* / *.quiz* — poll quiz\n" +
-                  "• *.riddle* / *.hint* — first correct wins\n\n" +
-                  "*🎲 FUN:*\n" +
-                  "• *.roast* / *.pickupline* / *.rizz*\n" +
-                  "• *.joke* / *.flirt* / *.compliment* / *.rate* / *.ship*\n\n" +
-                  "*👥 GROUP:*\n" +
-                  "• *.join <link>* — Join a group\n" +
-                  "• *.add <number>* — Add member\n" +
-                  "• *.kick <user>* — Remove member\n" +
-                  "• *.hidetag* / *.ht* — silent mention\n" +
-                  "• *.warn* / *.warnconfig* — strike system\n" +
-                  "• *.link* — Get group invite link\n\n" +
-                  "💡 *Tip*: Use *.menu* to open the menu, or type *.help hangman* (or trivia, ttt, riddle, chain) for specifics."
-        };
-    }
-
-    if (q.includes("hangman") || q === "hm") {
-        return {
-            title: "Hangman (.hangman / .hm)",
-            desc: "Guess the word. 6 misses and they hang.\n\n" +
-                  "• *.hangman* — Solo or Open, then pick a word bag\n" +
-                  "• *Reply to the gallows* with a letter or the full word\n" +
-                  "• Loose letters in chat are ignored\n" +
-                  "• 90s of silence and they hang\n" +
-                  "• *.hangman quit*"
-        };
-    }
-    if (q.includes("chain") || q.includes("wordchain") || q === "wc") {
-        return {
-            title: "Word Chain (.chain / .wc)",
-            desc: "Next word must start with the last letter.\n\n" +
-                  "• *.chain* — I open with a word\n" +
-                  "• *Reply to the card* with a 3+ letter word in the lexicon\n" +
-                  "• No repeats · 60s or the chain snaps\n" +
-                  "• *.chain quit*"
-        };
-    }
-    if (q.includes("trivia") || q.includes("quiz")) {
-        return {
-            title: "Trivia (.trivia / .quiz)",
-            desc: "Poll quiz. First vote locks.\n\n" +
-                  "• *.trivia* — category, then 5 or 10 questions\n" +
-                  "• 25 seconds a question · anyone can vote\n" +
-                  "• *.trivia quit*"
-        };
-    }
-    if (q.includes("riddle")) {
-        return {
-            title: "Riddle (.riddle)",
-            desc: "First correct guess wins.\n\n" +
-                  "• *.riddle* — I pose one\n" +
-                  "• *Reply to the riddle* with your answer\n" +
-                  "• *.hint* for a clue (2 max)\n" +
-                  "• 2 minutes then I reveal\n" +
-                  "• *.riddle skip*"
-        };
-    }
-    if (q.includes("vv") || q.includes("viewonce") || q.includes("view-once") || q.includes("view once")) {
-        return {
-            title: "View-Once Unlock (.vv)",
-            desc: "Reply to a view-once photo, video, or voice note to unlock it.\n\n" +
-                  "• Reply to the view-once with *.vv* (or *.viewonce*)\n" +
-                  "• Owner / Dev only\n" +
-                  "• If WhatsApp already expired the media keys, ask them to resend"
-        };
-    }
-    if (q.includes("ttt") || q.includes("tictactoe") || q.includes("tic tac") || q === "xo") {
-        return {
-            title: "Tic-Tac-Toe (.ttt)",
-            desc: "Premium Eventide arena.\n\n" +
-                  "• *.ttt* — poll: vs Bot or vs Human\n" +
-                  "• Bot → pick Easy / Medium / Hard\n" +
-                  "• Human → first Accept sits, or *.ttt @user* / reply to invite one person\n" +
-                  "• *Reply to the board* with 1–9 to move (loose numbers are ignored)\n" +
-                  "• 1 minute a turn · 3 minutes of nobody playing ends it\n" +
-                  "• *.ttt quit* / *.ttt board*"
-        };
-    }
-    if (q.includes("roast") || q.includes("pickup") || q.includes("rizz") || q === "joke" || q.includes("fun cmd")) {
-        return {
-            title: "Fun Commands (Gemini)",
-            desc: "Live-cooked. Nothing is hardcoded.\n\n" +
-                  "• *.roast* — reply to a message to cook them with their own words. Only roasts scoring 7/10+ get sent.\n" +
-                  "• *.pickupline* / *.rizz* — a line that should actually work\n" +
-                  "• *.flirt* / *.compliment* / *.joke*\n" +
-                  "• *.rate* — reply to rate that message /10\n" +
-                  "• *.ship @a @b* — unholy pairing"
-        };
-    }
-    if (q.includes("hidetag") || q === "ht" || q.includes(".ht")) {
-        return {
-            title: "Hidetag (.ht)",
-            desc: "Silently mention every group member. The @list stays hidden.\n\n" +
-                  "💡 *How to use:*\n" +
-                  "• *.hidetag good morning*\n" +
-                  "• *.ht come online*\n" +
-                  "• Put it *anywhere* in the line:  _good morning everyone .ht_\n" +
-                  "• Default short form is *.ht*\n\n" +
-                  "⚠️ Group admins / owner only."
-        };
-    }
-    if (q.includes("warn")) {
-        return {
-            title: "Warn System",
-            desc: "Premium strike system — reply to warn, or auto-warn on phrases.\n\n" +
-                  "• *.warn* reply/mention — add a strike\n" +
-                  "• *.unwarn* / *.warnreset* — remove one / wipe\n" +
-                  "• *.warns* — ledger or one person's dossier\n" +
-                  "• *.warnconfig* — poll matrix: limit, kick vs warn-only, phrases\n\n" +
-                  "Set max strikes (or 0 = never kick). Bind words like *see* so anyone who sends them is marked automatically."
-        };
-    }
-    if (q.includes("antilink") || (q.includes("link") && q.includes("anti"))) {
-        return {
-            title: "Anti-Link (.antilink)",
-            desc: "Deletes invite/links in a group. This IS built.\n\n" +
-                  "• *.antilink on* / *.antilink off* inside the group\n" +
-                  "• *.antilink on https://chat.whatsapp.com/XXXX* — I join if needed, then arm\n" +
-                  "• Bot must be group admin to delete\n" +
-                  "Siblings: *.antimention*  *.antiforward*"
-        };
-    }
-    if (q.includes("antidelete") || q.includes("anti-delete") || q.includes("anti delete")) {
-        return {
-            title: "Anti-Delete (.antidelete + .antideleteconfig)",
-            desc: "Recover deleted messages to the owner DM.\n\n" +
-                  "• *.antidelete on|off* — master switch\n" +
-                  "• *.antideleteconfig* — Add/Delete endpoints (group / channel / contact)\n" +
-                  "• Group poll lists chats I am in. Or reply to the poll with an invite/ID.\n" +
-                  "• Channel: paste whatsapp.com/channel/…\n" +
-                  "Linked pair: toggle + config. Config without *.antidelete on* does nothing."
-        };
-    }
-    if (q.includes("autoreact") || q.includes("auto-react") || q.includes("auto react")) {
-        return {
-            title: "Auto-React (.autoreact + .autoreactconfig)",
-            desc: "React to messages in chosen chats.\n\n" +
-                  "• *.autoreact on|off* — master switch\n" +
-                  "• *.autoreactconfig* — Add/Delete groups, channels, contacts\n" +
-                  "• Same paste-link flow as antidelete if a group is missing from the poll\n" +
-                  "Linked pair: toggle + config."
-        };
-    }
-    if (q.includes("antimention") || q.includes("antiforward") || q.includes("anti-forward")) {
-        return {
-            title: "Mention / Forward wards",
-            desc: "• *.antimention on|off*\n• *.antiforward on|off*\nSame as antilink: use inside the group or pass an invite after on/off."
-        };
-    }
-    if (q.includes("antispam") || (q.includes("spam") && q.includes("anti"))) {
-        return {
-            title: "Anti-Spam",
-            desc: "Not built yet. Use *.dev* to tell Patrick. Closest live wards: *.antilink* *.antimention* *.antiforward* *.warnconfig*."
-        };
-    }
-    if (q.includes("welcome")) {
-        return {
-            title: "Custom Welcome Greetings",
-            desc: "This command is used to *automatically send a beautifully formatted welcome message* whenever a new participant joins your group community.\n\n" +
-                  "⚠️ *Restrictions:*\n" +
-                  "• *Bot Permissions:* Does *not* require the bot to be an admin (I can welcome people as a normal participant).\n" +
-                  "• *User Permissions:* *Only group admins or authorized owners* can turn it on/off.\n\n" +
-                  "💡 *How to use:*\n" +
-                  "Type *.welcome on* to enable custom welcomes.\n" +
-                  "Type *.welcome off* to turn welcomes off."
-        };
-    }
-    if (q.includes("goodbye")) {
-        return {
-            title: "Goodbye Farewell Announcements",
-            desc: "This command is used to *automatically post a polite farewell message* whenever someone leaves or gets kicked from your group.\n\n" +
-                  "⚠️ *Restrictions:*\n" +
-                  "• *Bot Permissions:* Does *not* require the bot to be an admin.\n" +
-                  "• *User Permissions:* *Only group admins or authorized owners* can toggle it.\n\n" +
-                  "💡 *How to use:*\n" +
-                  "Type *.goodbye on* to turn farewells on.\n" +
-                  "Type *.goodbye off* to cancel farewells."
-        };
-    }
-    if (q.includes("broadcast") || q.includes("broad cast")) {
-        return {
-            title: "Automated Mass Broadcast",
-            desc: "This command is used to *schedule an automated recurring message blast* sent to every single group your bot is connected to.\n\n" +
-                  "⚠️ *Restrictions:*\n" +
-                  "• *User Permissions:* *Only authorized bot owners / developers* can run this command (regular members cannot broadcast).\n\n" +
-                  "💡 *How to use:*\n" +
-                  "Type *.broadcast 30 Hello community!* to blast that text every 30 minutes.\n" +
-                  "Type *.stopbroadcast* to cancel broadcast."
-        };
-    }
-    if (q.includes("mute") || q.includes("unmute")) {
-        return {
-            title: "Individual User Mute / Unmute",
-            desc: "This command is used to *individually seal a specific user's chat permissions* in a group. Whenever a muted user posts a message, the bot auto-deletes it.\n\n" +
-                  "⚠️ *Restrictions:*\n" +
-                  "• *Bot Permissions:* *The bot MUST be a group admin* so I can delete the silenced person's messages.\n" +
-                  "• *User Permissions:* *Only group admins or authorized owners* can mute/unmute someone.\n\n" +
-                  "💡 *How to use:*\n" +
-                  "Type *.mute @user* inside the group to silence them.\n" +
-                  "Type *.unmute @user* to allow them to talk again."
-        };
-    }
-    if (q.includes("kick") || q.includes("remove")) {
-        return {
-            title: "Kick / Remove Participant",
-            desc: "This command is used to *instantly eject* a disruptive user from the current group chat.\n\n" +
-                  "⚠️ *Restrictions:*\n" +
-                  "• *Bot Permissions:* *The bot MUST be a group admin* so I can remove participants.\n" +
-                  "• *User Permissions:* *Only group admins or authorized owners* can kick someone.\n\n" +
-                  "💡 *How to use:*\n" +
-                  "• Reply to a user's message and type *.kick*\n" +
-                  "• Type *.kick @user*\n" +
-                  "• Type *.kick 23480xxxxxxxx*"
-        };
-    }
-    if (q.includes("add")) {
-        return {
-            title: "Add Participant JID",
-            desc: "This command is used to *manually add* a contact JID directly to the current group chat.\n\n" +
-                  "⚠️ *Restrictions:*\n" +
-                  "• *Bot Permissions:* *The bot MUST be a group admin* to add members.\n" +
-                  "• *User Permissions:* *Only group admins or authorized owners* can add someone.\n\n" +
-                  "💡 *How to use:*\n" +
-                  "Type *.add 23480xxxxxxxx* inside any group."
-        };
-    }
-    if (q.includes("link")) {
-        return {
-            title: "Fetch Group Invite Link",
-            desc: "This command is used to *generate and send* the active group invite link.\n\n" +
-                  "⚠️ *Restrictions:*\n" +
-                  "• *Bot Permissions:* *The bot MUST be a group admin*.\n" +
-                  "• *User Permissions:* *Only group admins or authorized owners* can request the link.\n\n" +
-                  "💡 *How to use:*\n" +
-                  "Type *.link* inside any group."
-        };
-    }
-    if (q.includes("mode") || q.includes("public") || q.includes("owner")) {
-        return {
-            title: "Privacy Access Control (.mode)",
-            desc: "This command is used to *configure the bot's permission model* on WhatsApp, toggling between owner-only or public group access.\n\n" +
-                  "⚠️ *Restrictions:*\n" +
-                  "• *User Permissions:* *Only the paired owner* can change the mode.\n\n" +
-                  "💡 *How to use:*\n" +
-                  "• Type *.mode owner* (or shortcut *.owner*) to restrict commands to yourself.\n" +
-                  "• Type *.mode public* (or shortcut *.public*) to allow everyone to use commands."
-        };
-    }
-    if (q.includes("menu")) {
-        return {
-            title: "Launch Main Menu (.menu)",
-            desc: "This command is used to *launch my main terminal* which triggers a smooth granular progress bar loader before presenting active option polls.\n\n" +
-                  "💡 *How to use:*\n" +
-                  "Type *.menu* in any chat to launch."
-        };
-    }
-
-    return null;
-}
 
 // ──────────────────────────────────────────────
 // 🧰 BASIC HELPERS
@@ -2902,6 +2601,17 @@ async function createSocketForSession({ phoneNumber, tgId, authDir, version = nu
         getMessage: getMessageFromStore
     });
     sock._eventidePhone = phoneNumber; // used by safeWaReply to flash presence
+
+    // 📡 SEND TRACER: log every message this socket sends (id + jid) so you
+    // can match it against the messages.upsert echo. Baileys re-emits the
+    // bot's own sends back into messages.upsert with type='append'.
+    const _origSendMessage = sock.sendMessage.bind(sock);
+    sock.sendMessage = async (jid, content, options) => {
+        const res = await _origSendMessage(jid, content, options);
+        const toJid = typeof jid === 'string' ? jid : (jid?.remoteJid || '?');
+        log('WA-SEND', `${phoneNumber}: sent msg | id=${res?.key?.id || '?'} jid=${toJid}`);
+        return res;
+    };
 
     const originalSaveCreds = saveCreds;
     const wrappedSaveCreds = async () => {
@@ -3936,11 +3646,25 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         return;
     }
 
-    // 🛡️ ACCURATE 'APPEND' NOTIFICATION PARSING AS DISCOVERED:
-    // Sync-append events from owner's secondary devices should always be parsed!
+    // 🛡️ EVENT TYPES (Baileys): 'notify' = live messages (real user input),
+    // 'append' = everything else — history sync, offline-caught-up messages,
+    // and CRITICALLY the bot's OWN sent messages (Baileys re-emits them here
+    // with fromMe=true, emitOwnEvents defaults to true). See messages-send.js:
+    //   upsertMessage(fullMsg, 'append')
     const shouldProcessEvent = eventType === 'notify' || eventType === 'append';
     if (!shouldProcessEvent) {
         log('WA-MSG', `${phoneNumber}: skipping eventType=${eventType} for message ${msgId} because it is not processable.`);
+        return;
+    }
+
+    // 🛡️ GLOBAL ANTI-ECHO: ignore EVERY message that is from the bot account
+    // itself AND arrived as 'append' (own sent-message echoes + offline sync of
+    // the bot's own messages). This kills the bot-replying-to-itself loop at
+    // the root, for every feature — not just help mode.
+    // Live messages from another device of the bot number still arrive as
+    // 'notify' + fromMe and keep working.
+    if (fromMe && eventType === 'append') {
+        log('WA-MSG', `${phoneNumber}: skipped own echo (append+fromMe) | id=${msgId} jid=${remoteJid}`);
         return;
     }
 
@@ -4161,12 +3885,20 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
 
     // Help mode: only .help can leave. Other cmds (.ping etc) are treated as questions.
     if (helpModeUsers.has(remoteJid) && token !== '.help') {
+        // 🛡️ ANTI-LOOP: Baileys re-emits the bot's OWN sent messages as
+        // 'append' upserts (emitOwnEvents: true). Skip those echoes plus any
+        // text that starts with a bot reply signature. Live messages from the
+        // owner's linked phone arrive as 'notify' and are still answered.
         if (
+            (fromMe && eventType === 'append') ||
             text.startsWith('🤖') ||
             text.startsWith('╔') ||
             text.startsWith('✅') ||
+            text.startsWith('📌') ||
+            text.startsWith('⚠️') ||
             text.startsWith('eventide omega connected')
         ) {
+            log('LOOP-PREVENTION', `${phoneNumber}: skipped help-mode self-echo | type=${eventType} fromMe=${fromMe} id=${msgId} jid=${remoteJid}`);
             return;
         }
         const stateObj = helpModeUsers.get(remoteJid);
@@ -4181,11 +3913,6 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         }, 10 * 60 * 1000);
         helpModeUsers.set(remoteJid, { timer: newTimer });
         try {
-            const localData = getCommandHelpData(normalized.replace(/^\./, '') || text);
-            if (localData) {
-                await safeWaReply(sock, remoteJid, TERMINAL_HEADER + `📌 *${localData.title}*\n━━━━━━━━━━━━━━━━━━━━\n\n${localData.desc}`, msg);
-                return;
-            }
             const aiReply = await callUniversalAI(text, getHelpSystemPrompt());
             await safeWaReply(sock, remoteJid, `🤖 *Eventide Help:*\n\n${aiReply}`, msg);
         } catch (err) {
@@ -4349,8 +4076,9 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         }
 
         if (helpModeUsers.has(remoteJid)) {
-            // 🛡️ ANTI-LOOP SAFETY PATH: Ignore all automated bot responses!
+            // 🛡️ ANTI-LOOP SAFETY PATH: Ignore the bot's own 'append' echoes.
             if (
+                (fromMe && eventType === 'append') ||
                 text.startsWith('🤖') || 
                 text.startsWith('╔') || 
                 text.startsWith('✅') || 
@@ -4484,17 +4212,8 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         const question = args.join(' ').trim();
         const systemPrompt = getHelpSystemPrompt();
 
-        // If a specific question is asked, run AI immediately
+        // If a specific question is asked, run AI immediately (100% AI-controlled)
         if (question) {
-            const localData = getCommandHelpData(question);
-            if (localData) {
-                const replyBox = TERMINAL_HEADER +
-                    `📌 *${localData.title}*\n━━━━━━━━━━━━━━━━━━━━\n\n` +
-                    `${localData.desc}`;
-                await safeWaReply(sock, remoteJid, replyBox, msg);
-                return;
-            }
-
             try {
                 log('HELP-CMD', `${phoneNumber}: Querying AI Oracle: ${question}`);
                 const response = await callUniversalAI(question, systemPrompt);
@@ -6253,6 +5972,7 @@ function setupMessageHandler(sock, phoneNumber, tgId) {
         log('WA-EVENT', `${phoneNumber}: messages.upsert received | type=${type} count=${messages.length}`);
 
         for (const msg of messages) {
+            log('WA-EVENT', `${phoneNumber}: upsert msg | type=${type} id=${msg?.key?.id || '?'} fromMe=${!!msg?.key?.fromMe} jid=${msg?.key?.remoteJid || '?'} participant=${msg?.key?.participant || '-'}`);
             try {
                 // 🔐 Baileys rc13 ships with poll vote decryption commented out.
                 // Poll votes arrive as pollUpdateMessage upserts — decrypt manually.
