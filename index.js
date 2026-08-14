@@ -1569,17 +1569,34 @@ async function tttOpenLobby(sock, phoneNumber, chatJid, host) {
     tttArmDeadGame(sock, phoneNumber, game, 3 * 60 * 1000);
 }
 
+// ✅ Creator-aware admin check. WhatsApp group metadata sets admin = null for
+// the group CREATOR, so `p.admin` truthiness alone wrongly rejected the owner.
+// This matches by JID (or phone digits when one side is a PN) and treats the
+// creator as admin in every case.
+function isParticipantAdmin(meta, jid) {
+    try {
+        if (!jid) return false;
+        const norm = jidNormalizedUser(jid);
+        const digits = String(jid).split('@')[0].replace(/\D/g, '');
+        const ownerNorm = jidNormalizedUser(meta?.owner || '');
+        if (norm === ownerNorm) return true; // the creator is always admin
+        const found = meta?.participants?.find(p => {
+            const ids = [p.id, p.phoneNumber, p.jid].filter(Boolean).map(jidNormalizedUser);
+            if (ids.includes(norm)) return true;
+            if (!digits) return false;
+            // PN digits fallback (never for LIDs — those digits aren't phone numbers)
+            return ids.some(id => id.endsWith('@s.whatsapp.net') && String(id).split('@')[0].replace(/\D/g, '') === digits);
+        });
+        if (!found) return false;
+        const foundIds = [found.id, found.phoneNumber, found.jid].filter(Boolean).map(jidNormalizedUser);
+        return !!found.admin || (ownerNorm && foundIds.includes(ownerNorm));
+    } catch { return false; }
+}
+
 async function isUserGroupAdmin(sock, groupJid, jid) {
     try {
         const meta = await sock.groupMetadata(groupJid);
-        const norm = jidNormalizedUser(jid);
-        const digits = String(jid || '').split('@')[0].replace(/\D/g, '');
-        return !!meta.participants.find(p => {
-            const ids = [p.id, p.phoneNumber, p.jid].filter(Boolean).map(jidNormalizedUser);
-            if (ids.includes(norm)) return !!p.admin;
-            const pd = String(p.id || '').split('@')[0].replace(/\D/g, '');
-            return digits && pd === digits && !!p.admin;
-        });
+        return isParticipantAdmin(meta, jid);
     } catch { return false; }
 }
 
@@ -4570,8 +4587,8 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         try {
             const metadata = await sock.groupMetadata(remoteJid);
             
-            const isSenderAdmin = metadata.participants.find(p => jidNormalizedUser(p.id) === jidNormalizedUser(senderJid))?.admin;
-            const isBotAdmin = metadata.participants.find(p => jidNormalizedUser(p.id) === jidNormalizedUser(sock.user.id))?.admin;
+            const isSenderAdmin = isParticipantAdmin(metadata, senderJid);
+            const isBotAdmin = isParticipantAdmin(metadata, sock.user.id);
 
             if (!isSenderAdmin) {
                 await safeWaReply(sock, remoteJid, '⛔ You must be a Group Admin to use this command.', msg);
@@ -4632,8 +4649,8 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         try {
             const metadata = await sock.groupMetadata(remoteJid);
             
-            const isSenderAdmin = metadata.participants.find(p => jidNormalizedUser(p.id) === jidNormalizedUser(senderJid))?.admin;
-            const isBotAdmin = metadata.participants.find(p => jidNormalizedUser(p.id) === jidNormalizedUser(sock.user.id))?.admin;
+            const isSenderAdmin = isParticipantAdmin(metadata, senderJid);
+            const isBotAdmin = isParticipantAdmin(metadata, sock.user.id);
 
             if (!isSenderAdmin) {
                 await safeWaReply(sock, remoteJid, '⛔ You must be a Group Admin to kick members.', msg);
@@ -4662,8 +4679,8 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         try {
             const metadata = await sock.groupMetadata(remoteJid);
             
-            const isSenderAdmin = metadata.participants.find(p => jidNormalizedUser(p.id) === jidNormalizedUser(senderJid))?.admin;
-            const isBotAdmin = metadata.participants.find(p => jidNormalizedUser(p.id) === jidNormalizedUser(sock.user.id))?.admin;
+            const isSenderAdmin = isParticipantAdmin(metadata, senderJid);
+            const isBotAdmin = isParticipantAdmin(metadata, sock.user.id);
 
             if (!isSenderAdmin) {
                 await safeWaReply(sock, remoteJid, '⛔ You must be a Group Admin to fetch the group link.', msg);
@@ -4689,7 +4706,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         if (!remoteJid.endsWith('@g.us')) { await safeWaReply(sock, remoteJid, '❌ Only works inside a group.', msg); return; }
         try {
             const metadata = await sock.groupMetadata(remoteJid);
-            const isSenderAdmin = metadata.participants.find(p => jidNormalizedUser(p.id) === jidNormalizedUser(senderJid))?.admin;
+            const isSenderAdmin = isParticipantAdmin(metadata, senderJid);
             if (!isSenderAdmin) { await safeWaReply(sock, remoteJid, '⛔ You must be a Group Admin.', msg); return; }
             await sock.groupRevokeInvite(remoteJid);
             await safeWaReply(sock, remoteJid, buildOmegaTerminal(
@@ -4709,7 +4726,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         if (!target) { await safeWaReply(sock, remoteJid, '❌ Mention or provide a number. Example: .promote @user', msg); return; }
         try {
             const metadata = await sock.groupMetadata(remoteJid);
-            const isSenderAdmin = metadata.participants.find(p => jidNormalizedUser(p.id) === jidNormalizedUser(senderJid))?.admin;
+            const isSenderAdmin = isParticipantAdmin(metadata, senderJid);
             if (!isSenderAdmin) { await safeWaReply(sock, remoteJid, '⛔ You must be a Group Admin.', msg); return; }
             await sock.groupParticipantsUpdate(remoteJid, [target], 'promote');
             await safeWaReply(sock, remoteJid, buildOmegaTerminal(
@@ -4729,7 +4746,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         if (!target) { await safeWaReply(sock, remoteJid, '❌ Mention or provide a number. Example: .demote @user', msg); return; }
         try {
             const metadata = await sock.groupMetadata(remoteJid);
-            const isSenderAdmin = metadata.participants.find(p => jidNormalizedUser(p.id) === jidNormalizedUser(senderJid))?.admin;
+            const isSenderAdmin = isParticipantAdmin(metadata, senderJid);
             if (!isSenderAdmin) { await safeWaReply(sock, remoteJid, '⛔ You must be a Group Admin.', msg); return; }
             await sock.groupParticipantsUpdate(remoteJid, [target], 'demote');
             await safeWaReply(sock, remoteJid, buildOmegaTerminal(
@@ -4747,7 +4764,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         if (!remoteJid.endsWith('@g.us')) { await safeWaReply(sock, remoteJid, '❌ Only works inside a group.', msg); return; }
         try {
             const meta = await sock.groupMetadata(remoteJid);
-            const admins = meta.participants.filter(p => p.admin).length;
+            const admins = meta.participants.filter(p => p.admin || (meta.owner && jidNormalizedUser(p.id) === jidNormalizedUser(meta.owner))).length;
             await safeWaReply(sock, remoteJid, buildOmegaTerminal(
                 `   ░▒▓█ *DOMINION_INFO* █▓▒░\n\n` +
                 `   ✦ *NAME* :: ${meta.subject}\n` +
@@ -4941,7 +4958,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             try {
                 const meta = await sock.groupMetadata(target);
                 targetName = meta.subject || targetName;
-                const isSenderAdmin = meta.participants.find(p => jidNormalizedUser(p.id) === jidNormalizedUser(senderJid))?.admin;
+                const isSenderAdmin = isParticipantAdmin(meta, senderJid);
                 if (!isSenderAdmin && !isSenderOwner && !isDevNumber(senderJid)) {
                     await safeWaReply(sock, remoteJid, '⛔ You must be a Group Admin.', msg);
                     return;
@@ -5018,7 +5035,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         if (!target) { await safeWaReply(sock, remoteJid, '❌ Reply to a message, @mention, or provide a number.\nExample: .mute @user', msg); return; }
         try {
             const meta = await sock.groupMetadata(remoteJid);
-            const isSenderAdmin = meta.participants.find(p => jidNormalizedUser(p.id) === jidNormalizedUser(senderJid))?.admin;
+            const isSenderAdmin = isParticipantAdmin(meta, senderJid);
             if (!isSenderAdmin) { await safeWaReply(sock, remoteJid, '⛔ You must be a Group Admin.', msg); return; }
             const key = `${phoneNumber}:${remoteJid}`;
             const set = mutedUsers.get(key) || new Set();
@@ -5042,7 +5059,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         if (!target) { await safeWaReply(sock, remoteJid, '❌ Reply to a message, @mention, or provide a number.\nExample: .unmute @user', msg); return; }
         try {
             const meta = await sock.groupMetadata(remoteJid);
-            const isSenderAdmin = meta.participants.find(p => jidNormalizedUser(p.id) === jidNormalizedUser(senderJid))?.admin;
+            const isSenderAdmin = isParticipantAdmin(meta, senderJid);
             if (!isSenderAdmin) { await safeWaReply(sock, remoteJid, '⛔ You must be a Group Admin.', msg); return; }
             const key = `${phoneNumber}:${remoteJid}`;
             const set = mutedUsers.get(key) || new Set();
