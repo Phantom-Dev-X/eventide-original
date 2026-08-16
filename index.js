@@ -1853,6 +1853,37 @@ function maskApiKey(key) {
     return `${k.slice(0, 5)}…${k.slice(-4)}`;
 }
 
+// 🔑 Split a comma-separated key list into usable keys (multi-key rotation).
+function splitApiKeys(raw) {
+    return String(raw || '').split(',')
+        .map(k => k.trim())
+        .filter(k => k.length > 5);
+}
+
+// 🔑 Mask a whole comma-separated key list for display (never leaks raw keys).
+function maskKeyList(raw) {
+    const keys = splitApiKeys(raw);
+    if (!keys.length) return 'NOT_SET';
+    return keys.map((k, i) => `[${i + 1}] ${maskApiKey(k)}`).join('\n   ');
+}
+
+// 🔑 Try a list of Gemini keys IN ORDER — first success wins. Only when
+// EVERY key fails does this throw, so the caller can fall back cleanly.
+async function callGeminiChain(prompt, systemInstruction, keys, opts) {
+    let lastErr = null;
+    for (let i = 0; i < keys.length; i++) {
+        const key = keys[i];
+        try {
+            log('AI', `Gemini attempt ${i + 1}/${keys.length} with key ${maskApiKey(key)}...`);
+            return await callGemini(prompt, systemInstruction, key, opts);
+        } catch (err) {
+            lastErr = err;
+            logError('AI', `Gemini key ${maskApiKey(key)} failed (${i + 1}/${keys.length}), trying next...`, err);
+        }
+    }
+    throw lastErr || new Error('All Gemini keys failed');
+}
+
 // Builds AI options that route this session's AI calls through the owner's
 // own Gemini key (if they set one with .pluginkey). Falls back to the default
 // chain (global Gemini → OpenAI → Pollinations) when no key is set.
@@ -1867,25 +1898,28 @@ function aiOptsFor(phoneNumber, extra = {}) {
 }
 
 export async function callUniversalAI(prompt, systemInstruction = '', opts = {}) {
-    // 🔑 PER-USER GEMINI KEY: if this session's owner attached their own
-    // key with .pluginkey, route the AI through THEIR key first (Gemini only).
-    const USER_GEMINI_KEY = String(opts?.geminiKey || '').trim();
-    if (USER_GEMINI_KEY && USER_GEMINI_KEY.length > 10) {
+    // 🔑 PER-USER GEMINI KEYS: once this session's owner attaches their own
+    // key(s) with .pluginkey, their AI ALWAYS routes through THEIR keys first
+    // (tried in order, key A → key B → ...). The shared default key is only
+    // touched if ALL of the user's keys fail.
+    const userKeys = splitApiKeys(opts?.geminiKey);
+    if (userKeys.length) {
         try {
-            log('AI', `Attempting Gemini with user plugin key (${maskApiKey(USER_GEMINI_KEY)})...`);
-            return await callGemini(prompt, systemInstruction, USER_GEMINI_KEY, opts);
+            log('AI', `Routing through user plugin keys (${userKeys.length})...`);
+            return await callGeminiChain(prompt, systemInstruction, userKeys, opts);
         } catch (err) {
-            logError('AI', 'User plugin key failed, falling back to owner chain...', err);
+            logError('AI', 'All user plugin keys failed, falling back to general chain...', err);
         }
     }
 
-    const GEMINI_KEY = (process.env.GEMINI_API_KEY || '').trim();
-    if (GEMINI_KEY && GEMINI_KEY.length > 5) {
+    // 🔑 GENERAL GEMINI KEYS from .env — also supports comma-separated rotation.
+    const envKeys = splitApiKeys(process.env.GEMINI_API_KEY);
+    if (envKeys.length) {
         try {
-            log('AI', 'Attempting Gemini AI response...');
-            return await callGemini(prompt, systemInstruction, GEMINI_KEY, opts);
+            log('AI', `Attempting general Gemini keys (${envKeys.length})...`);
+            return await callGeminiChain(prompt, systemInstruction, envKeys, opts);
         } catch (err) {
-            logError('AI', 'Gemini AI failed, trying fallback...', err);
+            logError('AI', 'All general Gemini keys failed, trying OpenAI fallback...', err);
         }
     }
 
@@ -1960,7 +1994,7 @@ ALWAYS mention linked command pairs:
 • .warn  +  .warnconfig / .unwarn / .warns / .warnreset
 • .welcome / .goodbye / .greet
 • .help  (alone = help MODE; .help <cmd> = one-shot). In help mode other cmds like .ping do NOT run until they type .help again.
-• .pluginkey <their-own-gemini-key> lets each paired owner attach THEIR personal Gemini key; that session's AI then uses their key first. .pluginkey off removes it, .pluginkey alone shows status.
+• .pluginkey <gemini-key1,gemini-key2> lets each paired owner attach THEIR personal Gemini keys (comma-separated, tried in order). Once set, that session's AI ALWAYS uses their keys first — the shared default key is only touched if all of theirs fail. .pluginkey off removes them, .pluginkey alone shows status.
 • .menu polls: Owners → System/Config, Group, Fun, Bug
 
 REGISTRY (all real):
@@ -4489,7 +4523,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             `   ✦ *AD_ENDS* :: G${(ad.endpoints?.groups || []).length}/C${(ad.endpoints?.channels || []).length}/P${(ad.endpoints?.contacts || []).length}\n` +
             `   ✦ *NAME* :: ${botConfig.name || '(account default)'}\n` +
             `   ✦ *BIO* :: ${botConfig.bio || '(account default)'}\n` +
-            `   ✦ *PLUGIN KEY* :: ${String(botConfig.geminiApiKey || '').trim() ? maskApiKey(botConfig.geminiApiKey) : 'NOT_SET'}\n\n` +
+            `   ✦ *PLUGIN KEYS* :: ${splitApiKeys(botConfig.geminiApiKey).length}\n` +
             `   " You are the architect\n     of these settings. "`
         ), msg);
         return;
@@ -4521,14 +4555,15 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         const arg = (args[0] || '').trim();
         const cfg = loadBotConfig(phoneNumber);
         if (!arg) {
-            const key = String(cfg.geminiApiKey || '').trim();
+            const keys = splitApiKeys(cfg.geminiApiKey);
             await safeWaReply(sock, remoteJid, buildOmegaTerminal(
                 `   ░▒▓█ *PLUGIN_KEY_STATUS* █▓▒░\n\n` +
-                `   ✦ *KEY* :: ${key ? maskApiKey(key) : 'NOT_SET'}\n` +
-                `   ✦ *ROUTING* :: ${key ? 'YOUR_GEMINI_KEY' : 'OWNER_DEFAULT_CHAIN'}\n\n` +
-                `   Set: *.pluginkey <key>*\n` +
+                `   ✦ *KEYS* :: ${keys.length}\n` +
+                (keys.length ? `   ${keys.map((k, i) => `[${i + 1}] ${maskApiKey(k)}`).join('\n   ')}\n` : `   ✦ *KEY* :: NOT_SET\n`) +
+                `   ✦ *ROUTING* :: ${keys.length ? 'YOUR_GEMINI_KEYS' : 'OWNER_DEFAULT_CHAIN'}\n\n` +
+                `   Set: *.pluginkey keyA,keyB,keyC*\n` +
                 `   Remove: *.pluginkey off*\n\n` +
-                `   " Your mind, your key. "`
+                `   " Your mind, your keys. "`
             ), msg);
             return;
         }
@@ -4543,19 +4578,22 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             ), msg);
             return;
         }
-        const key = arg;
-        if (!/^AIza[0-9A-Za-z_-]{20,}$/.test(key)) {
-            await safeWaReply(sock, remoteJid, `❌ That does not look like a Gemini API key.\n\nGemini keys start with *AIza* — grab one free at:\nhttps://aistudio.google.com/app/apikey\n\nThen: *.pluginkey <your-key>*`, msg);
+        const keys = splitApiKeys(arg);
+        const bad = keys.filter(k => !/^AIza[0-9A-Za-z_-]{20,}$/.test(k));
+        if (!keys.length || bad.length) {
+            await safeWaReply(sock, remoteJid, `❌ That does not look like a valid Gemini API key list.\n\nGemini keys start with *AIza* — grab one free at:\nhttps://aistudio.google.com/app/apikey\n\nThen: *.pluginkey <key1,key2,key3>* (comma-separated, no spaces needed)`, msg);
             return;
         }
-        cfg.geminiApiKey = key;
+        cfg.geminiApiKey = keys.join(',');
         saveBotConfig(phoneNumber, cfg);
         await safeWaReply(sock, remoteJid, buildOmegaTerminal(
             `   ░▒▓█ *PLUGIN_KEY_BOUND* █▓▒░\n\n` +
-            `   ✦ *KEY* :: ${maskApiKey(key)}\n` +
-            `   ✦ *ROUTING* :: YOUR_GEMINI_KEY\n` +
+            `   ✦ *KEYS* :: ${keys.length}\n` +
+            `   ${keys.map((k, i) => `[${i + 1}] ${maskApiKey(k)}`).join('\n   ')}\n` +
+            `   ✦ *ROUTING* :: YOUR_GEMINI_KEYS\n` +
+            `   ✦ *ORDER* :: A → B → C (first success wins)\n` +
             `   ✦ *SCOPE* :: this bot session only\n\n` +
-            `   " The oracle now speaks\n     through your own flame. "`
+            `   " The oracle now speaks\n     through your own flames. "`
         ), msg);
         return;
     }
