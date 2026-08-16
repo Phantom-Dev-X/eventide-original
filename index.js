@@ -595,6 +595,7 @@ const DEFAULT_BOT_CONFIG = {
     aliases: {},            // trigger (lowercase, no prefix) -> target command (with prefix)
     name: '',               // display name override ('' = leave account name)
     bio: '',                // about/bio override ('' = leave as is)
+    geminiApiKey: '',       // owner's personal Gemini key (.pluginkey) — this session's AI routes through it
     autoreact: {
         enabled: false,
         endpoints: { groups: [], channels: [], contacts: [] }
@@ -1845,7 +1846,39 @@ async function callPollinations(prompt, systemInstruction = '', opts = {}) {
     });
 }
 
+// 🔑 Per-user plugin key helpers (multi-user: one Gemini key per paired owner)
+function maskApiKey(key) {
+    const k = String(key || '').trim();
+    if (k.length < 8) return '(unset)';
+    return `${k.slice(0, 5)}…${k.slice(-4)}`;
+}
+
+// Builds AI options that route this session's AI calls through the owner's
+// own Gemini key (if they set one with .pluginkey). Falls back to the default
+// chain (global Gemini → OpenAI → Pollinations) when no key is set.
+function aiOptsFor(phoneNumber, extra = {}) {
+    try {
+        const key = String(loadBotConfig(phoneNumber)?.geminiApiKey || '').trim();
+        if (key) return { ...extra, geminiKey: key };
+    } catch (err) {
+        logError('AI', 'Failed to read plugin key', err);
+    }
+    return extra;
+}
+
 export async function callUniversalAI(prompt, systemInstruction = '', opts = {}) {
+    // 🔑 PER-USER GEMINI KEY: if this session's owner attached their own
+    // key with .pluginkey, route the AI through THEIR key first (Gemini only).
+    const USER_GEMINI_KEY = String(opts?.geminiKey || '').trim();
+    if (USER_GEMINI_KEY && USER_GEMINI_KEY.length > 10) {
+        try {
+            log('AI', `Attempting Gemini with user plugin key (${maskApiKey(USER_GEMINI_KEY)})...`);
+            return await callGemini(prompt, systemInstruction, USER_GEMINI_KEY, opts);
+        } catch (err) {
+            logError('AI', 'User plugin key failed, falling back to owner chain...', err);
+        }
+    }
+
     const GEMINI_KEY = (process.env.GEMINI_API_KEY || '').trim();
     if (GEMINI_KEY && GEMINI_KEY.length > 5) {
         try {
@@ -1885,10 +1918,10 @@ function parseScoredAi(raw) {
     return { body, score };
 }
 
-async function generateScoredFun(prompt, system, { minScore = 7, tries = 3, temperature = 0.95 } = {}) {
+async function generateScoredFun(prompt, system, { minScore = 7, tries = 3, temperature = 0.95, geminiKey = '' } = {}) {
     let best = { body: '', score: 0 };
     for (let i = 0; i < tries; i++) {
-        const raw = await callUniversalAI(prompt, system, { temperature });
+        const raw = await callUniversalAI(prompt, system, { temperature, geminiKey });
         const parsed = parseScoredAi(raw);
         if (parsed.body && parsed.score >= best.score) best = parsed;
         if (parsed.body && parsed.body.length >= 12 && parsed.score >= minScore) return parsed;
@@ -1927,12 +1960,13 @@ ALWAYS mention linked command pairs:
 • .warn  +  .warnconfig / .unwarn / .warns / .warnreset
 • .welcome / .goodbye / .greet
 • .help  (alone = help MODE; .help <cmd> = one-shot). In help mode other cmds like .ping do NOT run until they type .help again.
+• .pluginkey <their-own-gemini-key> lets each paired owner attach THEIR personal Gemini key; that session's AI then uses their key first. .pluginkey off removes it, .pluginkey alone shows status.
 • .menu polls: Owners → System/Config, Group, Fun, Bug
 
 REGISTRY (all real):
 MENU: .menu
 HELP: .help  .help list  .help <name>
-CONFIG: .mode public|owner  .public  .owner  .setprefix  .setalias  .delalias  .aliases  .setname  .setbio  .setpp  .settings  .reset
+CONFIG: .mode public|owner  .public  .owner  .setprefix  .setalias  .delalias  .aliases  .setname  .setbio  .setpp  .settings  .reset  .pluginkey <gemini-key>
 AUTOREACT: .autoreact on|off  .autoreactconfig
 ANTIDELETE: .antidelete on|off  .antideleteconfig  (recover deleted msgs to owner DM)
 ANTI WARDS: .antilink on|off  .antimention on|off  .antiforward on|off  — also ".antilink on <chat.whatsapp.com/…>"
@@ -3719,9 +3753,12 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     } catch (err) { logError('MUTE', `${phoneNumber}: mute delete failed`, err); }
 
     const parsed = extractMessageText(msg);
+    const parseTextLog = /^\.(plugin|pluginkey)\b/i.test(String(parsed.text || ''))
+        ? String(parsed.text).replace(/(AIza[0-9A-Za-z_-]{10,})/g, (m) => maskApiKey(m))
+        : trimForLog(parsed.text, 250);
     log(
         'WA-PARSE',
-        `${phoneNumber}: parse result | topLevel=${parsed.topLevelType} wrappers=${parsed.wrapperChain.join(' > ') || 'none'} leaf=${parsed.leafType} source=${parsed.source} text=${JSON.stringify(trimForLog(parsed.text, 250))}`
+        `${phoneNumber}: parse result | topLevel=${parsed.topLevelType} wrappers=${parsed.wrapperChain.join(' > ') || 'none'} leaf=${parsed.leafType} source=${parsed.source} text=${JSON.stringify(parseTextLog)}`
     );
 
     // 🛡️ ANTI ENFORCEMENT: antilink / antimention / antiforward (delete offending msgs)
@@ -3927,7 +3964,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         }, 10 * 60 * 1000);
         helpModeUsers.set(remoteJid, { timer: newTimer });
         try {
-            const aiReply = await callUniversalAI(text, getHelpSystemPrompt());
+            const aiReply = await callUniversalAI(text, getHelpSystemPrompt(), aiOptsFor(phoneNumber));
             await safeWaReply(sock, remoteJid, `🤖 *Eventide Help:*\n\n${aiReply}`, msg);
         } catch (err) {
             logError('HELP-MODE', 'AI Help reply failed', err);
@@ -4123,7 +4160,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
 
             try {
                 const systemPrompt = getHelpSystemPrompt();
-                const aiReply = await callUniversalAI(text, systemPrompt);
+                const aiReply = await callUniversalAI(text, systemPrompt, aiOptsFor(phoneNumber));
                 await safeWaReply(sock, remoteJid, `🤖 *Eventide Help:*\n\n${aiReply}`, msg);
             } catch (err) {
                 logError('HELP-MODE', 'AI Help reply failed', err);
@@ -4134,7 +4171,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
                     `   • GEMINI_API_KEY: ${process.env.GEMINI_API_KEY ? "Set (but request failed — check key validity or quota)" : "Not Set"}\n` +
                     `   • OPENAI_API_KEY: ${process.env.OPENAI_API_KEY ? "Set" : "Not Set"}\n` +
                     `   • Pollinations Keyless Fallback: Busy or Unavailable (Shared Server IP rate limits reached)\n\n` +
-                    `   *Fix:* Double-check your GEMINI_API_KEY on Render (get a free key from Google AI Studio) or add a valid OPENAI_API_KEY.`;
+                    `   *Fix:* Double-check your GEMINI_API_KEY on Render (get a free key from Google AI Studio), add a valid OPENAI_API_KEY — or attach YOUR own Gemini key with *.pluginkey <key>* and this session will use it.`;
                 await safeWaReply(sock, remoteJid, helpDiagnosticReport, msg);
             }
             return;
@@ -4142,9 +4179,11 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         return; // Ignore regular text
     }
 
+    const sensitiveCmd = token === '.pluginkey' || token === '.plugin';
+    const logRaw = sensitiveCmd ? `.pluginkey ${maskApiKey(args[0] || '')}`.trim() : trimForLog(text, 250);
     log(
         'WA-CMD',
-        `${phoneNumber}: command flow | raw=${JSON.stringify(trimForLog(text, 250))} normalized=${JSON.stringify(trimForLog(normalized, 250))} token=${JSON.stringify(token)}`
+        `${phoneNumber}: command flow | raw=${JSON.stringify(logRaw)} normalized=${JSON.stringify(sensitiveCmd ? logRaw : trimForLog(normalized, 250))} token=${JSON.stringify(token)}`
     );
 
     // ⚡ INSTANT REACTION on every command — fire-and-forget, never blocks.
@@ -4234,7 +4273,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         if (question) {
             try {
                 log('HELP-CMD', `${phoneNumber}: Querying AI Oracle: ${question}`);
-                const response = await callUniversalAI(question, systemPrompt);
+                const response = await callUniversalAI(question, systemPrompt, aiOptsFor(phoneNumber));
                 await safeWaReply(sock, remoteJid, `🤖 *Eventide Help:*\n\n${response}`, msg);
             } catch (err) {
                 logError('HELP-CMD', 'AI Oracle failed', err);
@@ -4245,7 +4284,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
                     `   • GEMINI_API_KEY: ${process.env.GEMINI_API_KEY ? "Set (but request failed — check key validity or quota)" : "Not Set"}\n` +
                     `   • OPENAI_API_KEY: ${process.env.OPENAI_API_KEY ? "Set" : "Not Set"}\n` +
                     `   • Pollinations Keyless Fallback: Busy or Unavailable (Shared Server IP rate limits reached)\n\n` +
-                    `   *Fix:* Double-check your GEMINI_API_KEY on Render (get a free key from Google AI Studio) or add a valid OPENAI_API_KEY.`;
+                    `   *Fix:* Double-check your GEMINI_API_KEY on Render (get a free key from Google AI Studio), add a valid OPENAI_API_KEY — or attach YOUR own Gemini key with *.pluginkey <key>* and this session will use it.`;
                 await safeWaReply(sock, remoteJid, helpDiagnosticReport, msg);
             }
             return;
@@ -4449,7 +4488,8 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             `   ✦ *ANTIDELETE* :: ${ad.enabled ? 'ON' : 'OFF'}\n` +
             `   ✦ *AD_ENDS* :: G${(ad.endpoints?.groups || []).length}/C${(ad.endpoints?.channels || []).length}/P${(ad.endpoints?.contacts || []).length}\n` +
             `   ✦ *NAME* :: ${botConfig.name || '(account default)'}\n` +
-            `   ✦ *BIO* :: ${botConfig.bio || '(account default)'}\n\n` +
+            `   ✦ *BIO* :: ${botConfig.bio || '(account default)'}\n` +
+            `   ✦ *PLUGIN KEY* :: ${String(botConfig.geminiApiKey || '').trim() ? maskApiKey(botConfig.geminiApiKey) : 'NOT_SET'}\n\n` +
             `   " You are the architect\n     of these settings. "`
         ), msg);
         return;
@@ -4472,6 +4512,53 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     // ──────────────────────────────────────────────
     // 🔒 PRIVACY ACCESS LOCK (.mode public / owner)
     // ──────────────────────────────────────────────
+
+    // 🔑 .pluginkey <GEMINI_API_KEY> — attach the owner's own Gemini key so
+    // this session's AI (help, fun, etc.) routes through THEIR key first.
+    // .pluginkey off removes it. .pluginkey alone shows masked status.
+    if (token === '.pluginkey' || token === '.plugin') {
+        if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Owner/Dev only. Only the paired bot owner can set their own key.', msg); return; }
+        const arg = (args[0] || '').trim();
+        const cfg = loadBotConfig(phoneNumber);
+        if (!arg) {
+            const key = String(cfg.geminiApiKey || '').trim();
+            await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                `   ░▒▓█ *PLUGIN_KEY_STATUS* █▓▒░\n\n` +
+                `   ✦ *KEY* :: ${key ? maskApiKey(key) : 'NOT_SET'}\n` +
+                `   ✦ *ROUTING* :: ${key ? 'YOUR_GEMINI_KEY' : 'OWNER_DEFAULT_CHAIN'}\n\n` +
+                `   Set: *.pluginkey <key>*\n` +
+                `   Remove: *.pluginkey off*\n\n` +
+                `   " Your mind, your key. "`
+            ), msg);
+            return;
+        }
+        if (arg.toLowerCase() === 'off' || arg.toLowerCase() === 'remove') {
+            cfg.geminiApiKey = '';
+            saveBotConfig(phoneNumber, cfg);
+            await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                `   ░▒▓█ *PLUGIN_KEY_SEVERED* █▓▒░\n\n` +
+                `   ✦ *STATUS* :: REMOVED\n` +
+                `   ✦ *ROUTING* :: OWNER_DEFAULT_CHAIN\n\n` +
+                `   " The key returns to silence. "`
+            ), msg);
+            return;
+        }
+        const key = arg;
+        if (!/^AIza[0-9A-Za-z_-]{20,}$/.test(key)) {
+            await safeWaReply(sock, remoteJid, `❌ That does not look like a Gemini API key.\n\nGemini keys start with *AIza* — grab one free at:\nhttps://aistudio.google.com/app/apikey\n\nThen: *.pluginkey <your-key>*`, msg);
+            return;
+        }
+        cfg.geminiApiKey = key;
+        saveBotConfig(phoneNumber, cfg);
+        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+            `   ░▒▓█ *PLUGIN_KEY_BOUND* █▓▒░\n\n` +
+            `   ✦ *KEY* :: ${maskApiKey(key)}\n` +
+            `   ✦ *ROUTING* :: YOUR_GEMINI_KEY\n` +
+            `   ✦ *SCOPE* :: this bot session only\n\n` +
+            `   " The oracle now speaks\n     through your own flame. "`
+        ), msg);
+        return;
+    }
     if (token === '.mode') {
         const targetMode = args[0]?.toLowerCase();
         const currentMode = loadBotMode(phoneNumber);
@@ -5877,7 +5964,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
 
         try {
             await sock.sendPresenceUpdate('composing', remoteJid).catch(() => {});
-            const out = await generateScoredFun(prompt, system, { minScore, tries: funToken === '.roast' ? 3 : 2, temperature: 0.95 });
+            const out = await generateScoredFun(prompt, system, { minScore, tries: funToken === '.roast' ? 3 : 2, temperature: 0.95, geminiKey: String(loadBotConfig(phoneNumber).geminiApiKey || '').trim() });
             const mentionLine = targetNum && funToken !== '.ship' ? `@${targetNum}\n\n` : '';
             await sock.sendMessage(remoteJid, {
                 text: `${header}\n\n${mentionLine}${out.body}`,
