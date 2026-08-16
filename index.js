@@ -1994,7 +1994,7 @@ ALWAYS mention linked command pairs:
 • .warn  +  .warnconfig / .unwarn / .warns / .warnreset
 • .welcome / .goodbye / .greet
 • .help  (alone = help MODE; .help <cmd> = one-shot). In help mode other cmds like .ping do NOT run until they type .help again.
-• .pluginkey <gemini-key1,gemini-key2> lets each paired owner attach THEIR personal Gemini keys (comma-separated, tried in order). Once set, that session's AI ALWAYS uses their keys first — the shared default key is only touched if all of theirs fail. .pluginkey off removes them, .pluginkey alone shows status.
+• .pluginkey <gemini-key1,gemini-key2> lets each paired owner attach THEIR personal Gemini keys (comma-separated, tried in order). Typing .pluginkey again ADDS more keys; .pluginkey set <keys> replaces; .pluginkey off clears. Once set, that session's AI ALWAYS uses their keys first — the shared default key is only touched if ALL of theirs fail. Keys never leak between users.
 • .menu polls: Owners → System/Config, Group, Fun, Bug
 
 REGISTRY (all real):
@@ -4220,10 +4220,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         `${phoneNumber}: command flow | raw=${JSON.stringify(logRaw)} normalized=${JSON.stringify(sensitiveCmd ? logRaw : trimForLog(normalized, 250))} token=${JSON.stringify(token)}`
     );
 
-    // ⚡ INSTANT REACTION on every command — fire-and-forget, never blocks.
-    // The actual reply lands ~1s later via safeWaReply.
-    sock.sendMessage(remoteJid, { react: { text: '⚡', key: msg.key } }).catch(() => {});
-
+    // (Instant ⚡ reaction now fires at the upsert level, before this flow.)
     // Wake the bot online for this command, then back offline shortly after.
     flashPresenceOnline(sock, phoneNumber);
 
@@ -4552,7 +4549,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     // .pluginkey off removes it. .pluginkey alone shows masked status.
     if (token === '.pluginkey' || token === '.plugin') {
         if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Owner/Dev only. Only the paired bot owner can set their own key.', msg); return; }
-        const arg = (args[0] || '').trim();
+        const arg = args.join(' ').trim();
         const cfg = loadBotConfig(phoneNumber);
         if (!arg) {
             const keys = splitApiKeys(cfg.geminiApiKey);
@@ -4560,8 +4557,10 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
                 `   ░▒▓█ *PLUGIN_KEY_STATUS* █▓▒░\n\n` +
                 `   ✦ *KEYS* :: ${keys.length}\n` +
                 (keys.length ? `   ${keys.map((k, i) => `[${i + 1}] ${maskApiKey(k)}`).join('\n   ')}\n` : `   ✦ *KEY* :: NOT_SET\n`) +
-                `   ✦ *ROUTING* :: ${keys.length ? 'YOUR_GEMINI_KEYS' : 'OWNER_DEFAULT_CHAIN'}\n\n` +
-                `   Set: *.pluginkey keyA,keyB,keyC*\n` +
+                `   ✦ *ROUTING* :: ${keys.length ? 'YOUR_GEMINI_KEYS' : 'OWNER_DEFAULT_CHAIN'}\n` +
+                `   ✦ *ISOLATION* :: your session only\n\n` +
+                `   Add key: *.pluginkey <key>*\n` +
+                `   Replace: *.pluginkey set keyA,keyB*\n` +
                 `   Remove: *.pluginkey off*\n\n` +
                 `   " Your mind, your keys. "`
             ), msg);
@@ -4578,21 +4577,34 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             ), msg);
             return;
         }
-        const keys = splitApiKeys(arg);
-        const bad = keys.filter(k => !/^AIza[0-9A-Za-z_-]{20,}$/.test(k));
-        if (!keys.length || bad.length) {
-            await safeWaReply(sock, remoteJid, `❌ That does not look like a valid Gemini API key list.\n\nGemini keys start with *AIza* — grab one free at:\nhttps://aistudio.google.com/app/apikey\n\nThen: *.pluginkey <key1,key2,key3>* (comma-separated, no spaces needed)`, msg);
+        // 🔑 APPEND semantics: .pluginkey <key> ADDS to the user's key pool
+        // (first-typed key is tried first). .pluginkey set <keys> REPLACES the
+        // whole pool. .pluginkey off clears it. Keys are per-session — user A's
+        // keys NEVER leak to user B.
+        const setMode = /^set\s+/i.test(arg);
+        const argBody = setMode ? arg.replace(/^set\s+/i, '').trim() : arg;
+        const incoming = splitApiKeys(argBody);
+        const bad = incoming.filter(k => !/^AIza[0-9A-Za-z_-]{20,}$/.test(k));
+        if (!incoming.length || bad.length) {
+            await safeWaReply(sock, remoteJid, `❌ That does not look like a valid Gemini API key list.\n\nGemini keys start with *AIza* — grab one free at:\nhttps://aistudio.google.com/app/apikey\n\nThen: *.pluginkey <key1,key2,key3>* (comma-separated, no spaces needed)\n*.pluginkey set <keys>* replaces your current keys`, msg);
             return;
         }
-        cfg.geminiApiKey = keys.join(',');
+        const existing = splitApiKeys(cfg.geminiApiKey);
+        const merged = setMode ? incoming : [...existing, ...incoming];
+        const finalKeys = [...new Set(merged)]; // dedup, keep first-typed order
+        const added = finalKeys.length - existing.length;
+        cfg.geminiApiKey = finalKeys.join(',');
         saveBotConfig(phoneNumber, cfg);
+        const modeLabel = setMode ? 'RESET' : (added > 0 ? 'EXTENDED' : 'ALREADY_BOUND');
         await safeWaReply(sock, remoteJid, buildOmegaTerminal(
-            `   ░▒▓█ *PLUGIN_KEY_BOUND* █▓▒░\n\n` +
-            `   ✦ *KEYS* :: ${keys.length}\n` +
-            `   ${keys.map((k, i) => `[${i + 1}] ${maskApiKey(k)}`).join('\n   ')}\n` +
+            `   ░▒▓█ *PLUGIN_KEYS_${modeLabel}* █▓▒░\n\n` +
+            `   ✦ *TOTAL* :: ${finalKeys.length}\n` +
+            `   ✦ *ADDED* :: ${setMode ? '-' : added}\n` +
+            `   ${finalKeys.map((k, i) => `[${i + 1}] ${maskApiKey(k)}`).join('\n   ')}\n` +
             `   ✦ *ROUTING* :: YOUR_GEMINI_KEYS\n` +
             `   ✦ *ORDER* :: A → B → C (first success wins)\n` +
-            `   ✦ *SCOPE* :: this bot session only\n\n` +
+            `   ✦ *FALLBACK* :: general .env keys only if ALL yours fail\n` +
+            `   ✦ *SCOPE* :: your session only — other users keep their own\n\n` +
             `   " The oracle now speaks\n     through your own flames. "`
         ), msg);
         return;
@@ -6116,6 +6128,29 @@ function setupMessageHandler(sock, phoneNumber, tgId) {
 
         for (const msg of messages) {
             log('WA-EVENT', `${phoneNumber}: upsert msg | type=${type} id=${msg?.key?.id || '?'} fromMe=${!!msg?.key?.fromMe} jid=${msg?.key?.remoteJid || '?'} participant=${msg?.key?.participant || '-'}`);
+
+            // ⚡ INSTANT REACTION: react the instant a command-looking message
+            // lands — BEFORE any processing, handler or answer. Fire-and-forget
+            // with visible error logging so failures are never swallowed.
+            try {
+                if (!msg?.key?.fromMe && msg?.message && msg?.key?.remoteJid) {
+                    const rawTxt = String(extractMessageText(msg)?.text || '');
+                    const pfx = String(loadBotConfig(phoneNumber)?.prefix || '.');
+                    const esc = pfx.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                    if (new RegExp(`^${esc}[a-z0-9_]{1,20}\\b`, 'i').test(rawTxt)) {
+                        const senderJid = msg.key.participant || msg.key.remoteJid;
+                        const senderOwner = jidNormalizedUser(senderJid) === jidNormalizedUser(sock.user?.id || '');
+                        if (loadBotMode(phoneNumber) !== 'owner' || senderOwner) {
+                            sock.sendMessage(msg.key.remoteJid, { react: { text: '⚡', key: msg.key } })
+                                .then(() => log('REACT', `${phoneNumber}: ⚡ reacted to ${msg.key.id}`))
+                                .catch(err => logError('REACT', `${phoneNumber}: react failed for ${msg.key.id}`, err));
+                        }
+                    }
+                }
+            } catch (err) {
+                logError('REACT', `${phoneNumber}: react pre-check failed`, err);
+            }
+
             try {
                 // 🔐 Baileys rc13 ships with poll vote decryption commented out.
                 // Poll votes arrive as pollUpdateMessage upserts — decrypt manually.
