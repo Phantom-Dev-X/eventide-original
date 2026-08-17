@@ -133,6 +133,11 @@ const GROUP_CHANNEL_LINK = (process.env.GROUP_CHANNEL_LINK || 'https://whatsapp.
 const CHANNEL_PREVIEW_TITLE = "\u2500\u2500\u2500 \u4e97 \u1d18\u1d05\u1d20 \u1d1b\u1d07\u1d04\u029c\u0274\u1d0f\u029f\u1d0f\u0262\u026a\u1d07\ua731 \u4e97 \u2500\u2500\u2500";
 const CHANNEL_PREVIEW_DESC = "Follow \u2500\u2500\u2500 \u4e97 \u1d18\u1d05\u1d20 \u1d1b\u1d07\u1d04\u029c\u0274\u1d0f\u029f\u1d0f\u0262\u026a\u1d07\ua731 \u4e97 \u2500\u2500\u2500's WhatsApp Channel. Join 41 followers for the latest updates.";
 const CHANNEL_PREVIEW_MATCHED = "https://whatsapp.com/channel/0029VbCrFiK17En02cax3r02";
+
+// 📋 VERBOSE_LOGS=true turns on per-message tracing (upsert ids, parse trees,
+// send ids). Default OFF so Render logs stay readable — REACT, errors and
+// command-level logs always show.
+const VERBOSE_LOGS = ['1', 'true', 'on', 'yes'].includes(String(process.env.VERBOSE_LOGS || '').toLowerCase().trim());
 const CHANNEL_PREVIEW_THUMB_B64 = [
     "/9j/2wBDABALDA4MChAODQ4SERATGCgaGBYWGDEjJR0oOjM9PDkzODdASFxOQERXRTc4UG1RV19iZ2hnPk1xeXBkeFxlZ2P/2wBD",
     "ARESEhgVGC8aGi9jQjhCY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2P/wAARCADAAMAD",
@@ -1750,7 +1755,9 @@ function formatForWhatsApp(text) {
 // ──────────────────────────────────────────────
 
 async function callGemini(prompt, systemInstruction = '', apiKey, opts = {}) {
-    const model = process.env.GEMINI_MODEL || "gemini-flash-latest"; // Optimized: default to gemini-flash-latest
+    // GEMINI_MODEL env overrides. Default to a current 3.x flash model —
+    // Google retired the old gemini-2.x & flash-latest aliases for new projects.
+    const model = process.env.GEMINI_MODEL || "gemini-3.5-flash";
     const temperature = typeof opts.temperature === 'number' ? opts.temperature : 0.4;
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
     const body = JSON.stringify({
@@ -2699,7 +2706,7 @@ async function createSocketForSession({ phoneNumber, tgId, authDir, version = nu
     sock.sendMessage = async (jid, content, options) => {
         const res = await _origSendMessage(jid, content, options);
         const toJid = typeof jid === 'string' ? jid : (jid?.remoteJid || '?');
-        log('WA-SEND', `${phoneNumber}: sent msg | id=${res?.key?.id || '?'} jid=${toJid}`);
+        if (VERBOSE_LOGS) log('WA-SEND', `${phoneNumber}: sent msg | id=${res?.key?.id || '?'} jid=${toJid}`);
         return res;
     };
 
@@ -3723,7 +3730,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     const pushName = msg?.pushName || 'unknown';
     const recent = isRecentMessage(msg);
 
-    log(
+    if (VERBOSE_LOGS) log(
         'WA-MSG',
         `${phoneNumber}: incoming event message seen | eventType=${eventType} id=${msgId} jid=${remoteJid} participant=${participant} fromMe=${fromMe} pushName=${trimForLog(pushName, 60)} recent=${recent}`
     );
@@ -3754,7 +3761,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     //   upsertMessage(fullMsg, 'append')
     const shouldProcessEvent = eventType === 'notify' || eventType === 'append';
     if (!shouldProcessEvent) {
-        log('WA-MSG', `${phoneNumber}: skipping eventType=${eventType} for message ${msgId} because it is not processable.`);
+        if (VERBOSE_LOGS) log('WA-MSG', `${phoneNumber}: skipping eventType=${eventType} for message ${msgId} because it is not processable.`);
         return;
     }
 
@@ -3765,7 +3772,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     // Live messages from another device of the bot number still arrive as
     // 'notify' + fromMe and keep working.
     if (fromMe && eventType === 'append') {
-        log('WA-MSG', `${phoneNumber}: skipped own echo (append+fromMe) | id=${msgId} jid=${remoteJid}`);
+        if (VERBOSE_LOGS) log('WA-MSG', `${phoneNumber}: skipped own echo (append+fromMe) | id=${msgId} jid=${remoteJid}`);
         return;
     }
 
@@ -3809,7 +3816,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     const parseTextLog = /^\.(plugin|pluginkey)\b/i.test(String(parsed.text || ''))
         ? String(parsed.text).replace(/(AIza[0-9A-Za-z_-]{10,}|AQ\.[0-9A-Za-z_-]{10,}|ABQ[0-9A-Za-z_-]{10,})/gi, (m) => maskApiKey(m))
         : trimForLog(parsed.text, 250);
-    log(
+    if (VERBOSE_LOGS) log(
         'WA-PARSE',
         `${phoneNumber}: parse result | topLevel=${parsed.topLevelType} wrappers=${parsed.wrapperChain.join(' > ') || 'none'} leaf=${parsed.leafType} source=${parsed.source} text=${JSON.stringify(parseTextLog)}`
     );
@@ -6141,14 +6148,15 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
 // Attach event listeners
 function setupMessageHandler(sock, phoneNumber, tgId) {
     log('WA-HANDLER', `${phoneNumber}: attaching message handlers (tgId=${tgId ?? 'none'})`);
+    log('REACT', `${phoneNumber}: ⚡ REACT SYSTEM ARMED — prefix="${loadBotConfig(phoneNumber)?.prefix || '.'}" mode=${loadBotMode(phoneNumber)} (VERBOSE_LOGS=${VERBOSE_LOGS ? 'ON' : 'OFF'})`);
 
     sock.ev.on('messages.upsert', async (event) => {
         const type = event?.type || 'unknown';
         const messages = Array.isArray(event?.messages) ? event.messages : [];
-        log('WA-EVENT', `${phoneNumber}: messages.upsert received | type=${type} count=${messages.length}`);
+        if (VERBOSE_LOGS) log('WA-EVENT', `${phoneNumber}: messages.upsert received | type=${type} count=${messages.length}`);
 
         for (const msg of messages) {
-            log('WA-EVENT', `${phoneNumber}: upsert msg | type=${type} id=${msg?.key?.id || '?'} fromMe=${!!msg?.key?.fromMe} jid=${msg?.key?.remoteJid || '?'} participant=${msg?.key?.participant || '-'}`);
+            if (VERBOSE_LOGS) log('WA-EVENT', `${phoneNumber}: upsert msg | type=${type} id=${msg?.key?.id || '?'} fromMe=${!!msg?.key?.fromMe} jid=${msg?.key?.remoteJid || '?'} participant=${msg?.key?.participant || '-'}`);
 
             // ⚡ INSTANT REACTION — fires for LIVE command messages ('notify'
             // only, never history replays) BEFORE any processing or answer.
