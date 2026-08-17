@@ -4583,9 +4583,16 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     // 📋 .logs — send the last log lines to the owner's chat (owner/dev only)
     if (token === '.logs' || token === '.recentlogs') {
         if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Owner/Dev only.', msg); return; }
-        const lines = recentLogLines.slice(-18);
+        let runCommit = '';
+        try {
+            const cf = path.join(__dirname, 'CURRENT_COMMIT.txt');
+            if (fs.existsSync(cf)) runCommit = fs.readFileSync(cf, 'utf8').trim().split(' ')[0] || '';
+        } catch (_) {}
+        const lines = recentLogLines.slice(-15);
         await safeWaReply(sock, remoteJid,
             `░▒▓█ *RECENT_LOGS* █▓▒░\n\n` +
+            `   ✦ *BUILD* :: ${runCommit || 'unknown'}\n` +
+            `   ✦ *REACT* :: ${runCommit ? 'V3_ARMED' : '?'}\n\n` +
             (lines.length ? lines.map(l => `   ${l}`).join('\n') : '   • _no logs yet_') +
             `\n\n   " The machine's heartbeat,\n     read from inside the chat. "`,
             msg);
@@ -6668,6 +6675,9 @@ async function main() {
             ? fs.readFileSync(commitFile, 'utf8').trim()
             : '';
         if (commitLine) log('BOOT', `📌 GitHub commit: ${commitLine}`);
+        // ⚠️ REACT-V3 BUILD MARKER: this line only exists in builds that have
+        // the working ⚡ reaction. If you do NOT see it, you are running OLD code.
+        log('BOOT', `⚡ REACT-V3 BUILD ACTIVE — reactions armed (commit ${commitLine.split(' ')[0] || '?'})`);
     } catch (_) {}
 
     const restoredCount = await restoreAllSessions();
