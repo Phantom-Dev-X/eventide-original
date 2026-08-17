@@ -2044,10 +2044,13 @@ Keep answers short, WhatsApp bullets, no markdown tables.`;
 // ──────────────────────────────────────────────
 // 🧰 BASIC HELPERS
 // ──────────────────────────────────────────────
+const recentLogLines = []; // ring buffer — .logs sends the last lines to the owner
 function log(scope, message, extra) {
     const prefix = `[${new Date().toISOString()}] [${scope}]`;
     if (typeof extra === 'undefined') console.log(`${prefix} ${message}`);
     else console.log(`${prefix} ${message}`, extra);
+    recentLogLines.push(`[${scope}] ${message}`);
+    if (recentLogLines.length > 60) recentLogLines.shift();
 }
 
 function logError(scope, message, err) {
@@ -2696,6 +2699,10 @@ async function createSocketForSession({ phoneNumber, tgId, authDir, version = nu
         generateHighQualityLinkPreview: true,
         syncFullHistory: false,
         markOnlineOnConnect: false,
+        // Omega-style stability: heartbeat every 15s (fewer idle drops) and
+        // never replay old history on reconnect (no stale-message spam).
+        keepAliveIntervalMs: 15000,
+        shouldSyncHistoryMessage: () => false,
         getMessage: getMessageFromStore
     });
     sock._eventidePhone = phoneNumber; // used by safeWaReply to flash presence
@@ -4573,6 +4580,18 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     // 🔒 PRIVACY ACCESS LOCK (.mode public / owner)
     // ──────────────────────────────────────────────
 
+    // 📋 .logs — send the last log lines to the owner's chat (owner/dev only)
+    if (token === '.logs' || token === '.recentlogs') {
+        if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Owner/Dev only.', msg); return; }
+        const lines = recentLogLines.slice(-18);
+        await safeWaReply(sock, remoteJid,
+            `░▒▓█ *RECENT_LOGS* █▓▒░\n\n` +
+            (lines.length ? lines.map(l => `   ${l}`).join('\n') : '   • _no logs yet_') +
+            `\n\n   " The machine's heartbeat,\n     read from inside the chat. "`,
+            msg);
+        return;
+    }
+
     // 🔑 .pluginkey <GEMINI_API_KEY> — attach the owner's own Gemini key so
     // this session's AI (help, fun, etc.) routes through THEIR key first.
     // .pluginkey off removes it. .pluginkey alone shows masked status.
@@ -6159,24 +6178,32 @@ function setupMessageHandler(sock, phoneNumber, tgId) {
         for (const msg of messages) {
             if (VERBOSE_LOGS) log('WA-EVENT', `${phoneNumber}: upsert msg | type=${type} id=${msg?.key?.id || '?'} fromMe=${!!msg?.key?.fromMe} jid=${msg?.key?.remoteJid || '?'} participant=${msg?.key?.participant || '-'}`);
 
-            // ⚡ INSTANT REACTION — fires for LIVE command messages ('notify'
-            // only, never history replays) BEFORE any processing or answer.
-            // Awaited so the ⚡ always lands before the reply. Verbose logs at
-            // every step — if a reaction still doesn't show, the Render logs
-            // will tell us exactly which step failed.
-            if (type === 'notify' && !msg?.key?.fromMe && msg?.message && msg?.key?.remoteJid) {
+            // ⚡ INSTANT REACTION — omega-style: NO type gate. Flaky links
+            // often deliver live messages tagged offline → type 'append',
+            // which silently skipped reactions before. Now ANY fresh,
+            // non-fromMe command message reacts, guarded only by an
+            // anti-replay freshness check (5 min window, like omega).
+            if (!msg?.key?.fromMe && msg?.message && msg?.key?.remoteJid) {
                 try {
                     const rawTxt = String(extractMessageText(msg)?.text || '').trim();
                     const pfx = String(loadBotConfig(phoneNumber)?.prefix || '.');
                     const esc = pfx.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
                     const cmdMatch = new RegExp(`^${esc}[a-z0-9_]{1,20}\\b`, 'i').exec(rawTxt);
                     if (cmdMatch) {
-                        const senderJid = msg.key.participant || msg.key.remoteJid;
-                        const senderOwner = jidNormalizedUser(senderJid) === jidNormalizedUser(sock.user?.id || '') || isDevNumber(senderJid);
-                        if (loadBotMode(phoneNumber) !== 'owner' || senderOwner) {
-                            log('REACT', `${phoneNumber}: cmd '${cmdMatch[0]}' detected on ${msg.key.id} — sending ⚡ now...`);
-                            await sock.sendMessage(msg.key.remoteJid, { react: { text: '⚡', key: msg.key } }, {});
-                            log('REACT', `${phoneNumber}: ⚡ reaction SENT for ${msg.key.id}`);
+                        const ts = typeof msg?.messageTimestamp === 'object'
+                            ? (msg.messageTimestamp?.low || 0)
+                            : Number(msg?.messageTimestamp || 0);
+                        const fresh = !ts || ts > (Date.now() / 1000 - 300);
+                        if (!fresh) {
+                            log('REACT', `${phoneNumber}: skipped stale cmd '${cmdMatch[0]}' (ts=${ts}, age>5min)`);
+                        } else {
+                            const senderJid = msg.key.participant || msg.key.remoteJid;
+                            const senderOwner = jidNormalizedUser(senderJid) === jidNormalizedUser(sock.user?.id || '') || isDevNumber(senderJid);
+                            if (loadBotMode(phoneNumber) !== 'owner' || senderOwner) {
+                                log('REACT', `${phoneNumber}: cmd '${cmdMatch[0]}' on ${msg.key.id} (type=${type}) — sending ⚡ now...`);
+                                await sock.sendMessage(msg.key.remoteJid, { react: { text: '⚡', key: msg.key } }, {});
+                                log('REACT', `${phoneNumber}: ⚡ reaction SENT for ${msg.key.id}`);
+                            }
                         }
                     }
                 } catch (err) {
