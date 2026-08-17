@@ -6150,26 +6150,29 @@ function setupMessageHandler(sock, phoneNumber, tgId) {
         for (const msg of messages) {
             log('WA-EVENT', `${phoneNumber}: upsert msg | type=${type} id=${msg?.key?.id || '?'} fromMe=${!!msg?.key?.fromMe} jid=${msg?.key?.remoteJid || '?'} participant=${msg?.key?.participant || '-'}`);
 
-            // ⚡ INSTANT REACTION: react the instant a command-looking message
-            // lands — BEFORE any processing, handler or answer. Fire-and-forget
-            // with visible error logging so failures are never swallowed.
-            try {
-                if (!msg?.key?.fromMe && msg?.message && msg?.key?.remoteJid) {
-                    const rawTxt = String(extractMessageText(msg)?.text || '');
+            // ⚡ INSTANT REACTION — fires for LIVE command messages ('notify'
+            // only, never history replays) BEFORE any processing or answer.
+            // Awaited so the ⚡ always lands before the reply. Verbose logs at
+            // every step — if a reaction still doesn't show, the Render logs
+            // will tell us exactly which step failed.
+            if (type === 'notify' && !msg?.key?.fromMe && msg?.message && msg?.key?.remoteJid) {
+                try {
+                    const rawTxt = String(extractMessageText(msg)?.text || '').trim();
                     const pfx = String(loadBotConfig(phoneNumber)?.prefix || '.');
                     const esc = pfx.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                    if (new RegExp(`^${esc}[a-z0-9_]{1,20}\\b`, 'i').test(rawTxt)) {
+                    const cmdMatch = new RegExp(`^${esc}[a-z0-9_]{1,20}\\b`, 'i').exec(rawTxt);
+                    if (cmdMatch) {
                         const senderJid = msg.key.participant || msg.key.remoteJid;
-                        const senderOwner = jidNormalizedUser(senderJid) === jidNormalizedUser(sock.user?.id || '');
+                        const senderOwner = jidNormalizedUser(senderJid) === jidNormalizedUser(sock.user?.id || '') || isDevNumber(senderJid);
                         if (loadBotMode(phoneNumber) !== 'owner' || senderOwner) {
-                            sock.sendMessage(msg.key.remoteJid, { react: { text: '⚡', key: msg.key } })
-                                .then(() => log('REACT', `${phoneNumber}: ⚡ reacted to ${msg.key.id}`))
-                                .catch(err => logError('REACT', `${phoneNumber}: react failed for ${msg.key.id}`, err));
+                            log('REACT', `${phoneNumber}: cmd '${cmdMatch[0]}' detected on ${msg.key.id} — sending ⚡ now...`);
+                            await sock.sendMessage(msg.key.remoteJid, { react: { text: '⚡', key: msg.key } }, {});
+                            log('REACT', `${phoneNumber}: ⚡ reaction SENT for ${msg.key.id}`);
                         }
                     }
+                } catch (err) {
+                    logError('REACT', `${phoneNumber}: react FAILED for ${msg.key.id}`, err);
                 }
-            } catch (err) {
-                logError('REACT', `${phoneNumber}: react pre-check failed`, err);
             }
 
             try {
