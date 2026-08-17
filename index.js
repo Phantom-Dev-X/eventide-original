@@ -1853,6 +1853,14 @@ function maskApiKey(key) {
     return `${k.slice(0, 5)}…${k.slice(-4)}`;
 }
 
+// ✅ Accepts BOTH Google key formats: classic (AIza…) and the newer
+// style Google now issues in AI Studio (AQ.…). Also covers the old ABQ…
+// shape, just in case. Anything else is rejected with a helpful message.
+function isValidGeminiKey(key) {
+    const k = String(key || '').trim();
+    return /^(AIza[0-9A-Za-z_-]{15,}|AQ\.[0-9A-Za-z_-]{15,}|ABQ[0-9A-Za-z_-]{15,})$/i.test(k);
+}
+
 // 🔑 Split a comma-separated key list into usable keys (multi-key rotation).
 function splitApiKeys(raw) {
     return String(raw || '').split(',')
@@ -3799,7 +3807,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
 
     const parsed = extractMessageText(msg);
     const parseTextLog = /^\.(plugin|pluginkey)\b/i.test(String(parsed.text || ''))
-        ? String(parsed.text).replace(/(AIza[0-9A-Za-z_-]{10,})/g, (m) => maskApiKey(m))
+        ? String(parsed.text).replace(/(AIza[0-9A-Za-z_-]{10,}|AQ\.[0-9A-Za-z_-]{10,}|ABQ[0-9A-Za-z_-]{10,})/gi, (m) => maskApiKey(m))
         : trimForLog(parsed.text, 250);
     log(
         'WA-PARSE',
@@ -4597,9 +4605,9 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         const setMode = /^set\s+/i.test(arg);
         const argBody = setMode ? arg.replace(/^set\s+/i, '').trim() : arg;
         const incoming = splitApiKeys(argBody);
-        const bad = incoming.filter(k => !/^AIza[0-9A-Za-z_-]{20,}$/.test(k));
+        const bad = incoming.filter(k => !isValidGeminiKey(k));
         if (!incoming.length || bad.length) {
-            await safeWaReply(sock, remoteJid, `❌ That does not look like a valid Gemini API key list.\n\nGemini keys start with *AIza* — grab one free at:\nhttps://aistudio.google.com/app/apikey\n\nThen: *.pluginkey <key1,key2,key3>* (comma-separated, no spaces needed)\n*.pluginkey set <keys>* replaces your current keys`, msg);
+            await safeWaReply(sock, remoteJid, `❌ That does not look like a valid Gemini API key list.\n\nGemini keys usually start with *AIza* or *AQ.* — grab one free at:\nhttps://aistudio.google.com/apikey\n\nThen: *.pluginkey <key1,key2,key3>* (comma-separated, no spaces needed)\n*.pluginkey set <keys>* replaces your current keys`, msg);
             return;
         }
         const existing = splitApiKeys(cfg.geminiApiKey);
