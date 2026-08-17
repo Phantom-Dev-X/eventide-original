@@ -2885,22 +2885,33 @@ function setupSocketEvents(sock, phoneNumber, tgId, authDir, version, isRestore)
                 }
             }, 10000);
 
-            // Send clean confirmation messages on reconnect
+            // 🎉 WELCOME DMs — FIRST PAIRING ONLY. Gated by a persisted
+            // per-session flag (bootDmSent) so reconnects NEVER spam these
+            // two messages again. Each newly paired session sends them once.
             setTimeout(async () => {
                 try {
                     const myJid = sock?.authState?.creds?.me?.id;
                     if (!myJid) return;
-                    const selfJid = `${myJid.split(':')[0]}@s.whatsapp.net`;
 
-                    log('SELF', `${phoneNumber}: Sending boot DMs...`);
-                    
+                    const cfg = loadBotConfig(phoneNumber);
+                    if (cfg.bootDmSent) {
+                        log('SELF', `${phoneNumber}: Boot DMs already sent — skipping (reconnect).`);
+                        return;
+                    }
+
+                    const selfJid = `${myJid.split(':')[0]}@s.whatsapp.net`;
+                    log('SELF', `${phoneNumber}: First pairing detected — sending welcome DMs...`);
+
                     // Message 1
-                    await sock.sendMessage(selfJid, { text: '✅ Bot connected! Now send .help to get started' });
-                    
-                    // Message 2
                     await sock.sendMessage(selfJid, { text: 'eventide omega connected type .menu to begin' });
-                    
-                    log('SELF', `${phoneNumber}: Boot DMs sent successfully.`);
+
+                    // Message 2
+                    await sock.sendMessage(selfJid, { text: '✅ Bot connected! Now send .help to get started' });
+
+                    cfg.bootDmSent = true;
+                    saveBotConfig(phoneNumber, cfg);
+
+                    log('SELF', `${phoneNumber}: Welcome DMs sent and flag persisted.`);
                 } catch (err) {
                     logError('SELF', `${phoneNumber}: failed to send boot DMs`, err);
                 }
@@ -4529,7 +4540,9 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     // .reset — reset config to defaults
     if (token === '.reset') {
         if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Owner/Dev only.', msg); return; }
-        saveBotConfig(phoneNumber, structuredClone(DEFAULT_BOT_CONFIG));
+        const resetCfg = structuredClone(DEFAULT_BOT_CONFIG);
+        resetCfg.bootDmSent = true; // never re-spam the welcome DMs after a factory reset
+        saveBotConfig(phoneNumber, resetCfg);
         await safeWaReply(sock, remoteJid, buildOmegaTerminal(
             `   ░▒▓█ *CONFIG_WIPED* █▓▒░\n\n` +
             `   ✦ *PREFIX* :: .\n` +
