@@ -1755,9 +1755,10 @@ function formatForWhatsApp(text) {
 // ──────────────────────────────────────────────
 
 async function callGemini(prompt, systemInstruction = '', apiKey, opts = {}) {
-    // GEMINI_MODEL env overrides. Default to a current 3.x flash model —
-    // Google retired the old gemini-2.x & flash-latest aliases for new projects.
-    const model = process.env.GEMINI_MODEL || "gemini-3.5-flash";
+    // GEMINI_MODEL env overrides. Default: gemini-3.6-flash — verified stable
+    // for generateContent on fresh keys (3.5/3.7-flash intermittently return
+    // 503 high-demand; 2.x models are retired for new projects).
+    const model = process.env.GEMINI_MODEL || "gemini-3.6-flash";
     const temperature = typeof opts.temperature === 'number' ? opts.temperature : 0.4;
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
     const body = JSON.stringify({
