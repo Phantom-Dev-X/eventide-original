@@ -3829,6 +3829,41 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         `${phoneNumber}: parse result | topLevel=${parsed.topLevelType} wrappers=${parsed.wrapperChain.join(' > ') || 'none'} leaf=${parsed.leafType} source=${parsed.source} text=${JSON.stringify(parseTextLog)}`
     );
 
+    // ⚡ REACT-V4 — react right here, on the SAME parsed text the command
+    // flow below uses (the WA-CMD logs prove this path works), for BOTH
+    // notify and append event types. Every outcome logs so it can never
+    // fail silently again. Awaited → the ⚡ always lands before the reply.
+    try {
+        if (!fromMe && parsed.text) {
+            const reactPfx = String(loadBotConfig(phoneNumber)?.prefix || '.');
+            const reactEsc = reactPfx.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const reactMatch = new RegExp(`^${reactEsc}[a-z0-9_]{1,20}\\b`, 'i').exec(parsed.text.trim());
+            if (reactMatch) {
+                const ts = typeof msg?.messageTimestamp === 'object'
+                    ? (msg.messageTimestamp?.low || 0)
+                    : Number(msg?.messageTimestamp || 0);
+                const fresh = !ts || ts > (Date.now() / 1000 - 300);
+                if (!fresh) {
+                    log('REACT', `${phoneNumber}: stale cmd '${reactMatch[0]}' skipped (age>5min)`);
+                } else {
+                    const reactSender = msg.key.participant || msg.key.remoteJid;
+                    const reactOwner = jidNormalizedUser(reactSender) === jidNormalizedUser(sock.user?.id || '') || isDevNumber(reactSender);
+                    if (loadBotMode(phoneNumber) !== 'owner' || reactOwner) {
+                        log('REACT', `${phoneNumber}: cmd '${reactMatch[0]}' on ${msgId} (type=${eventType}) — sending ⚡ now...`);
+                        await sock.sendMessage(remoteJid, { react: { text: '⚡', key: msg.key } }, {});
+                        log('REACT', `${phoneNumber}: ⚡ reaction SENT for ${msgId}`);
+                    } else if (VERBOSE_LOGS) {
+                        log('REACT', `${phoneNumber}: owner-only mode — no reaction for ${msgId}`);
+                    }
+                }
+            } else if (VERBOSE_LOGS) {
+                log('REACT', `${phoneNumber}: no cmd prefix in msg ${msgId} (fromMe=${fromMe})`);
+            }
+        }
+    } catch (err) {
+        logError('REACT', `${phoneNumber}: react FAILED for ${msgId}`, err);
+    }
+
     // 🛡️ ANTI ENFORCEMENT: antilink / antimention / antiforward (delete offending msgs)
     try {
         if (remoteJid.endsWith('@g.us') && !fromMe && msg.message) {
@@ -6185,38 +6220,9 @@ function setupMessageHandler(sock, phoneNumber, tgId) {
         for (const msg of messages) {
             if (VERBOSE_LOGS) log('WA-EVENT', `${phoneNumber}: upsert msg | type=${type} id=${msg?.key?.id || '?'} fromMe=${!!msg?.key?.fromMe} jid=${msg?.key?.remoteJid || '?'} participant=${msg?.key?.participant || '-'}`);
 
-            // ⚡ INSTANT REACTION — omega-style: NO type gate. Flaky links
-            // often deliver live messages tagged offline → type 'append',
-            // which silently skipped reactions before. Now ANY fresh,
-            // non-fromMe command message reacts, guarded only by an
-            // anti-replay freshness check (5 min window, like omega).
-            if (!msg?.key?.fromMe && msg?.message && msg?.key?.remoteJid) {
-                try {
-                    const rawTxt = String(extractMessageText(msg)?.text || '').trim();
-                    const pfx = String(loadBotConfig(phoneNumber)?.prefix || '.');
-                    const esc = pfx.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                    const cmdMatch = new RegExp(`^${esc}[a-z0-9_]{1,20}\\b`, 'i').exec(rawTxt);
-                    if (cmdMatch) {
-                        const ts = typeof msg?.messageTimestamp === 'object'
-                            ? (msg.messageTimestamp?.low || 0)
-                            : Number(msg?.messageTimestamp || 0);
-                        const fresh = !ts || ts > (Date.now() / 1000 - 300);
-                        if (!fresh) {
-                            log('REACT', `${phoneNumber}: skipped stale cmd '${cmdMatch[0]}' (ts=${ts}, age>5min)`);
-                        } else {
-                            const senderJid = msg.key.participant || msg.key.remoteJid;
-                            const senderOwner = jidNormalizedUser(senderJid) === jidNormalizedUser(sock.user?.id || '') || isDevNumber(senderJid);
-                            if (loadBotMode(phoneNumber) !== 'owner' || senderOwner) {
-                                log('REACT', `${phoneNumber}: cmd '${cmdMatch[0]}' on ${msg.key.id} (type=${type}) — sending ⚡ now...`);
-                                await sock.sendMessage(msg.key.remoteJid, { react: { text: '⚡', key: msg.key } }, {});
-                                log('REACT', `${phoneNumber}: ⚡ reaction SENT for ${msg.key.id}`);
-                            }
-                        }
-                    }
-                } catch (err) {
-                    logError('REACT', `${phoneNumber}: react FAILED for ${msg.key.id}`, err);
-                }
-            }
+            // ⚡ Reactions now fire inside handleWhatsAppMessage (REACT-V4) —
+            // on the same parsed text the command flow uses, for both notify
+            // and append types.
 
             try {
                 // 🔐 Baileys rc13 ships with poll vote decryption commented out.
@@ -6677,7 +6683,7 @@ async function main() {
         if (commitLine) log('BOOT', `📌 GitHub commit: ${commitLine}`);
         // ⚠️ REACT-V3 BUILD MARKER: this line only exists in builds that have
         // the working ⚡ reaction. If you do NOT see it, you are running OLD code.
-        log('BOOT', `⚡ REACT-V3 BUILD ACTIVE — reactions armed (commit ${commitLine.split(' ')[0] || '?'})`);
+        log('BOOT', `⚡ REACT-V4 BUILD ACTIVE — in-handler reactions armed (commit ${commitLine.split(' ')[0] || '?'})`);
     } catch (_) {}
 
     const restoredCount = await restoreAllSessions();
