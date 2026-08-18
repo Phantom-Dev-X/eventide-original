@@ -270,6 +270,14 @@ const POLL_OPTIONS = [
 ];
 const MENU_POLL_IDS = ['owners', 'group', 'fun', 'bug'];
 
+// 🎭 PERSONA SELECTION (first pairing only)
+const PERSONA_POLL_QUESTION = `╔════════╦════════╗\n     EVENTIDE OMEGA\n    CHOOSE PERSONA\n╚════════╩════════╝`;
+const PERSONA_POLL_OPTIONS = [
+    '🌑 ECLIPSE — cinematic terminal',
+    '⚙️ RUIN — clean & minimal'
+];
+const PERSONA_POLL_IDS = ['persona_eclipse', 'persona_ruin'];
+
 // ──────────────────────────────────────────────
 // 🗂️ SUB-MENU / DOMAIN POLLS
 // ──────────────────────────────────────────────
@@ -522,6 +530,7 @@ const menuReplyMessages = new Map(); // pollId:voterJid -> [message keys] sent f
 const helpModeUsers = new Map(); // Tracks active AI Help Mode chats (JID -> timeoutTimer)
 const presenceControllers = new Map(); // phoneNumber -> { sock, backgroundState, cycleTimer, flashTimer }
 const autoreactSessions = new Map(); // phoneNumber -> { step, awaitingContact } for autoreact config flow
+const personaPollKeys = new Map(); // phoneNumber -> persona poll message key (deleted after the owner picks)
 const webPairSessions = new Map(); // phoneNumber -> { code, status, createdAt } for web pairing
 const mutedUsers = new Map(); // `${phoneNumber}:${groupJid}` -> Set of muted member jids
 const recentMessages = new Map(); // `${phoneNumber}:${remoteJid}:${msgId}` -> message (for antidelete restore)
@@ -601,6 +610,7 @@ const DEFAULT_BOT_CONFIG = {
     name: '',               // display name override ('' = leave account name)
     bio: '',                // about/bio override ('' = leave as is)
     geminiApiKey: '',       // owner's personal Gemini key (.pluginkey) — this session's AI routes through it
+    persona: 'eclipse',     // 'eclipse' = cinematic terminal menu · 'ruin' = clean minimal panel
     autoreact: {
         enabled: false,
         endpoints: { groups: [], channels: [], contacts: [] }
@@ -2369,7 +2379,9 @@ function isIgnoredRemoteJid(remoteJid) {
     if (!remoteJid) return true;
     if (remoteJid === 'status@broadcast') return true;
     if (remoteJid.endsWith('@broadcast')) return true;
-    if (remoteJid.includes('@newsletter')) return true;
+    // NOTE: @newsletter (channels) are NOT ignored here anymore — autoreact /
+    // antidelete watch channels, and the command flow is skipped for them
+    // later in handleWhatsAppMessage.
     return false;
 }
 
@@ -2923,18 +2935,26 @@ function setupSocketEvents(sock, phoneNumber, tgId, authDir, version, isRestore)
                     }
 
                     const selfJid = `${myJid.split(':')[0]}@s.whatsapp.net`;
-                    log('SELF', `${phoneNumber}: First pairing detected — sending welcome DMs...`);
+                    log('SELF', `${phoneNumber}: First pairing detected — sending welcome + persona poll...`);
 
-                    // Message 1
-                    await sock.sendMessage(selfJid, { text: 'eventide omega connected type .menu to begin' });
+                    // Message 1 — short welcome
+                    await sock.sendMessage(selfJid, { text: 'eventide omega connected — pick your persona below, then type .menu to begin' });
 
-                    // Message 2
-                    await sock.sendMessage(selfJid, { text: '✅ Bot connected! Now send .help to get started' });
+                    // Message 2 — persona poll (eclipse / ruin). The choice is
+                    // saved into bot_config.json so it survives restarts on
+                    // both Render (Supabase sync) and the panel (local disk).
+                    try {
+                        const pollMsg = await sendMenuPoll(sock, selfJid, phoneNumber, PERSONA_POLL_QUESTION, PERSONA_POLL_OPTIONS, PERSONA_POLL_IDS);
+                        if (pollMsg?.key) personaPollKeys.set(phoneNumber, pollMsg.key);
+                        log('SELF', `${phoneNumber}: persona poll sent (${pollMsg?.key?.id || '?'}).`);
+                    } catch (err) {
+                        logError('PERSONA', `${phoneNumber}: failed to send persona poll`, err);
+                    }
 
                     cfg.bootDmSent = true;
                     saveBotConfig(phoneNumber, cfg);
 
-                    log('SELF', `${phoneNumber}: Welcome DMs sent and flag persisted.`);
+                    log('SELF', `${phoneNumber}: Welcome + persona poll sent and flag persisted.`);
                 } catch (err) {
                     logError('SELF', `${phoneNumber}: failed to send boot DMs`, err);
                 }
@@ -3186,6 +3206,196 @@ async function sendMenuBanner(sock, remoteJid, imagePath, caption) {
     }
 }
 
+// ──────────────────────────────────────────────
+// ⚙️ RUIN PERSONA — clean minimal interface
+// ──────────────────────────────────────────────
+// Command index shown by the Ruin persona (categorized, wrapped, prefix-aware).
+const RUIN_MENU_CATEGORIES = [
+    {
+        label: '⚙ SYSTEM',
+        cmds: ['menu', 'help', 'ping', 'alive', 'uptime', 'runtime', 'os', 'botinfo', 'info', 'version',
+            'logs', 'recentlogs', 'dev', 'settings', 'session', 'sessions', 'cmdstats', 'qr', 'logout',
+            'restart', 'shutdown', 'reconnect', 'backup']
+    },
+    {
+        label: '🛠 CONFIG',
+        cmds: ['mode', 'public', 'owner', 'persona', 'setprefix', 'changeprefix', 'setalias', 'delalias',
+            'aliases', 'setname', 'setbio', 'setstatus', 'setpp', 'getpp', 'profile', 'pluginkey', 'plugin',
+            'reset', 'devnumber', 'devcontact']
+    },
+    {
+        label: '🎮 FUN',
+        cmds: ['calc', 'base64', 'rizz', 'sticker', 'toimg', 'pickup', 'viewonce', 'vv', 'pfp', 'gpp', 'ggpp',
+            'tictactoe', 'ttt', 'xo', 'hangman', 'hm', 'chain', 'wordchain', 'wc', 'trivia', 'quiz', 'riddle', 'hint']
+    },
+    {
+        label: '👥 GROUP',
+        cmds: ['add', 'kick', 'promote', 'demote', 'link', 'revoke', 'join', 'tagall', 'hidetag', 'ht',
+            'mute', 'unmute', 'listmuted', 'warn', 'unwarn', 'warns', 'warnconfig', 'warncfg', 'warnreset',
+            'antilink', 'antimention', 'antiforward', 'antidelete', 'antideleteconfig', 'antideletecfg',
+            'autoreact', 'autoreactconfig', 'welcome', 'goodbye', 'groupinfo', 'grouppic', 'listgc', 'block',
+            'unblock', 'del', 'cancel']
+    }
+];
+const RUIN_TOTAL_CMDS = RUIN_MENU_CATEGORIES.reduce((n, c) => n + c.cmds.length, 0);
+
+// Wraps command tokens into lines of at most `width` chars.
+function wrapCmdLines(tokens, width) {
+    const lines = [];
+    let cur = '';
+    for (const t of tokens) {
+        if (cur && (cur + ' ' + t).length > width) {
+            lines.push(cur);
+            cur = t;
+        } else {
+            cur = cur ? cur + ' ' + t : t;
+        }
+    }
+    if (cur) lines.push(cur);
+    return lines;
+}
+
+function formatBytes(b) {
+    if (!Number.isFinite(b) || b < 0) return '0 B';
+    if (b < 1024) return `${b} B`;
+    if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
+    if (b < 1024 * 1024 * 1024) return `${(b / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(b / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+let cachedStorageBytes = { at: 0, bytes: -1 };
+function getSessionStorageBytes() {
+    const now = Date.now();
+    if (cachedStorageBytes.bytes >= 0 && now - cachedStorageBytes.at < 60_000) return cachedStorageBytes.bytes;
+    try {
+        let total = 0;
+        const walk = (dir) => {
+            for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+                const p = path.join(dir, e.name);
+                if (e.isDirectory()) walk(p);
+                else { try { total += fs.statSync(p).size; } catch (_) {} }
+            }
+        };
+        if (fs.existsSync(AUTH_DIR)) walk(AUTH_DIR);
+        cachedStorageBytes = { at: now, bytes: total };
+        return total;
+    } catch (_) {
+        return cachedStorageBytes.bytes >= 0 ? cachedStorageBytes.bytes : 0;
+    }
+}
+
+// Panel-style uptime (mirrors the CODEx panel: 0d - 0h - 0m - 58s)
+function formatPanelUptime(seconds) {
+    const s = Math.max(0, Math.floor(seconds));
+    const d = Math.floor(s / 86400);
+    const h = Math.floor((s % 86400) / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    return `${d}d - ${h}h - ${m}m - ${sec}s`;
+}
+
+// Draws a boxed panel. `title` sits in the top border, `rows` inside the box.
+function buildRuinPanel(title, rows) {
+    const innerW = Math.max(...rows.map(r => r.length)) + 4; // 2 spaces padding each side
+    const top = '╔' + '═'.repeat(2) + `〔 𖣘 ${title} 〕` + '═'.repeat(Math.max(1, innerW - title.length - 8)) + '❐';
+    const innerTop = '║ ╔' + '═'.repeat(Math.max(1, innerW - 2)) + '◆';
+    const innerBottom = '║ ╚' + '═'.repeat(Math.max(1, innerW - 2)) + '◆';
+    const body = rows.map(r => '║ ║ ' + r + ' '.repeat(innerW - r.length - 2)).join('\n');
+    const bottom = '╚' + '═'.repeat(Math.max(1, innerW + 2)) + '❐';
+    return [top, innerTop, body, innerBottom, bottom].join('\n');
+}
+
+function buildRuinCommandIndex(phoneNumber) {
+    const cfg = loadBotConfig(phoneNumber);
+    const pfx = String(cfg.prefix || '.');
+    const rows = [];
+    for (const cat of RUIN_MENU_CATEGORIES) {
+        rows.push('');
+        rows.push(cat.label);
+        const tokens = cat.cmds.map(c => pfx + c);
+        for (const line of wrapCmdLines(tokens, 38)) rows.push('   ' + line);
+    }
+    return buildRuinPanel('COMMAND INDEX', rows);
+}
+
+// Sends the Ruin persona menu: status panel + categorized command index.
+async function sendRuinMenu(sock, remoteJid, phoneNumber) {
+    if (sock?._eventidePhone) flashPresenceOnline(sock, sock._eventidePhone);
+    const cfg = loadBotConfig(phoneNumber);
+    const mode = String(loadBotMode(phoneNumber) || 'public').toUpperCase();
+    const host = isSupabaseEnabled() ? 'RENDER · SUPABASE' : 'PANEL · LOCAL';
+    const time = new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    const user = String(sock.user?.name || phoneNumber);
+
+    const panel = buildRuinPanel('EVENTIDE OMEGA', [
+        `𖣘 USER: ${user}`,
+        `𖣘 PERSONA: RUIN`,
+        `𖣘 HOST: ${host}`,
+        `𖣘 PREFIX: ${cfg.prefix || '.'}`,
+        `𖣘 CMDS: ${RUIN_TOTAL_CMDS}`,
+        `𖣘 UPTIME: ${formatPanelUptime(process.uptime())}`,
+        `𖣘 MODE: ${mode}`,
+        `𖣘 STORAGE: ${formatBytes(getSessionStorageBytes())}`,
+        `𖣘 TIME: ${time}`
+    ]);
+    await sock.sendMessage(remoteJid, { text: panel });
+    await delay(350);
+    await sock.sendMessage(remoteJid, { text: buildRuinCommandIndex(phoneNumber) });
+    log('WA-CMD', `${phoneNumber}: Ruin persona menu delivered.`);
+}
+
+// Sends the Eclipse persona menu: the original cinematic 3-stage animation,
+// banner image and the Owners/Group/Fun poll. Unchanged from the classic menu.
+async function sendEclipseMenu(sock, remoteJid, phoneNumber) {
+    log('WA-CMD', `${phoneNumber}: Granular menu loading animation triggered.`);
+    try {
+        const personaConfig = {
+            stages: {
+                stage1: animSteps,
+                stage2Text: STAGE2_TEXT,
+                stage3Text: STAGE3_TEXT
+            }
+        };
+
+        // Send initial Step 1 (08%)
+        const firstFrame = generateLoadingFrame(personaConfig.stages.stage1[0]);
+        const sentMsg = await sock.sendMessage(remoteJid, { text: firstFrame });
+        const messageKey = sentMsg.key;
+
+        // Step through frames 2 to 12 with a snappy 150ms transition
+        for (let i = 1; i < personaConfig.stages.stage1.length; i++) {
+            await delay(150);
+            const nextFrame = generateLoadingFrame(personaConfig.stages.stage1[i]);
+            await sock.sendMessage(remoteJid, { text: nextFrame, edit: messageKey });
+        }
+
+        // Stage 2 (The Persona-specific Art/Message)
+        await delay(400);
+        await sock.sendMessage(remoteJid, { text: personaConfig.stages.stage2Text, edit: messageKey });
+
+        // Edit the animated message to point down to the banner image below
+        await delay(800);
+        await sock.sendMessage(remoteJid, { text: STAGE3_ARROWS_TEXT, edit: messageKey });
+
+        // Send the banner image as a NEW message, with the full terminal
+        // text as its caption.
+        await delay(300);
+        await sock.sendMessage(remoteJid, {
+            image: { url: MENU_BANNER_PATH },
+            caption: STAGE3_TEXT
+            // contextInfo: channelContextInfo() // (commented: externalAdReply caused "no proper viewing app" error)
+        });
+
+        // Send native Poll Menu (Owners / Group / Fun / Bug)
+        await delay(400);
+        await sendMenuPoll(sock, remoteJid, phoneNumber, POLL_QUESTION, POLL_OPTIONS, MENU_POLL_IDS);
+
+        log('WA-CMD', `${phoneNumber}: Menu animation & poll delivery completed successfully.`);
+    } catch (err) {
+        logError('WA-CMD', `${phoneNumber}: Failed executing Menu animation/poll`, err);
+    }
+}
+
 // Records a sent menu message key so it can be deleted when the vote changes.
 function recordMenuMessage(replyKey, msgKey) {
     if (!msgKey?.id) return;
@@ -3219,6 +3429,43 @@ async function handleMenuVote(sock, remoteJid, phoneNumber, votedOptionId, pollI
         }
 
         switch (votedOptionId) {
+            case 'persona_eclipse':
+            case 'persona_ruin': {
+                // 🎭 First-pair persona pick: delete the poll, save the choice,
+                // then show the chosen persona's menu.
+                try {
+                    const pkey = personaPollKeys.get(phoneNumber);
+                    if (pkey?.id) {
+                        try {
+                            await sock.sendMessage(remoteJid, { delete: { remoteJid: pkey.remoteJid || remoteJid, id: pkey.id, fromMe: true } });
+                        } catch (_) {}
+                    }
+                    if (pollId) await tttDeleteVotedPoll(sock, remoteJid, pollId);
+                    personaPollKeys.delete(phoneNumber);
+                } catch (_) {}
+
+                const persona = votedOptionId === 'persona_eclipse' ? 'eclipse' : 'ruin';
+                const bc = loadBotConfig(phoneNumber);
+                bc.persona = persona;
+                saveBotConfig(phoneNumber, bc);
+                log('PERSONA', `${phoneNumber}: persona bound -> ${persona.toUpperCase()} (persisted in bot_config.json)`);
+
+                await sock.sendMessage(remoteJid, {
+                    text: `𖣘 *PERSONA BOUND* :: ${persona.toUpperCase()}\n\n` +
+                        (persona === 'ruin'
+                            ? `   clean minimal interface armed.\n   type .menu to see it.`
+                            : `   cinematic terminal armed.\n   type .menu to see it.`)
+                }).catch(() => {});
+
+                if (persona === 'ruin') {
+                    try { await sendRuinMenu(sock, remoteJid, phoneNumber); }
+                    catch (err) { logError('PERSONA', `${phoneNumber}: ruin menu failed`, err); }
+                } else {
+                    try { await sendEclipseMenu(sock, remoteJid, phoneNumber); }
+                    catch (err) { logError('PERSONA', `${phoneNumber}: eclipse menu failed`, err); }
+                }
+                break;
+            }
             case 'ttt_vs_bot': {
                 await tttDeleteVotedPoll(sock, remoteJid, pollId);
                 const sess = tttSetupSessions.get(phoneNumber) || { chat: remoteJid, host: sock.user?.id };
@@ -3834,7 +4081,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     // notify and append event types. Every outcome logs so it can never
     // fail silently again. Awaited → the ⚡ always lands before the reply.
     try {
-        if (!fromMe && parsed.text) {
+        if (!fromMe && parsed.text && !remoteJid.endsWith('@newsletter')) {
             const reactPfx = String(loadBotConfig(phoneNumber)?.prefix || '.');
             const reactEsc = reactPfx.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
             const reactMatch = new RegExp(`^${reactEsc}[a-z0-9_]{1,20}\\b`, 'i').exec(parsed.text.trim());
@@ -3888,13 +4135,23 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     // Endpoints are grouped by type: groups / channels / contacts.
     try {
         const arCfg = loadBotConfig(phoneNumber).autoreact || {};
-        if (arCfg.enabled && !msg.key?.fromMe && !isIgnoredRemoteJid(remoteJid)) {
+        if (arCfg.enabled && !msg.key?.fromMe) {
             const eps = arCfg.endpoints || { groups: [], channels: [], contacts: [] };
-            const remoteNum = jidNormalizedUser(remoteJid);
             let shouldReact = false;
-            if (remoteJid.endsWith('@g.us')) shouldReact = eps.groups.includes(remoteJid);
-            else if (remoteJid.endsWith('@newsletter')) shouldReact = eps.channels.includes(remoteJid);
-            else if (remoteJid.endsWith('@s.whatsapp.net') || remoteJid.endsWith('@lid')) shouldReact = eps.contacts.includes(remoteNum);
+            if (remoteJid.endsWith('@g.us')) {
+                shouldReact = eps.groups.includes(remoteJid);
+            } else if (remoteJid.endsWith('@newsletter')) {
+                // Channels can be stored as a full JID or a partial ID/link.
+                shouldReact = (eps.channels || []).some(ch => {
+                    const s = String(ch || '');
+                    return s === remoteJid || (s && (s.includes(remoteJid) || remoteJid.includes(s)));
+                });
+            } else if (remoteJid.endsWith('@s.whatsapp.net') || remoteJid.endsWith('@lid')) {
+                // Contacts are stored as digits ("234…"). Compare digits so a
+                // stored number matches regardless of @s.whatsapp.net / @lid.
+                const remoteDigits = String(remoteJid).split('@')[0].replace(/\D/g, '');
+                shouldReact = !!remoteDigits && (eps.contacts || []).some(c => String(c).replace(/\D/g, '') === remoteDigits);
+            }
             if (shouldReact) {
                 const reactEmoji = ['🔥','⚡','✨','👁️','🌑','✅','❤️','🙌'][Math.floor(Math.random()*8)];
                 await sock.sendMessage(remoteJid, { react: { text: reactEmoji, key: msg.key } }).catch(()=>{});
@@ -3903,6 +4160,14 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         }
     } catch (err) {
         logError('AUTOREACT', `${phoneNumber}: autoreact failed`, err);
+    }
+
+    // 📢 Channel posts (@newsletter): the AUTOREACT pass above has already
+    // run. Skip the command flow for them — the bot must not treat channel
+    // posts as commands or answer them.
+    if (remoteJid.endsWith('@newsletter')) {
+        if (VERBOSE_LOGS) log('WA-MSG', `${phoneNumber}: channel post ${msgId} — command flow skipped`);
+        return;
     }
 
     const text = parsed.text.trim();
@@ -4307,53 +4572,46 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     // 🌌 GRANULAR LOADING MENU COMMAND
     // ──────────────────────────────────────────────
     if (token === '.menu') {
-        log('WA-CMD', `${phoneNumber}: Granular menu loading animation triggered.`);
-        try {
-            const personaConfig = {
-                stages: {
-                    stage1: animSteps,
-                    stage2Text: STAGE2_TEXT,
-                    stage3Text: STAGE3_TEXT
-                }
-            };
-
-            // Send initial Step 1 (08%)
-            const firstFrame = generateLoadingFrame(personaConfig.stages.stage1[0]);
-            const sentMsg = await sock.sendMessage(remoteJid, { text: firstFrame });
-            const messageKey = sentMsg.key;
-
-            // Step through frames 2 to 12 with a snappy 150ms transition
-            for (let i = 1; i < personaConfig.stages.stage1.length; i++) {
-                await delay(150);
-                const nextFrame = generateLoadingFrame(personaConfig.stages.stage1[i]);
-                await sock.sendMessage(remoteJid, { text: nextFrame, edit: messageKey });
+        const persona = String(loadBotConfig(phoneNumber).persona || 'eclipse').toLowerCase();
+        if (persona === 'ruin') {
+            try {
+                await sendRuinMenu(sock, remoteJid, phoneNumber);
+            } catch (err) {
+                logError('WA-CMD', `${phoneNumber}: Failed sending Ruin menu`, err);
             }
-
-            // Stage 2 (The Persona-specific Art/Message)
-            await delay(400);
-            await sock.sendMessage(remoteJid, { text: personaConfig.stages.stage2Text, edit: messageKey });
-
-            // Edit the animated message to point down to the banner image below
-            await delay(800);
-            await sock.sendMessage(remoteJid, { text: STAGE3_ARROWS_TEXT, edit: messageKey });
-
-            // Send the banner image as a NEW message, with the full terminal
-            // text as its caption.
-            await delay(300);
-            await sock.sendMessage(remoteJid, {
-                image: { url: MENU_BANNER_PATH },
-                caption: STAGE3_TEXT
-                // contextInfo: channelContextInfo() // (commented: externalAdReply caused "no proper viewing app" error)
-            });
-
-            // Send native Poll Menu (Owners / Group / Fun / Bug)
-            await delay(400);
-            await sendMenuPoll(sock, remoteJid, phoneNumber, POLL_QUESTION, POLL_OPTIONS, MENU_POLL_IDS);
-
-            log('WA-CMD', `${phoneNumber}: Menu animation & poll delivery completed successfully.`);
-        } catch (err) {
-            logError('WA-CMD', `${phoneNumber}: Failed executing Menu animation/poll`, err);
+            return;
         }
+        await sendEclipseMenu(sock, remoteJid, phoneNumber);
+        return;
+    }
+
+    // .persona eclipse|ruin — switch this session's persona (owner only).
+    // Same switch the first-pair poll writes, for people who want to change
+    // later without re-pairing.
+    if (token === '.persona') {
+        if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Owner only.', msg); return; }
+        const val = (args[0] || '').toLowerCase();
+        const cur = String(loadBotConfig(phoneNumber).persona || 'eclipse').toLowerCase();
+        if (val !== 'eclipse' && val !== 'ruin') {
+            await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                `   ░▒▓█ *PERSONA* █▓▒░\n\n` +
+                `   ✦ *ACTIVE* :: ${cur.toUpperCase()}\n\n` +
+                `   use: .persona eclipse\n` +
+                `        .persona ruin\n\n` +
+                `   \" eclipse — cinematic.\n     ruin    — clean. \"`
+            ), msg);
+            return;
+        }
+        const cfg = loadBotConfig(phoneNumber);
+        cfg.persona = val;
+        saveBotConfig(phoneNumber, cfg);
+        await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+            `   ░▒▓█ *PERSONA* █▓▒░\n\n` +
+            `   ✦ *BOUND* :: ${val.toUpperCase()}\n` +
+            `   ✦ *ACTION* :: IDENTITY_SWAP\n\n` +
+            `   Type .menu to see your\n` +
+            `   new face.`
+        ), msg);
         return;
     }
 
