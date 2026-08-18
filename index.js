@@ -4119,8 +4119,11 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     // flow below uses (the WA-CMD logs prove this path works), for BOTH
     // notify and append event types. Every outcome logs so it can never
     // fail silently again. Awaited → the ⚡ always lands before the reply.
+    // 'notify' + fromMe = the OWNER typing from another device of the bot's
+    // own number — those get the ⚡ too. The bot's own sent echoes
+    // ('append' + fromMe) never reach here (anti-echo return above).
     try {
-        if (!fromMe && parsed.text && !remoteJid.endsWith('@newsletter')) {
+        if ((!fromMe || eventType === 'notify') && parsed.text && !remoteJid.endsWith('@newsletter')) {
             const reactPfx = String(loadBotConfig(phoneNumber)?.prefix || '.');
             const reactEsc = reactPfx.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
             const reactMatch = new RegExp(`^${reactEsc}[a-z0-9_]{1,20}\\b`, 'i').exec(parsed.text.trim());
