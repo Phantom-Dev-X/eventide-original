@@ -13,6 +13,19 @@ Two personas, chosen once at first pairing. The choice is permanent per session
 4. **Switch anytime (owner only):** `.persona eclipse` / `.persona ruin`
    (`.persona` alone shows the current binding).
 
+## 🔒 PERSONA GATE (new)
+
+If the session has **no persona saved yet**, ANY command is blocked and the bot
+asks for the persona pick instead of running:
+
+- **DM (owner)** → persona prompt + poll. Commands only run after the vote.
+- **While a poll is pending** → short "pick in the poll above 👆" nudge (no duplicate polls).
+- **Groups (non-owner)** → "PERSONA LOCKED — ask the owner" (no poll spam in groups).
+- **`.persona <eclipse|ruin>`** always passes the gate (manual setter).
+
+Once `persona` is saved in config, the gate never triggers again — commands run
+normally, on Render (Supabase restore) and panel (local disk) alike.
+
 ## Ruin menu
 
 **Message 1 — status panel:**
@@ -46,8 +59,9 @@ prefix/aliases/autoreact etc.:
 - **Panel (local storage):** the `sessions/` folder lives on the panel disk;
   boot's auto-pull only touches code files, never `sessions/` → persona survives.
 
-Defaults: `'eclipse'` (existing users keep their current experience until they
-pick a persona or run `.persona ruin`). `.reset` returns to eclipse.
+Defaults: `''` = **UNBOUND** — the persona gate asks on the first command.
+Once picked (poll or `.persona`), the value is `'eclipse'` or `'ruin'`.
+`.reset` returns to unbound (gate asks again on next command).
 
 ## Implementation notes
 

@@ -610,7 +610,7 @@ const DEFAULT_BOT_CONFIG = {
     name: '',               // display name override ('' = leave account name)
     bio: '',                // about/bio override ('' = leave as is)
     geminiApiKey: '',       // owner's personal Gemini key (.pluginkey) — this session's AI routes through it
-    persona: 'eclipse',     // 'eclipse' = cinematic terminal menu · 'ruin' = clean minimal panel
+    persona: '',            // '' = UNBOUND (any command asks for the persona pick) · 'eclipse' | 'ruin' once chosen
     autoreact: {
         enabled: false,
         endpoints: { groups: [], channels: [], contacts: [] }
@@ -4188,6 +4188,37 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     }
 
     // ──────────────────────────────────────────────
+    // 🎭 PERSONA GATE — if this session has no persona bound yet, ANY command
+    // asks for the choice first (poll in DMs) instead of running. Once bound
+    // (or set manually via .persona) commands run normally — the gate never
+    // triggers again. `.persona` itself always passes so the owner can set it.
+    // ──────────────────────────────────────────────
+    if (startsWithDot && token !== '.persona') {
+        const boundPersona = String(botConfig.persona || '').trim().toLowerCase();
+        if (!['eclipse', 'ruin'].includes(boundPersona)) {
+            const gateOwner = msg.key.fromMe
+                || jidNormalizedUser(msg.key.participant || msg.key.remoteJid) === jidNormalizedUser(sock.user?.id || '');
+            try {
+                if (remoteJid.endsWith('@g.us') && !gateOwner) {
+                    // Non-owners in groups: don't spam polls there.
+                    await safeWaReply(sock, remoteJid, `🎭 *PERSONA LOCKED*\n\nThis bot's persona hasn't been\nchosen yet. Ask the owner to\npick it in the bot's DM.`, msg);
+                } else if (personaPollKeys.get(phoneNumber)) {
+                    // A persona poll is already pending in this chat.
+                    await safeWaReply(sock, remoteJid, `🎭 *PERSONA FIRST*\n\nPick your persona in the poll\nabove 👆 — then commands run.\n\n(saved forever, no re-pairing)`, msg);
+                } else {
+                    await safeWaReply(sock, remoteJid, `🎭 *EVENTIDE OMEGA — PERSONA*\n\nPick how the bot looks & feels:\n\n🌑 *ECLIPSE* — cinematic terminal\n⚙️ *RUIN* — clean & minimal\n\nVote in the poll below 👇 —\nsaved forever.`, msg);
+                    const pollMsg = await sendMenuPoll(sock, remoteJid, phoneNumber, PERSONA_POLL_QUESTION, PERSONA_POLL_OPTIONS, PERSONA_POLL_IDS);
+                    if (pollMsg?.key) personaPollKeys.set(phoneNumber, pollMsg.key);
+                }
+                log('PERSONA', `${phoneNumber}: persona gate asked ${remoteJid} (${msgId}, cmd='${token}')`);
+            } catch (err) {
+                logError('PERSONA', `${phoneNumber}: persona gate failed`, err);
+            }
+            return;
+        }
+    }
+
+    // ──────────────────────────────────────────────
     // 🔒 BOT ACCESS PRIVACY MODE ENFORCEMENT & CONVERSATIONAL INTERCEPTOR
     // ──────────────────────────────────────────────
     const currentMode = loadBotMode(phoneNumber);
@@ -4591,7 +4622,8 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     if (token === '.persona') {
         if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Owner only.', msg); return; }
         const val = (args[0] || '').toLowerCase();
-        const cur = String(loadBotConfig(phoneNumber).persona || 'eclipse').toLowerCase();
+        const curRaw = String(loadBotConfig(phoneNumber).persona || '').trim().toLowerCase();
+        const cur = ['eclipse', 'ruin'].includes(curRaw) ? curRaw : 'UNBOUND';
         if (val !== 'eclipse' && val !== 'ruin') {
             await safeWaReply(sock, remoteJid, buildOmegaTerminal(
                 `   ░▒▓█ *PERSONA* █▓▒░\n\n` +
