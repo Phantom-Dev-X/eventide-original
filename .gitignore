@@ -14,6 +14,9 @@ backups/
 # Environment
 .env
 
+# Runtime stamp (written by boot.js / auto-deploy)
+CURRENT_COMMIT.txt
+
 # OS
 .DS_Store
 Thumbs.db

@@ -3,12 +3,21 @@
 Render stays on Supabase (ephemeral disk).  
 This panel box uses the **persistent volume** only.
 
+## 🛰 Auto-deploy (push → live, no restart button)
+
+The panel **auto-pulls from GitHub** and restarts the bot whenever you push a
+commit. It also DMs your WhatsApp when the new build is online. Details:
+**[AUTO_DEPLOY.md](./AUTO_DEPLOY.md)** — recommended start command is `npm start`
+(boot.js supervises + auto-deploys); `node index.js` also self-updates.
+
 ## Startup command
 
 ```bash
 npm install --omit=dev
-node index.js
+npm start
 ```
+
+(or `node index.js` — auto-deploy works either way)
 
 Node **18+**. Docker image: `node:20-bookworm` (or whatever your host has ≥18).
 

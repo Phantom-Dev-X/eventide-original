@@ -17,6 +17,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import https from 'https';
+import { execSync, spawn } from 'child_process';
 
 // Import Supabase Sync Service
 import {
@@ -611,6 +612,7 @@ const DEFAULT_BOT_CONFIG = {
     bio: '',                // about/bio override ('' = leave as is)
     geminiApiKey: '',       // owner's personal Gemini key (.pluginkey) — this session's AI routes through it
     persona: '',            // '' = UNBOUND (any command asks for the persona pick) · 'eclipse' | 'ruin' once chosen
+    lastDeployNotifiedCommit: '', // last commit hash the owner got a "deploy complete" DM for
     autoreact: {
         enabled: false,
         endpoints: { groups: [], channels: [], contacts: [] }
@@ -2959,6 +2961,43 @@ function setupSocketEvents(sock, phoneNumber, tgId, authDir, version, isRestore)
                     logError('SELF', `${phoneNumber}: failed to send boot DMs`, err);
                 }
             }, 5000);
+
+            // 📣 DEPLOY NOTICE — DM the owner once per deployed commit (auto
+            // deploy or manual redeploy): "build deployed, bot online". Gated
+            // by the commit hash so reconnects never re-spam.
+            try {
+                const deployMyJid = sock?.authState?.creds?.me?.id;
+                if (deployMyJid) {
+                    const runCommit = (() => {
+                        try {
+                            const c = fs.readFileSync(path.join(__dirname, 'CURRENT_COMMIT.txt'), 'utf8').trim();
+                            return c ? c.split(' ')[0] : '';
+                        } catch (_) { return ''; }
+                    })();
+                    if (runCommit) {
+                        const dc = loadBotConfig(phoneNumber);
+                        if (dc.lastDeployNotifiedCommit !== runCommit) {
+                            dc.lastDeployNotifiedCommit = runCommit;
+                            saveBotConfig(phoneNumber, dc);
+                            const deploySelfJid = `${deployMyJid.split(':')[0]}@s.whatsapp.net`;
+                            await sock.sendMessage(deploySelfJid, {
+                                text: `🔄 *DEPLOY COMPLETE*\n\n` +
+                                    `✅ eventide omega is online\n` +
+                                    `📦 commit: ${runCommit.slice(0, 7)}\n\n` +
+                                    `⚡ ready — type *.ping* to test.\n\n` +
+                                    `   " the void rebuilt itself\n     and it is faster now. "`
+                            }).catch(() => {});
+                            log('DEPLOY', `${phoneNumber}: deploy notice DM sent for commit ${runCommit}`);
+                        }
+                    }
+                }
+            } catch (err) {
+                logError('DEPLOY', `${phoneNumber}: deploy notice failed`, err);
+            }
+
+            // 📡 READY MARKER — this is the log line that says the bot is
+            // responding NOW. Watch for it after every deploy/restart.
+            log('READY', `${phoneNumber}: ⚡ SESSION READY — the bot is responding now. Type .ping in WhatsApp to confirm.`);
             return;
         }
 
@@ -6500,6 +6539,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
 // Attach event listeners
 function setupMessageHandler(sock, phoneNumber, tgId) {
     log('WA-HANDLER', `${phoneNumber}: attaching message handlers (tgId=${tgId ?? 'none'})`);
+    log('WA-HANDLER', `${phoneNumber}: ✅ commands now accepted — the bot will process incoming messages from here on.`);
     log('REACT', `${phoneNumber}: ⚡ REACT SYSTEM ARMED — prefix="${loadBotConfig(phoneNumber)?.prefix || '.'}" mode=${loadBotMode(phoneNumber)} (VERBOSE_LOGS=${VERBOSE_LOGS ? 'ON' : 'OFF'})`);
 
     sock.ev.on('messages.upsert', async (event) => {
@@ -6933,7 +6973,112 @@ initWebApp(app, {
 // ──────────────────────────────────────────────
 // 🚀 MAIN
 // ──────────────────────────────────────────────
+// ──────────────────────────────────────────────
+// 🛰 AUTO-DEPLOY (unsupervised mode — panel runs `node index.js` directly)
+// When boot.js is NOT supervising (Render via boot.js, or panel via npm start),
+// boot.js handles deploys. Here we handle the plain `node index.js` panel.
+// Polls GitHub every few minutes; on a new commit: pull (npm install if
+// package.json changed) then relaunch the bot as a fresh process.
+// ──────────────────────────────────────────────
+function isPanelMode() {
+    const v = String(process.env.USE_SUPABASE || '').trim().toLowerCase();
+    return ['0', 'false', 'off', 'no', 'disabled'].includes(v);
+}
+
+function autoDeployPollEnabled() {
+    const v = String(process.env.AUTO_DEPLOY || '').trim().toLowerCase();
+    if (v === '') return isPanelMode();
+    return ['1', 'true', 'on', 'yes', 'enabled'].includes(v);
+}
+
+let deployInProgress = false;
+
+async function pullLatestCode() {
+    const shQ = (cmd) => execSync(cmd, {
+        cwd: __dirname,
+        encoding: 'utf8',
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+    });
+    if (!fs.existsSync(path.join(__dirname, '.git'))) throw new Error('no .git dir');
+    try { shQ('git config --global --add safe.directory ' + JSON.stringify(__dirname)); } catch (_) {}
+    const remoteUrl = String(process.env.GIT_REMOTE_URL || 'https://github.com/Phantom-Dev-X/eventide-original.git').trim();
+    try {
+        shQ(`git remote add origin ${remoteUrl}`);
+    } catch (_) {
+        try { shQ(`git remote set-url origin ${remoteUrl}`); } catch (_) {}
+    }
+    const local = shQ('git rev-parse HEAD');
+    shQ('git fetch --depth 1 origin main');
+    const remote = shQ('git rev-parse origin/main');
+    if (local === remote) return { changed: false, commit: local };
+    let pkgBefore = '';
+    try { pkgBefore = shQ('git rev-parse HEAD:package.json'); } catch (_) {}
+    shQ('git checkout -f -B main origin/main');
+    let commit = remote;
+    try { commit = shQ('git rev-parse HEAD'); } catch (_) {}
+    try { fs.writeFileSync(path.join(__dirname, 'CURRENT_COMMIT.txt'), `${commit} auto-deploy\n`, 'utf8'); } catch (_) {}
+    let pkgAfter = '';
+    try { pkgAfter = shQ('git rev-parse HEAD:package.json'); } catch (_) {}
+    if (pkgBefore && pkgAfter && pkgBefore !== pkgAfter) {
+        log('AUTO-DEPLOY', 'package.json changed — installing dependencies...');
+        try { shQ('npm install --omit=dev --no-audit --no-fund'); } catch (err) {
+            logError('AUTO-DEPLOY', 'npm install failed', err);
+        }
+    }
+    return { changed: true, commit };
+}
+
+function relaunchSelf() {
+    const entry = path.join(__dirname, 'index.js');
+    // New process waits a few seconds before binding the port, giving this
+    // process time to exit and free it (no EADDRINUSE on the panel).
+    const childProc = spawn(process.execPath, [entry], {
+        cwd: __dirname,
+        detached: true,
+        stdio: 'inherit',
+        env: { ...process.env, EVENTIDE_BIND_DELAY_MS: '3500' }
+    });
+    childProc.unref();
+    log('AUTO-DEPLOY', 'new bot process spawned — old process exiting in 1.5s...');
+    setTimeout(() => process.exit(0), 1500);
+}
+
+async function deployLatest() {
+    if (deployInProgress) return;
+    deployInProgress = true;
+    try {
+        const res = await pullLatestCode();
+        if (res.changed) {
+            log('AUTO-DEPLOY', `🚀 new commit ${(res.commit || '').slice(0, 7)} pulled — restarting bot...`);
+            if (String(process.env.EVENTIDE_SUPERVISED || '') === '1') {
+                log('AUTO-DEPLOY', 'supervised mode: exiting so boot.js respawns the new build');
+                setTimeout(() => process.exit(0), 500);
+            } else {
+                relaunchSelf();
+            }
+        }
+    } catch (err) {
+        logError('AUTO-DEPLOY', 'deploy failed', err);
+        deployInProgress = false;
+    }
+}
+
+function setupAutoDeployPoller() {
+    if (String(process.env.EVENTIDE_SUPERVISED || '') === '1') {
+        log('AUTO-DEPLOY', 'supervised by boot.js — deploys handled there');
+        return;
+    }
+    if (!autoDeployPollEnabled()) {
+        log('AUTO-DEPLOY', 'off (AUTO_DEPLOY not enabled for this host)');
+        return;
+    }
+    const mins = Math.max(0.05, parseFloat(process.env.AUTO_DEPLOY_POLL_MINUTES || '3') || 3);
+    log('AUTO-DEPLOY', `🛰 watching GitHub every ${mins} min — pushes deploy automatically`);
+    setInterval(() => { deployLatest().catch(() => {}); }, mins * 60 * 1000);
+}
+
 async function main() {
+    const buildStartedAt = Date.now();
     initGames({
         sendMenuPoll,
         buildOmegaTerminal,
@@ -6970,7 +7115,11 @@ async function main() {
         const commitLine = fs.existsSync(commitFile)
             ? fs.readFileSync(commitFile, 'utf8').trim()
             : '';
-        if (commitLine) log('BOOT', `📌 GitHub commit: ${commitLine}`);
+        if (commitLine) {
+            log('BUILD', `📦 running commit: ${commitLine}`);
+        } else {
+            log('BUILD', '📦 running commit: unknown (CURRENT_COMMIT.txt missing)');
+        }
         // ⚠️ REACT-V3 BUILD MARKER: this line only exists in builds that have
         // the working ⚡ reaction. If you do NOT see it, you are running OLD code.
         log('BOOT', `⚡ REACT-V4 BUILD ACTIVE — in-handler reactions armed (commit ${commitLine.split(' ')[0] || '?'})`);
@@ -6979,14 +7128,41 @@ async function main() {
     const restoredCount = await restoreAllSessions();
     log('BOOT', `🔁 Session reconnection startup pass finished. Sessions queued: ${restoredCount}`);
 
+    // 🔁 SELF-RESTART HANDOFF: the auto-deploy relaunch passes this delay so
+    // the old process can exit and free the port before this one binds.
+    const bindDelayMs = parseInt(process.env.EVENTIDE_BIND_DELAY_MS || '0', 10) || 0;
+    if (bindDelayMs > 0) {
+        log('DEPLOY', `handoff: waiting ${bindDelayMs}ms before binding port...`);
+        await delay(bindDelayMs);
+    }
+
+    // 🌐 DEPLOY WEBHOOK — POST /api/deploy triggers pull+restart instantly.
+    // Optional DEPLOY_SECRET env: send header x-deploy-secret to match it.
+    app.post('/api/deploy', (req, res) => {
+        const secret = String(process.env.DEPLOY_SECRET || '').trim();
+        const provided = String(req.headers['x-deploy-secret'] || '');
+        if (secret && provided !== secret) {
+            log('DEPLOY', 'webhook rejected (bad secret)');
+            return res.status(403).json({ ok: false, error: 'bad secret' });
+        }
+        log('DEPLOY', '🌐 /api/deploy webhook — pulling latest commit and restarting...');
+        res.json({ ok: true, deploying: true });
+        setTimeout(() => deployLatest().catch(() => {}), 150);
+    });
+
     app.listen(PORT, '0.0.0.0', () => {
         log('HTTP', `Server listening on port ${PORT}`);
         log('HTTP', `GET / -> status summary`);
         log('HTTP', `GET /health -> health info`);
         log('HTTP', `GET /ping -> pong`);
+        log('HTTP', `POST /api/deploy -> pull latest commit + restart (auto-deploy webhook)`);
         log('BOT', `Telegram bot polling is active.`);
         log('BOT', `Max users: ${MAX_USERS}`);
+        log('BUILD', `✅ BUILD DONE in ${((Date.now() - buildStartedAt) / 1000).toFixed(1)}s — HTTP is up.`);
+        log('BUILD', `⏳ sockets connecting... when you see "SESSION READY" for your number, .ping will respond.`);
     });
+
+    setupAutoDeployPoller();
 }
 
 process.on('unhandledRejection', err => logError('PROCESS', 'Unhandled promise rejection', err));
