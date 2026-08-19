@@ -16,6 +16,7 @@ backups/
 
 # Runtime stamp (written by boot.js / auto-deploy)
 CURRENT_COMMIT.txt
+BOOT_STATUS.txt
 
 # OS
 .DS_Store

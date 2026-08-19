@@ -7,9 +7,11 @@ This panel box uses the **persistent volume** only.
 
 Deploys are manual + instant: push to GitHub, then type **`.gitpull`** in
 WhatsApp (dev only) — the bot pulls the new commit and restarts itself, with
-staged progress messages and the commit name. The owner also gets a
-`🔄 DEPLOY COMPLETE` DM when the new build is online. Details:
-**[AUTO_DEPLOY.md](./AUTO_DEPLOY.md)**.
+staged progress messages and the commit name.
+
+**Panel restart also checks git**: on boot, the supervisor pulls the latest
+commit and the bot DMs the result to your WhatsApp (NEW COMMIT DEPLOYED /
+ALREADY LATEST). Details: **[AUTO_DEPLOY.md](./AUTO_DEPLOY.md)**.
 
 ## Startup command
 

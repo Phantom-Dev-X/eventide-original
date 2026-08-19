@@ -3049,32 +3049,71 @@ function setupSocketEvents(sock, phoneNumber, tgId, authDir, version, isRestore)
                 }
             }, 5000);
 
-            // 📣 DEPLOY NOTICE — DM the owner once per deployed commit (auto
-            // deploy or manual redeploy): "build deployed, bot online". Gated
-            // by the commit hash so reconnects never re-spam.
+            // 📣 DEPLOY NOTICE — status DMs on WhatsApp, never just logs.
+            // Sources, in order:
+            //   1) BOOT_STATUS.txt — written by boot.js on every panel restart
+            //      (deployed | latest | skipped). One-shot: read + deleted here,
+            //      then DM'd to the owner on WhatsApp.
+            //   2) CURRENT_COMMIT.txt change (Render redeploys, etc.) — the
+            //      classic DEPLOY COMPLETE DM, gated by lastDeployNotifiedCommit
+            //      so reconnects never re-spam.
             try {
                 const deployMyJid = sock?.authState?.creds?.me?.id;
                 if (deployMyJid) {
-                    const runCommit = (() => {
+                    const deploySelfJid = `${deployMyJid.split(':')[0]}@s.whatsapp.net`;
+                    const bootStatusPath = path.join(__dirname, 'BOOT_STATUS.txt');
+                    let bootStatus = null;
+                    if (fs.existsSync(bootStatusPath)) {
                         try {
-                            const c = fs.readFileSync(path.join(__dirname, 'CURRENT_COMMIT.txt'), 'utf8').trim();
-                            return c ? c.split(' ')[0] : '';
-                        } catch (_) { return ''; }
-                    })();
-                    if (runCommit) {
-                        const dc = loadBotConfig(phoneNumber);
-                        if (dc.lastDeployNotifiedCommit !== runCommit) {
-                            dc.lastDeployNotifiedCommit = runCommit;
-                            saveBotConfig(phoneNumber, dc);
-                            const deploySelfJid = `${deployMyJid.split(':')[0]}@s.whatsapp.net`;
-                            await sock.sendMessage(deploySelfJid, {
-                                text: `🔄 *DEPLOY COMPLETE*\n\n` +
-                                    `✅ eventide omega is online\n` +
-                                    `📦 commit: ${runCommit.slice(0, 7)}\n\n` +
-                                    `⚡ ready — type *.ping* to test.\n\n` +
-                                    `   " the void rebuilt itself\n     and it is faster now. "`
-                            }).catch(() => {});
-                            log('DEPLOY', `${phoneNumber}: deploy notice DM sent for commit ${runCommit}`);
+                            const raw = fs.readFileSync(bootStatusPath, 'utf8').trim();
+                            fs.unlinkSync(bootStatusPath); // one-shot per boot
+                            if (raw) {
+                                const parts = raw.split('|');
+                                bootStatus = { kind: parts[0] || '', hash: parts[1] || '', name: parts.slice(2).join('|') || '' };
+                            }
+                        } catch (_) {}
+                    }
+
+                    if (bootStatus && bootStatus.kind === 'deployed') {
+                        await sock.sendMessage(deploySelfJid, {
+                            text: `🔄 *PANEL RESTART — NEW COMMIT DEPLOYED*\n\n` +
+                                `   "${truncateCommitName(bootStatus.name)}"\n` +
+                                `   (${(bootStatus.hash || '').slice(0, 7)})\n\n` +
+                                `✅ eventide omega is online\n` +
+                                `⚡ ready — type *.ping* to test.\n\n` +
+                                `   " the void rebuilt itself\n     and it is faster now. "`
+                        }).catch(() => {});
+                        log('DEPLOY', `${phoneNumber}: panel-restart deploy DM sent (${bootStatus.name}).`);
+                    } else if (bootStatus && bootStatus.kind === 'latest') {
+                        await sock.sendMessage(deploySelfJid, {
+                            text: `✅ *PANEL RESTART — ALREADY LATEST*\n\n` +
+                                `   "${truncateCommitName(bootStatus.name)}"\n` +
+                                `   (${(bootStatus.hash || '').slice(0, 7)})\n\n` +
+                                `⚡ online — type *.ping* to test.`
+                        }).catch(() => {});
+                        log('DEPLOY', `${phoneNumber}: panel-restart already-latest DM sent (${bootStatus.name}).`);
+                    } else {
+                        // no boot-sync result (Render path) — classic commit-change DM
+                        const runCommit = (() => {
+                            try {
+                                const c = fs.readFileSync(path.join(__dirname, 'CURRENT_COMMIT.txt'), 'utf8').trim();
+                                return c ? c.split(' ')[0] : '';
+                            } catch (_) { return ''; }
+                        })();
+                        if (runCommit) {
+                            const dc = loadBotConfig(phoneNumber);
+                            if (dc.lastDeployNotifiedCommit !== runCommit) {
+                                dc.lastDeployNotifiedCommit = runCommit;
+                                saveBotConfig(phoneNumber, dc);
+                                await sock.sendMessage(deploySelfJid, {
+                                    text: `🔄 *DEPLOY COMPLETE*\n\n` +
+                                        `✅ eventide omega is online\n` +
+                                        `📦 commit: ${runCommit.slice(0, 7)}\n\n` +
+                                        `⚡ ready — type *.ping* to test.\n\n` +
+                                        `   " the void rebuilt itself\n     and it is faster now. "`
+                                }).catch(() => {});
+                                log('DEPLOY', `${phoneNumber}: deploy notice DM sent for commit ${runCommit}`);
+                            }
                         }
                     }
                 }

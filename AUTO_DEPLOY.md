@@ -37,11 +37,39 @@ push to GitHub → type .gitpull in WhatsApp → bot updates itself in seconds
 No panel, no restart button, no waiting. The owner still gets the
 `🔄 DEPLOY COMPLETE` DM in WhatsApp when the new build is online.
 
+## Panel restart = boot sync + WhatsApp status
+
+Every panel restart, `boot.js` checks GitHub main on boot (panel default; on
+Render it's off — the platform redeploys itself):
+
+- **New commit found** → pulls it (npm-install if package.json changed),
+  starts the bot with it, and the bot DMs the owner on WhatsApp:
+  ```
+  🔄 PANEL RESTART — NEW COMMIT DEPLOYED
+     "B: version two - the glow up"
+     (ba96e10)
+  ✅ eventide omega is online
+  ⚡ ready — type .ping to test.
+  ```
+- **Already latest** → the bot DMs:
+  ```
+  ✅ PANEL RESTART — ALREADY LATEST
+     "B: version two - the glow up"
+     (ba96e10)
+  ⚡ online — type .ping to test.
+  ```
+- **Offline / fetch failed** → keeps the current build, no DM.
+
+These status messages go to **WhatsApp** (not just the console logs) via a
+one-shot `BOOT_STATUS.txt` file that boot.js writes and the bot consumes.
+Restart the panel, watch the DM come in.
+
 ## Env knobs
 
 | Key | Notes |
 |---|---|
 | `GIT_REMOTE_URL` | defaults to `https://github.com/Phantom-Dev-X/eventide-original.git` — point at a fork if you ever need to |
+| `AUTO_UPDATE` | panel default **on**: check git + deploy at every panel restart · Render default **off** |
 
 ## Reading the logs — when is the bot ready to answer?
 
