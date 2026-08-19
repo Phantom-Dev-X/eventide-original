@@ -42,10 +42,12 @@ const autoDeploy = flag('AUTO_DEPLOY');
 const pollEnabled = autoDeploy === '' ? panelMode : isOn(autoDeploy);
 const POLL_MIN = Math.max(0.05, parseFloat(process.env.AUTO_DEPLOY_POLL_MINUTES || '3') || 3);
 
-function sh(cmd) {
+function sh(cmd, timeoutMs = 30000) {
     execSync(cmd, {
         cwd: root,
         stdio: 'inherit',
+        timeout: timeoutMs, // never let a sync op block the event loop forever — a
+                            // queued SIGTERM handler must always be able to run
         env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
     });
 }
@@ -59,11 +61,12 @@ function hasCmd(cmd) {
     }
 }
 
-function shQuiet(cmd) {
+function shQuiet(cmd, timeoutMs = 30000) {
     return execSync(cmd, {
         cwd: root,
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: timeoutMs,
         env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
     }).trim();
 }
@@ -135,7 +138,7 @@ function syncFromGithub(note) {
     try { pkgAfter = shQuiet('git rev-parse HEAD:package.json'); } catch (_) {}
     if (pkgBefore && pkgAfter && pkgBefore !== pkgAfter) {
         console.log('[UPDATE] package.json changed — npm install...');
-        try { sh('npm install --omit=dev --no-audit --no-fund'); } catch (err) { console.error('[UPDATE] npm install failed:', err.message); }
+        try { sh('npm install --omit=dev --no-audit --no-fund', 180000); } catch (err) { console.error('[UPDATE] npm install failed:', err.message); }
     }
     return stampCommit(note);
 }
@@ -173,9 +176,11 @@ function startBot() {
 // ──────────────────────────────────────────────
 // 🛰 AUTO-DEPLOY — poll GitHub while running
 // ──────────────────────────────────────────────
+let pollTimer = null;
 if (pollEnabled) {
     console.log(`[AUTO-DEPLOY] 🛰 watching GitHub every ${POLL_MIN} min — pushes deploy automatically`);
-    setInterval(() => {
+    pollTimer = setInterval(() => {
+        if (shuttingDown) return;
         try {
             if (!ensureGit()) return;
             const before = shQuiet('git rev-parse HEAD');
@@ -199,14 +204,52 @@ if (pollEnabled) {
     console.log('[AUTO-DEPLOY] off (AUTO_DEPLOY not enabled on this host)');
 }
 
+// ⚡ FAST GRACEFUL SHUTDOWN — Pterodactyl sends SIGTERM when Stop is pressed.
+// Requirements:
+//   • stop ALL background work instantly (clear the poll timer — no new
+//     git/npm syncs start during shutdown)
+//   • SIGTERM the bot child, WAIT for it to actually exit (so no orphan
+//     process keeps the container alive — that's what made the panel hang on
+//     "Server marked as offline..." and caused power action locks)
+//   • SIGKILL the child if it doesn't die in ~2.5s (e.g. stuck in a sync op)
+//   • hard-exit with code 0 no later than ~4s so the panel registers the stop
+//     immediately
 function shutdown() {
     if (shuttingDown) return;
     shuttingDown = true;
-    console.log('[SUPERVISOR] shutdown — stopping bot child');
-    if (child) {
-        try { child.kill('SIGTERM'); } catch (_) {}
+    console.log('[SUPERVISOR] SIGTERM/SIGINT received — fast shutdown...');
+
+    if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
     }
-    setTimeout(() => process.exit(0), 4000);
+
+    const finish = (note) => {
+        console.log(`[SUPERVISOR] ${note} — exiting (code 0)`);
+        process.exit(0);
+    };
+
+    if (!child) {
+        finish('no child running');
+        return;
+    }
+
+    // 1) ask the child to stop cleanly
+    child.once('exit', () => finish('bot child exited cleanly'));
+    try { child.kill('SIGTERM'); } catch (_) {}
+
+    // 2) if the child is still alive after 2.5s, force it down
+    setTimeout(() => {
+        if (!child) return;
+        console.log('[SUPERVISOR] child still alive — sending SIGKILL');
+        try { child.kill('SIGKILL'); } catch (_) {}
+    }, 2500).unref();
+
+    // 3) absolute hard cap — the panel must never wait on us
+    setTimeout(() => {
+        if (!child) return;
+        finish('hard stop (child did not die)');
+    }, 4000).unref();
 }
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
@@ -224,7 +267,7 @@ if (shouldUpdateOnBoot) {
 
 if (!fs.existsSync(path.join(root, 'node_modules'))) {
     console.log('[UPDATE] node_modules missing — npm install...');
-    try { sh('npm install --omit=dev --no-audit --no-fund'); } catch (err) { console.error('[UPDATE] npm install failed:', err.message); }
+    try { sh('npm install --omit=dev --no-audit --no-fund', 180000); } catch (err) { console.error('[UPDATE] npm install failed:', err.message); }
 }
 
 startBot();

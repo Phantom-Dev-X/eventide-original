@@ -90,3 +90,31 @@ After every deploy/restart, watch the panel console for these lines in order:
 **Rule of thumb:** wait for the `SESSION READY` line (usually a few seconds
 after `BUILD DONE`), then type `.ping`. If the connection is slow it can take
 up to ~30s — the READY line removes the guesswork.
+
+## ⚡ Fast shutdown (panel Stop button)
+
+Pterodactyl sends **SIGTERM** when you press Stop. Both `boot.js` (supervisor)
+and `index.js` (bot) now catch SIGTERM/SIGINT and exit **immediately with code 0**
+so the panel registers the stop right away — no more "Server marked as
+offline..." hang, no power action lock errors.
+
+What happens on Stop:
+
+1. **Background work stops instantly** — the auto-deploy poll timer is cleared,
+   so no new git/npm syncs can start during shutdown.
+2. **Connections closed** (best-effort, never blocking): Telegram polling,
+   WhatsApp sockets, HTTP server.
+3. **`process.exit(0)` immediately.**
+4. Supervisor mode also **waits for the bot child to actually die** (SIGKILL
+   after 2.5s if it's stuck, e.g. inside a git/npm sync op) — no orphan
+   processes keep the container alive.
+
+Every blocking git/npm call now also has a hard `timeout`, so a hung network
+can never freeze the event loop and delay the shutdown handler.
+
+Measured: bot exits in ~10ms, supervisor with a healthy child ~50ms, worst
+case (stuck child) ~2.5s. All with exit code 0 and no orphan processes.
+
+⚠️ Set the panel **startup command to `node boot.js`** — if you use `npm start`,
+npm becomes the main process and doesn't reliably forward SIGTERM to its
+child, which reproduces the exact hang you saw.

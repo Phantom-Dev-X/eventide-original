@@ -5897,7 +5897,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             `   🔌 *ACTION* :: VOID_SLEEP\n\n` +
             `   " *The machine sleeps.*\n     *But it always wakes.* "`
         ), msg);
-        setTimeout(() => process.exit(0), 1500);
+        setTimeout(() => shutdownBot('.shutdown command'), 1200);
         return;
     }
 
@@ -6995,11 +6995,16 @@ function autoDeployPollEnabled() {
 }
 
 let deployInProgress = false;
+let shuttingDown = false;      // set by the SIGTERM/SIGINT fast-shutdown handler
+let deployPollTimer = null;    // auto-deploy poll interval (cleared on shutdown)
+let httpServer = null;         // express server (closed on shutdown)
 
 async function pullLatestCode() {
-    const shQ = (cmd) => execSync(cmd, {
+    const shQ = (cmd, timeoutMs = 30000) => execSync(cmd, {
         cwd: __dirname,
         encoding: 'utf8',
+        timeout: timeoutMs, // a sync op can never block the event loop forever —
+                            // the shutdown handler must always be able to run
         env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
     });
     if (!fs.existsSync(path.join(__dirname, '.git'))) throw new Error('no .git dir');
@@ -7024,7 +7029,7 @@ async function pullLatestCode() {
     try { pkgAfter = shQ('git rev-parse HEAD:package.json'); } catch (_) {}
     if (pkgBefore && pkgAfter && pkgBefore !== pkgAfter) {
         log('AUTO-DEPLOY', 'package.json changed — installing dependencies...');
-        try { shQ('npm install --omit=dev --no-audit --no-fund'); } catch (err) {
+        try { shQ('npm install --omit=dev --no-audit --no-fund', 180000); } catch (err) {
             logError('AUTO-DEPLOY', 'npm install failed', err);
         }
     }
@@ -7047,7 +7052,7 @@ function relaunchSelf() {
 }
 
 async function deployLatest() {
-    if (deployInProgress) return;
+    if (shuttingDown || deployInProgress) return;
     deployInProgress = true;
     try {
         const res = await pullLatestCode();
@@ -7077,7 +7082,10 @@ function setupAutoDeployPoller() {
     }
     const mins = Math.max(0.05, parseFloat(process.env.AUTO_DEPLOY_POLL_MINUTES || '3') || 3);
     log('AUTO-DEPLOY', `🛰 watching GitHub every ${mins} min — pushes deploy automatically`);
-    setInterval(() => { deployLatest().catch(() => {}); }, mins * 60 * 1000);
+    deployPollTimer = setInterval(() => {
+        if (shuttingDown) return;
+        deployLatest().catch(() => {});
+    }, mins * 60 * 1000);
 }
 
 async function main() {
@@ -7153,7 +7161,7 @@ async function main() {
         setTimeout(() => deployLatest().catch(() => {}), 150);
     });
 
-    app.listen(PORT, '0.0.0.0', () => {
+    httpServer = app.listen(PORT, '0.0.0.0', () => {
         log('HTTP', `Server listening on port ${PORT}`);
         log('HTTP', `GET / -> status summary`);
         log('HTTP', `GET /health -> health info`);
@@ -7170,14 +7178,38 @@ async function main() {
 
 process.on('unhandledRejection', err => logError('PROCESS', 'Unhandled promise rejection', err));
 process.on('uncaughtException', err => logError('PROCESS', 'Uncaught exception', err));
-process.on('SIGTERM', () => {
-    log('PROCESS', 'Received SIGTERM. Shutting down...');
+
+// ⚡ FAST GRACEFUL SHUTDOWN — Pterodactyl sends SIGTERM when Stop is pressed.
+// What used to go wrong: background loops (auto-deploy poller with blocking
+// git/npm execSync, Telegram polling, WhatsApp sockets, keepalive fetches)
+// kept the event loop busy, the process lingered, the panel timed out and
+// force-killed the container → "Server marked as offline..." + power action
+// lock errors. Now:
+//   1) signal caught → all background work stopped instantly (poll timer cleared)
+//   2) best-effort cleanup of active connections (Telegram polling, WA sockets,
+//      HTTP server) — fire-and-forget so it can never block the exit
+//   3) explicit process.exit(0) IMMEDIATELY — the panel registers the stop
+//      right away and no lock errors occur
+function shutdownBot(signal) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    log('PROCESS', `${signal} received — fast shutdown (exit code 0).`);
+
+    // stop the auto-deploy poller so no new git/npm work starts now
+    try { if (deployPollTimer) { clearInterval(deployPollTimer); deployPollTimer = null; } } catch (_) {}
+
+    // best-effort connection teardown — never awaited, never allowed to block
+    try { if (tgBot) tgBot.stopPolling().catch(() => {}); } catch (_) {}
+    for (const sess of waSessions.values()) {
+        try { sess?.sock?.end?.(new Error('shutdown')); } catch (_) {}
+    }
+    try { if (httpServer) httpServer.close(); } catch (_) {}
+
+    // explicit, immediate termination with exit code 0
     process.exit(0);
-});
-process.on('SIGINT', () => {
-    log('PROCESS', 'Received SIGINT. Shutting down...');
-    process.exit(0);
-});
+}
+process.on('SIGTERM', () => shutdownBot('SIGTERM'));
+process.on('SIGINT', () => shutdownBot('SIGINT'));
 
 main().catch(err => {
     logError('BOOT', 'Fatal startup error', err);

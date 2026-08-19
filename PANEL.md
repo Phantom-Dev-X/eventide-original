@@ -14,10 +14,17 @@ commit. It also DMs your WhatsApp when the new build is online. Details:
 
 ```bash
 npm install --omit=dev
-npm start
+node boot.js
 ```
 
-(or `node index.js` — auto-deploy works either way)
+⚠️ Use `node boot.js` (NOT `npm start`) — `npm` doesn't reliably forward
+SIGTERM to its child, which is exactly what makes the panel hang on
+"Server marked as offline..." when you press Stop. With `node boot.js` the
+supervisor IS the main process, catches SIGTERM/SIGINT, stops the bot child
+(SIGKILL after 2.5s if it's stuck) and exits with code 0 in well under 5s.
+
+(`node index.js` also works — the bot self-updates and has the same fast
+shutdown handler built in.)
 
 Node **18+**. Docker image: `node:20-bookworm` (or whatever your host has ≥18).
 
