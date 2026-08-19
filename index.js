@@ -2011,45 +2011,135 @@ SCORE: <number>`;
 }
 
 function getHelpSystemPrompt() {
-    return `You are Eventide Omega, the in-bot help agent. Be casual and precise. NEVER say a command is "not built" if it is in this registry. Games ARE built. Antilink, antidelete, autoreact, warn, hidetag ARE built.
+    return `You are EVENTIDE OMEGA — the in-bot ORACLE. Your vibe: cinematic hype, unshakeable confidence, the energy of a bot that rules the night. Talk like the bot's own terminal: short, punchy, *bolded* WhatsApp lines, ⚡🌑 emoji, and end bigger answers with a quote-style one-liner (like: " the void responds. "). Hype the delivery — NEVER fake the facts.
 
-If they ask something not in this list (downloaders, music, etc.), say it is not built yet and they can type .dev to tell Patrick.
+HARD TRUTH RULES:
+1. ONLY commands in the REGISTRY below exist. If asked about ANYTHING not in the registry (music download, tiktok, video dl, ai image gen, etc.) say it's not built yet — then hype the future: "not yet — but the void is always expanding. type .dev to tell Patrick to build it." NEVER invent a command.
+2. NEVER claim a registry command is "not built" — every single one of them works. Games ARE built. Antilink, antidelete, autoreact, warn, hidetag, persona ARE built.
+3. Flag owner-only commands with "👑 owner-only": .autoreact .autoreactconfig .antidelete .antideleteconfig .persona .pluginkey .plugin .mode .public .owner .setprefix .setalias .delalias .setname .setbio .setstatus .setpp .reset .restart .shutdown .logout .backup .sessions .cmdstats.
+4. ALWAYS mention the linked pair when explaining a feature:
+   • .autoreact on|off  +  .autoreactconfig (pick groups/channels/contacts)
+   • .antidelete on|off  +  .antideleteconfig (same picker; deleted msgs get forwarded to the owner DM)
+   • .antilink / .antimention / .antiforward — per-group wards, armed IN the group or with ".antilink on <invite>"
+   • .warn  +  .warnconfig (phrases/limits/actions) / .unwarn / .warns / .warnreset
+   • .welcome / .goodbye (set group greet texts) + .greet (view/toggle)
+   • .persona eclipse|ruin — switches the bot's whole look & feel
+   • .pluginkey <gemini-key> — owner's personal AI keys
+   • .menu — the front door (Eclipse = cinematic animated menu; Ruin = clean panel + command index)
 
-ALWAYS mention linked command pairs:
-• .autoreact on/off  +  .autoreactconfig (pick groups/channels/contacts; paste invite if missing)
-• .antidelete on/off  +  .antideleteconfig (same endpoint picker)
-• .antilink / .antimention / .antiforward on/off  (in the group, or ".antilink on <invite>")
-• .warn  +  .warnconfig / .unwarn / .warns / .warnreset
-• .welcome / .goodbye / .greet
-• .help  (alone = help MODE; .help <cmd> = one-shot). In help mode other cmds like .ping do NOT run until they type .help again.
-• .pluginkey <gemini-key1,gemini-key2> lets each paired owner attach THEIR personal Gemini keys (comma-separated, tried in order). Typing .pluginkey again ADDS more keys; .pluginkey set <keys> replaces; .pluginkey off clears. Once set, that session's AI ALWAYS uses their keys first — the shared default key is only touched if ALL of theirs fail. Keys never leak between users.
-• .menu polls: Owners → System/Config, Group, Fun, Bug
-
-REGISTRY (all real):
-MENU: .menu
-HELP: .help  .help list  .help <name>
-CONFIG: .mode public|owner  .public  .owner  .setprefix  .setalias  .delalias  .aliases  .setname  .setbio  .setpp  .settings  .reset  .pluginkey <gemini-key>
+REGISTRY (every command below is real):
+MENU & HELP: .menu  .help (alone = help MODE; .help <anything> = one-shot answer)  .help list
+PERSONA: .persona eclipse|ruin  (.persona alone shows the current binding; UNBOUND = pick via the poll)
+CONFIG: .mode public|owner  .public  .owner  .setprefix <.>  .setalias  .delalias  .aliases  .setname  .setbio  .setstatus  .setpp  .getpp  .profile  .settings  .reset  .pluginkey <key>  .plugin
 AUTOREACT: .autoreact on|off  .autoreactconfig
-ANTIDELETE: .antidelete on|off  .antideleteconfig  (recover deleted msgs to owner DM)
-ANTI WARDS: .antilink on|off  .antimention on|off  .antiforward on|off  — also ".antilink on <chat.whatsapp.com/…>"
-WARN: .warn  .unwarn  .warns  .warnreset  .warnconfig
-GROUP ADMIN: .join <link>  .add  .kick  .promote  .demote  .mute  .unmute  .listmuted  .revoke  .link  .groupinfo  .tagall  .hidetag/.ht  .getvcf
+ANTIDELETE: .antidelete on|off  .antideleteconfig  .antideletecfg
+ANTI WARDS: .antilink on|off  .antimention on|off  .antiforward on|off  — all also accept ".antilink on <chat.whatsapp.com/…>" from anywhere
+WARN: .warn  .unwarn  .warns  .warnreset  .warnconfig  .warncfg
+GROUP ADMIN: .join <link>  .add  .kick  .promote  .demote  .mute  .unmute  .listmuted  .revoke  .link  .groupinfo  .grouppic  .listgc  .getvcf  .tagall  .hidetag/.ht  .block  .unblock
 GREET: .greet  .welcome  .goodbye
-SYSTEM: .ping .uptime .runtime .info .status .version .os .botinfo .alive .dev .gpp .ggpp .profile .listgc .session .sessions .logout .reconnect .restart .shutdown
-UTILS: .sticker .toimg .vv .qr .calc .base64 .block .unblock .cmdstats .cancel .del
-GAMES (reply to the CARD, not loose chat): .ttt .hangman/.hm .chain/.wc .trivia/.quiz .riddle .hint
-FUN: .roast .pickupline/.rizz .joke .flirt .compliment .rate .ship
+SYSTEM: .ping  .uptime  .runtime  .info  .status  .version  .os  .botinfo  .alive  .profile  .session  .sessions  .logs  .recentlogs  .cmdstats  .qr  .logout  .reconnect  .restart  .shutdown  .backup  .dev  .devnumber  .devcontact
+UTILS: .sticker  .toimg  .vv  .viewonce  .pfp  .gpp  .ggpp  .qr  .calc  .base64  .cancel  .del
+GAMES (interact by replying to the card/poll the bot sends): .tictactoe/.ttt/.xo  .hangman/.hm  .chain/.wordchain/.wc  .trivia/.quiz  .riddle  .hint
+FUN: .pickup/.rizz  (pickup lines)  .calc  .base64
 
-How endpoint config works:
-1. .autoreactconfig or .antideleteconfig → poll Add / Delete
-2. Add → Group / Channel / Contact
-3. Group: poll of groups I am in (first 10) OR vote "Paste link or ID" OR reply to that poll with an invite
-4. If I am not in the group I JOIN then arm the ward
-5. Channel: paste whatsapp.com/channel/… or …@newsletter
-6. Contact: send the number
-7. .autoreact on / .antidelete on actually turns the feature on
+FEATURE CHEAT SHEET (be exact):
+• ANTILINK: deletes any message with a link (or chat.whatsapp.com invite) in armed groups. Arm with .antilink on inside the group (needs group admin) or ".antilink on <invite>" from anywhere. Off with .antilink off. ANTIMENTION deletes @everyone-style spam, ANTIFORWARD deletes forwarded msgs — same on/off shape. There is NO separate .antilinkconfig — it's on/off per group.
+• AUTOREACT: the bot reacts to messages from chosen endpoints. 👑 .autoreactconfig → poll Add/Delete → Group / Channel / Contact. Group: poll lists groups the bot is in (first 10) or "Paste link or ID" (bot joins if missing). Channel: paste whatsapp.com/channel/… Contact: send the number. THEN .autoreact on arms it.
+• ANTIDELETE: 👑 recovers deleted messages from watched chats and forwards them to the owner DM. Same endpoint flow: .antideleteconfig, then .antidelete on.
+• WARN: .warn replies to a message or mention. .warnconfig sets max warns, trigger phrases, kick action per group. .warns lists, .unwarn removes, .warnreset clears.
+• PERSONA: the bot's whole identity — 🌑 ECLIPSE (cinematic 3-stage animated menu) or ⚙️ RUIN (clean minimal panel + categorized command index). First pairing sends a poll; the pick is saved forever (no re-pairing). 👑 .persona eclipse|ruin switches anytime. If a user's commands are blocked by "PERSONA FIRST", they must pick in the poll first.
+• HELP MODE: .help alone toggles help mode ON/OFF — while ON, every message is answered by you (the oracle) and other commands don't run. .help <question> answers once without entering help mode. Times out after 10 min silence.
+• MENU: .menu shows the bound persona's menu. Eclipse: animated terminal + banner + Owners/Group/Fun poll. Ruin: status panel (user/host/prefix/cmds/uptime/mode/storage/time) + command index grouped SYSTEM/CONFIG/FUN/GROUP.
+• GAMES: tic-tac-toe, hangman, word chain, trivia, riddle — the bot sends a poll/card and you reply to THAT message (not loose chat) to play.
+• PLUGIN KEYS: 👑 .pluginkey <gemini-key1,gemini-key2> attaches the owner's personal Gemini keys (comma-separated, tried in order). Typing it again ADDS; .pluginkey set <keys> replaces; .pluginkey off clears. Their keys always try first; keys never leak between users.
+• MODE: .mode public (everyone can command) / .mode owner (only owner + DEV_NUMBERS). .public and .owner are shortcuts.
+• PREFIX: .setprefix <char> changes the command prefix (e.g. "/" → commands become /menu).
+• ALIASES: .setalias <name> <command> makes shortcuts; .aliases lists them; .delalias removes.
+• REACTIONS: the bot drops a ⚡ on every command message it receives (fresh messages only).
+• LOGS: .logs / .recentlogs sends the latest bot logs to the owner.
+• SESSIONS: multi-user bot — each paired number is its own session with its own config. Pairing happens via the web panel or Telegram.
+• DEPLOY: the bot auto-pulls new code from GitHub and DMs the owner "🔄 DEPLOY COMPLETE" when a new build is live.
 
-Keep answers short, WhatsApp bullets, no markdown tables.`;
+ANSWER STYLE:
+• Keep answers SHORT — WhatsApp bullets, *asterisk* bold, no markdown tables, no giant walls.
+• Open with a hype hook (⚡, 🌑, "SAY LESS.", "the oracle hears you") and close with a themed one-liner when it fits.
+• If they ask "how do I X", give: the exact command(s), the exact steps, who can use it, then a one-line hype closer.
+• For antilink-type questions ALWAYS include the on/off usage AND that antidelete/autoreact are separate systems with their own configs.`;
+}
+
+// ⚡ STATIC HELP FALLBACK — built-in answers for core topics so the oracle
+// still answers even when the AI backend is offline (Pollinations busy, no
+// Gemini key, etc.). Used only when the AI call fails.
+function getStaticHelpAnswer(rawQuestion) {
+    const q = String(rawQuestion || '').toLowerCase();
+    const has = (...words) => words.some(w => q.includes(w));
+    const blocks = [];
+
+    if (has('antilink')) {
+        blocks.push(`⚡ *ANTILINK WARD*\n` +
+            `Deletes any message with a link (or\nchat.whatsapp.com invite) in armed groups.\n\n` +
+            `• *.antilink on* — inside the group (needs group admin)\n` +
+            `• *.antilink on <invite link>* — from anywhere, bot joins if needed\n` +
+            `• *.antilink off* — disarm\n\n` +
+            `No separate config — it's on/off per group.\nAlso in the family: .antimention (tag spam) & .antiforward (forwards).\n\n" the ward rises. "`);
+    }
+    if (has('antimention')) {
+        blocks.push(`⚡ *ANTIMENTION WARD*\nDeletes @everyone-style mention spam.\n\n*.antimention on* (in group) or\n*.antimention on <invite>* — off with .antimention off.\n\n" silence the noise. "`);
+    }
+    if (has('antiforward')) {
+        blocks.push(`⚡ *ANTIFORWARD WARD*\nDeletes forwarded messages in armed groups.\n\n*.antiforward on* (in group) or\n*.antiforward on <invite>* — off with .antiforward off.\n\n" no echoes allowed. "`);
+    }
+    if (has('autoreact')) {
+        blocks.push(`⚡ *AUTOREACT* 👑 owner-only\nBot reacts to msgs from chosen endpoints.\n\n• *.autoreactconfig* → poll Add/Delete\n• Add → Group / Channel / Contact\n• Group: poll of groups (or paste invite)\n• Channel: paste channel link\n• Contact: send the number\n\nThen *.autoreact on* arms it.\n\n" the void responds to everything. "`);
+    }
+    if (has('antidelete')) {
+        blocks.push(`⚡ *ANTIDELETE* 👑 owner-only\nRecovers deleted messages from watched\nchats and forwards them to your DM.\n\n• *.antideleteconfig* → pick groups/channels/contacts\n• *.antidelete on* → arm\n\n" nothing dies here. "`);
+    }
+    if (has('warn')) {
+        blocks.push(`⚡ *WARN SYSTEM*\n• *.warn* (reply to a msg or mention) — warns a user\n• *.warnconfig* — phrases, max warns, kick action per group\n• *.warns* — list warns · *.unwarn* — remove\n• *.warnreset* — clear all\n\n" patience is a currency. "`);
+    }
+    if (has('persona')) {
+        blocks.push(`⚡ *PERSONA SYSTEM* 👑 owner-only\nTwo faces, one void:\n\n• 🌑 *.persona eclipse* — cinematic 3-stage animated menu\n• ⚙️ *.persona ruin* — clean panel + categorized command index\n\nFirst pairing sends a poll — pick once, saved forever.\n*.persona* alone shows the current binding.\n\n" choose your face. "`);
+    }
+    if (has('menu')) {
+        blocks.push(`⚡ *MENU*\n*.menu* opens your persona's menu:\n\n• 🌑 ECLIPSE — animated terminal + banner + Owners/Group/Fun poll\n• ⚙️ RUIN — status panel + command index (SYSTEM/CONFIG/FUN/GROUP)\n\n" step inside. "`);
+    }
+    if (has('mode') || has('public') || has('private') || has('owner only')) {
+        blocks.push(`⚡ *ACCESS MODE* 👑 owner-only\n• *.mode public* — anyone can command\n• *.mode owner* — only you + devs\n\nShortcuts: *.public* / *.owner*\n\n" the gates bend to your word. "`);
+    }
+    if (has('prefix')) {
+        blocks.push(`⚡ *PREFIX* 👑 owner-only\n*.setprefix <char>* changes the command trigger\n(e.g. .setprefix / → commands become /menu).\n\n" a new sigil. "`);
+    }
+    if (has('alias')) {
+        blocks.push(`⚡ *ALIASES* 👑 owner-only\n• *.setalias <name> <command>* — shortcut\n• *.aliases* — list · *.delalias <name>* — remove\n\n" many names, one will. "`);
+    }
+    if (has('pluginkey') || has('plugin') || has('gemini') || has('ai key') || has('apikey') || has('api key')) {
+        blocks.push(`⚡ *PLUGIN KEYS* 👑 owner-only\n*.pluginkey <gemini-key1,key2>* attaches YOUR\npersonal Gemini keys (tried in order).\n\n• again = ADDS · *.pluginkey set <keys>* = replace\n• *.pluginkey off* = clear\n\nKeys never leak between users.\n\n" your power, your keys. "`);
+    }
+    if (has('game') || has('ttt') || has('tictactoe') || has('hangman') || has('trivia') || has('riddle') || has('chain')) {
+        blocks.push(`⚡ *GAMES*\n.tictactoe/.ttt · .hangman/.hm · .chain/.wc\n.trivia/.quiz · .riddle · .hint\n\nThe bot sends a poll/card — REPLY to that\nmessage to play (not loose chat).\n\n" the void plays fair. "`);
+    }
+    if (has('sticker') || has('toimg') || has('viewonce') || has('vv')) {
+        blocks.push(`⚡ *MEDIA UTILS*\n• *.sticker* (reply to image) — make a sticker\n• *.toimg* (reply to sticker) — back to image\n• *.vv / .viewonce* (reply) — reveal view-once\n\n" see through the veil. "`);
+    }
+    if (has('welcome') || has('goodbye') || has('greet')) {
+        blocks.push(`⚡ *GREETINGS*\n• *.welcome* — set the group welcome text\n• *.goodbye* — set the goodbye text\n• *.greet* — view/toggle\n\n" every entrance, announced. "`);
+    }
+    if (has('ping') || has('alive') || has('uptime') || has('runtime')) {
+        blocks.push(`⚡ *STATUS*\n*.ping* — heartbeat · *.alive* — still here\n*.uptime / .runtime* — how long the bot's been up\n*.status* — full session status\n\n" the heart beats. "`);
+    }
+    if (has('deploy') || has('update') || has('restart') || has('shutdown')) {
+        blocks.push(`⚡ *DEPLOY & POWER* 👑 owner-only\n• Auto-deploy: the panel pulls new GitHub\n  commits by itself + DMs you DEPLOY COMPLETE\n• *.restart* — restart the bot\n• *.shutdown* — full power down\n\n" the machine rebuilds itself. "`);
+    }
+    if (has('backup') || has('session') || has('pair')) {
+        blocks.push(`⚡ *SESSIONS & BACKUP*\n• Pairing: via the web panel or Telegram bot\n• *.session* — this session's info\n• *.sessions* — all paired sessions 👑\n• *.backup* — manual snapshot 👑\n\n" nothing is ever lost. "`);
+    }
+    if (has('help')) {
+        blocks.push(`⚡ *HELP SYSTEM*\n• *.help <question>* — one-shot answer\n• *.help* alone — toggles HELP MODE (every msg\n  gets answered until you type .help again)\n\n" the oracle is listening. "`);
+    }
+
+    if (!blocks.length) return '';
+    return blocks.slice(0, 2).join('\n\n');
 }
 
 
@@ -4689,9 +4779,9 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         return;
     }
 
-    // ──────────────────────────────────────────────
-    // 🗣️ CUSTOMER CARE AI ORACLE (.help <question>)
-    // ──────────────────────────────────────────────
+// ──────────────────────────────────────────────
+// 🗣️ CUSTOMER CARE AI ORACLE (.help <question>)
+// ──────────────────────────────────────────────
     if (token === '.help') {
         // 🛡️ Owner-only: .help only works for the paired bot owner's number.
         if (!isSenderOwner) {
@@ -4709,6 +4799,15 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
                 await safeWaReply(sock, remoteJid, `🤖 *Eventide Help:*\n\n${response}`, msg);
             } catch (err) {
                 logError('HELP-CMD', 'AI Oracle failed', err);
+                // ⚡ STATIC FALLBACK: answer from the built-in index first so
+                // core questions (antilink, persona, autoreact...) still get a
+                // real answer even while the AI backend is offline.
+                const staticAns = getStaticHelpAnswer(question);
+                if (staticAns) {
+                    log('HELP-CMD', `${phoneNumber}: AI offline — answering from static index.`);
+                    await safeWaReply(sock, remoteJid, `🤖 *Eventide Help (offline index):*\n\n${staticAns}`, msg);
+                    return;
+                }
                 const helpDiagnosticReport = TERMINAL_HEADER + 
                     `   ❌  *AI_ORACLE — OFFLINE*\n\n` +
                     `   The help AI couldn't respond right now.\n\n` +
@@ -7224,3 +7323,4 @@ setInterval(async () => {
         logError('KEEPALIVE', `Failed keep-alive ping to ${renderUrl}/ping`, err);
     }
 }, KEEP_ALIVE_INTERVAL);
+
