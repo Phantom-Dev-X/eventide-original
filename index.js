@@ -2098,6 +2098,15 @@ ANSWER STYLE:
 • Light *bold* formatting, short WhatsApp lines, no tables, no bullet walls.
 • For antilink-type questions ALWAYS include the on/off usage AND that antidelete/autoreact are separate systems with their own configs.`;
 }
+// Picks the bound help voice for a session (ruin = friendly support,
+// everything else = the cinematic eclipse oracle). Shared by the one-shot
+// .help path and both help-mode interceptors so the chosen voice is ALWAYS
+// respected — no hardcoded eclipse leaks.
+function getBoundHelpPrompt(phoneNumber) {
+    const bound = String(loadBotConfig(phoneNumber)?.helpPersona || '').trim().toLowerCase();
+    return bound === 'ruin' ? getRuinHelpSystemPrompt() : getHelpSystemPrompt();
+}
+
 
 // ⚡ STATIC HELP FALLBACK — built-in answers for core topics so the oracle
 // still answers even when the AI backend is offline (Pollinations busy, no
@@ -4846,7 +4855,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         }, 10 * 60 * 1000);
         helpModeUsers.set(remoteJid, { timer: newTimer });
         try {
-            const aiReply = await callUniversalAI(text, getHelpSystemPrompt(), aiOptsFor(phoneNumber));
+            const aiReply = await callUniversalAI(text, getBoundHelpPrompt(phoneNumber), aiOptsFor(phoneNumber));
             await safeWaReply(sock, remoteJid, `🤖 *Eventide Help:*\n\n${aiReply}`, msg);
         } catch (err) {
             logError('HELP-MODE', 'AI Help reply failed', err);
@@ -5041,7 +5050,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             helpModeUsers.set(remoteJid, { timer: newTimer });
 
             try {
-                const systemPrompt = getHelpSystemPrompt();
+                const systemPrompt = getBoundHelpPrompt(phoneNumber);
                 const aiReply = await callUniversalAI(text, systemPrompt, aiOptsFor(phoneNumber));
                 await safeWaReply(sock, remoteJid, `🤖 *Eventide Help:*\n\n${aiReply}`, msg);
             } catch (err) {
@@ -5193,7 +5202,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             }
             return;
         }
-        const systemPrompt = boundHp === 'ruin' ? getRuinHelpSystemPrompt() : getHelpSystemPrompt();
+        const systemPrompt = getBoundHelpPrompt(phoneNumber);
 
         // If a specific question is asked, run AI immediately (100% AI-controlled)
         if (question) {
