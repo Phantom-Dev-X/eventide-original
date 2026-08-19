@@ -2049,7 +2049,7 @@ FEATURE CHEAT SHEET (be exact):
 • WARN: .warn replies to a message or mention. .warnconfig sets max warns, trigger phrases, kick action per group. .warns lists, .unwarn removes, .warnreset clears.
 • PERSONA: the bot's whole identity — 🌑 ECLIPSE (cinematic 3-stage animated menu) or ⚙️ RUIN (clean minimal panel + categorized command index). First pairing sends a poll; the pick is saved forever (no re-pairing). 👑 .persona eclipse|ruin switches anytime. If a user's commands are blocked by "PERSONA FIRST", they must pick in the poll first.
 • HELP MODE: .help alone toggles help mode ON/OFF — while ON, every message is answered by you (the oracle) and other commands don't run. .help <question> answers once without entering help mode. Times out after 10 min silence.
-• MENU: .menu shows the bound persona's menu. Eclipse: animated terminal + banner + Owners/Group/Fun poll. Ruin: status panel (user/host/prefix/cmds/uptime/mode/storage/time) + command index grouped SYSTEM/CONFIG/FUN/GROUP.
+• MENU: .menu shows the bound persona's menu. Eclipse: animated terminal + banner + Owners/Group/Fun poll. Ruin: status panel + menu poll (ALL MENU / SYSTEM / CONFIG / GROUP / FUN) — ALL MENU opens the full command index.
 • GAMES: tic-tac-toe, hangman, word chain, trivia, riddle — the bot sends a poll/card and you reply to THAT message (not loose chat) to play.
 • PLUGIN KEYS: 👑 .pluginkey <gemini-key1,gemini-key2> attaches the owner's personal Gemini keys (comma-separated, tried in order). Typing it again ADDS; .pluginkey set <keys> replaces; .pluginkey off clears. Their keys always try first; keys never leak between users.
 • MODE: .mode public (everyone can command) / .mode owner (only owner + DEV_NUMBERS). .public and .owner are shortcuts.
@@ -2102,7 +2102,7 @@ function getStaticHelpAnswer(rawQuestion) {
         blocks.push(`⚡ *PERSONA SYSTEM* 👑 owner-only\nTwo faces, one void:\n\n• 🌑 *.persona eclipse* — cinematic 3-stage animated menu\n• ⚙️ *.persona ruin* — clean panel + categorized command index\n\nFirst pairing sends a poll — pick once, saved forever.\n*.persona* alone shows the current binding.\n\n" choose your face. "`);
     }
     if (has('menu')) {
-        blocks.push(`⚡ *MENU*\n*.menu* opens your persona's menu:\n\n• 🌑 ECLIPSE — animated terminal + banner + Owners/Group/Fun poll\n• ⚙️ RUIN — status panel + command index (SYSTEM/CONFIG/FUN/GROUP)\n\n" step inside. "`);
+        blocks.push(`⚡ *MENU*\n*.menu* opens your persona's menu:\n\n• 🌑 ECLIPSE — animated terminal + banner + Owners/Group/Fun poll\n• ⚙️ RUIN — status panel + poll (ALL MENU · SYSTEM · CONFIG · GROUP · FUN)\n\n" step inside. "`);
     }
     if (has('mode') || has('public') || has('private') || has('owner only')) {
         blocks.push(`⚡ *ACCESS MODE* 👑 owner-only\n• *.mode public* — anyone can command\n• *.mode owner* — only you + devs\n\nShortcuts: *.public* / *.owner*\n\n" the gates bend to your word. "`);
@@ -3368,8 +3368,9 @@ const RUIN_MENU_CATEGORIES = [
 ];
 const RUIN_TOTAL_CMDS = RUIN_MENU_CATEGORIES.reduce((n, c) => n + c.cmds.length, 0);
 
-// Wraps command tokens into lines of at most `width` chars.
-function wrapCmdLines(tokens, width) {
+// Wraps command tokens into lines of at most `width` chars. WhatsApp-safe:
+// every line stays short so nothing rolls over on the phone.
+function wrapCmdLines(tokens, width = 26) {
     const lines = [];
     let cur = '';
     for (const t of tokens) {
@@ -3413,7 +3414,7 @@ function getSessionStorageBytes() {
     }
 }
 
-// Panel-style uptime (mirrors the CODEx panel: 0d - 0h - 0m - 58s)
+// Compact uptime (0d 0h 1m 5s — no dashes, shorter lines)
 function formatPanelUptime(seconds) {
     const s = Math.max(0, Math.floor(seconds));
     const d = Math.floor(s / 86400);
@@ -3423,55 +3424,183 @@ function formatPanelUptime(seconds) {
     return `${d}d - ${h}h - ${m}m - ${sec}s`;
 }
 
-// Draws a boxed panel. `title` sits in the top border, `rows` inside the box.
-function buildRuinPanel(title, rows) {
-    const innerW = Math.max(...rows.map(r => r.length)) + 4; // 2 spaces padding each side
-    const top = '╔' + '═'.repeat(2) + `〔 𖣘 ${title} 〕` + '═'.repeat(Math.max(1, innerW - title.length - 8)) + '❐';
-    const innerTop = '║ ╔' + '═'.repeat(Math.max(1, innerW - 2)) + '◆';
-    const innerBottom = '║ ╚' + '═'.repeat(Math.max(1, innerW - 2)) + '◆';
-    const body = rows.map(r => '║ ║ ' + r + ' '.repeat(innerW - r.length - 2)).join('\n');
-    const bottom = '╚' + '═'.repeat(Math.max(1, innerW + 2)) + '❐';
-    return [top, innerTop, body, innerBottom, bottom].join('\n');
+// Short status facts shared by every Ruin design.
+function ruinStatusFacts(phoneNumber, sock) {
+    const cfg = loadBotConfig(phoneNumber);
+    const rawMode = String(loadBotMode(phoneNumber) || 'public').toLowerCase();
+    return {
+        name: String(sock.user?.name || phoneNumber).slice(0, 14),
+        host: isSupabaseEnabled() ? 'RENDER · SUPABASE' : 'PANEL · LOCAL',
+        prefix: String(cfg.prefix || '.'),
+        mode: rawMode === 'owner' ? 'PRIVATE' : 'PUBLIC',
+        cmds: String(RUIN_TOTAL_CMDS),
+        uptime: formatPanelUptime(process.uptime()),
+        time: new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }).toUpperCase(),
+        storage: formatBytes(getSessionStorageBytes())
+    };
 }
 
-function buildRuinCommandIndex(phoneNumber) {
-    const cfg = loadBotConfig(phoneNumber);
-    const pfx = String(cfg.prefix || '.');
+// Command index lines per category, wrapped short + prefix-aware.
+// labelFmt styles the category headers (bold for most, $ shell for terminal).
+function ruinIndexLines(phoneNumber, width = 26, labelFmt = (l) => `*${l}*`) {
+    const pfx = String(loadBotConfig(phoneNumber).prefix || '.');
+    const out = [];
+    for (const cat of RUIN_MENU_CATEGORIES) {
+        out.push(labelFmt(cat.label));
+        const tokens = cat.cmds.map(c => pfx + c);
+        for (const line of wrapCmdLines(tokens, width)) out.push(line);
+    }
+    return out;
+}
+
+// ──────────────────────────────────────────────
+// 🏛 RUIN INTERFACE — CODEx-style open frames.
+// .menu → status panel + poll (ALL MENU / SYSTEM / CONFIG / GROUP / FUN).
+// Every poll vote renders its own framed view in one message.
+// Lines stay short — nothing rolls over on the phone.
+// ──────────────────────────────────────────────
+
+// Open-right frame (authentic CODEx style): no right border, 𖣘 sigils,
+// top/bottom borders span the same width so everything stays aligned.
+function ruinOpenBox(title, rows, innerW = 0) {
+    const content = rows.map(r => String(r));
+    const w = Math.max(innerW, ...content.map(r => r.length), 12);
+    const t = `〔 𖣘 ${title} 〕`;
+    const top = '╔══' + t + '═'.repeat(Math.max(1, w - t.length)) + '❐';
+    const iTop = '║ ╔' + '═'.repeat(w - 1) + '◆';
+    const body = content.map(r => '║ ║ ' + r).join('\n');
+    const iBottom = '║ ╚' + '═'.repeat(w - 1) + '◆';
+    const bottom = '╚' + '═'.repeat(w + 2) + '❐';
+    return [top, iTop, body, iBottom, bottom].join('\n');
+}
+
+// ── STATUS PANEL (message 1 of Ruin .menu) ──
+function buildRuinStatusPanel(phoneNumber, sock) {
+    const f = ruinStatusFacts(phoneNumber, sock);
+    // truncate by code points so fancy names (astral chars) never split
+    const name = Array.from(f.name).slice(0, 24).join('');
+    return ruinOpenBox('EVENTIDE OMEGA', [
+        `𖣘 USER: ${name}`,
+        `𖣘 PERSONA: RUIN`,
+        `𖣘 HOST: ${f.host}`,
+        `𖣘 PREFIX: ${f.prefix}`,
+        `𖣘 CMDS: ${f.cmds}`,
+        `𖣘 UPTIME: ${f.uptime}`,
+        `𖣘 MODE: ${f.mode}`,
+        `𖣘 STORAGE: ${f.storage}`,
+        `𖣘 TIME: ${f.time}`
+    ]);
+}
+
+// ── ALL MENU: the full command index (exact format the owner picked) ──
+function buildRuinCommandIndexBox(phoneNumber) {
+    const pfx = String(loadBotConfig(phoneNumber).prefix || '.');
     const rows = [];
     for (const cat of RUIN_MENU_CATEGORIES) {
-        rows.push('');
         rows.push(cat.label);
         const tokens = cat.cmds.map(c => pfx + c);
-        for (const line of wrapCmdLines(tokens, 38)) rows.push('   ' + line);
+        for (const line of wrapCmdLines(tokens, 39)) rows.push('   ' + line);
+        rows.push('');
     }
-    return buildRuinPanel('COMMAND INDEX', rows);
+    return ruinOpenBox('COMMAND INDEX', rows, 42);
 }
 
-// Sends the Ruin persona menu: status panel + categorized command index.
+// ── SYSTEM MENU ──
+function buildRuinSystemMenu(phoneNumber) {
+    const pfx = String(loadBotConfig(phoneNumber).prefix || '.');
+    const sec = (title, cmds) => {
+        const out = [`𖣘 ${title}`];
+        const tokens = cmds.map(c => pfx + c);
+        for (const line of wrapCmdLines(tokens, 36)) out.push('   ' + line);
+        return out;
+    };
+    const rows = [
+        ...sec('STATUS', ['ping', 'alive', 'uptime', 'runtime', 'status', 'info', 'version', 'os', 'botinfo', 'profile']),
+        ...sec('SESSION', ['session', 'sessions', 'qr', 'logout', 'reconnect', 'backup']),
+        ...sec('LOGS', ['logs', 'recentlogs', 'cmdstats']),
+        ...sec('POWER', ['restart', 'shutdown', 'dev', 'devnumber', 'devcontact'])
+    ];
+    return ruinOpenBox('SYSTEM MENU', rows, 40);
+}
+
+// ── CONFIG MENU ──
+function buildRuinConfigMenu(phoneNumber) {
+    const pfx = String(loadBotConfig(phoneNumber).prefix || '.');
+    const sec = (title, cmds) => {
+        const out = [`𖣘 ${title}`];
+        const tokens = cmds.map(c => pfx + c);
+        for (const line of wrapCmdLines(tokens, 36)) out.push('   ' + line);
+        return out;
+    };
+    const rows = [
+        ...sec('ACCESS', ['mode', 'public', 'owner']),
+        ...sec('IDENTITY', ['setname', 'setbio', 'setstatus', 'setpp', 'getpp', 'profile']),
+        ...sec('PREFIX & ALIASES', ['setprefix', 'changeprefix', 'setalias', 'delalias', 'aliases']),
+        ...sec('PERSONA', ['persona']),
+        ...sec('AI CORE', ['pluginkey', 'plugin']),
+        ...sec('FACTORY', ['reset'])
+    ];
+    return ruinOpenBox('CONFIG MENU', rows, 40);
+}
+
+// ── GROUP MENU ──
+function buildRuinGroupMenu(phoneNumber) {
+    const pfx = String(loadBotConfig(phoneNumber).prefix || '.');
+    const sec = (title, cmds) => {
+        const out = [`𖣘 ${title}`];
+        const tokens = cmds.map(c => pfx + c);
+        for (const line of wrapCmdLines(tokens, 36)) out.push('   ' + line);
+        return out;
+    };
+    const rows = [
+        ...sec('ADMIN', ['add', 'kick', 'promote', 'demote', 'mute', 'unmute', 'listmuted', 'revoke', 'link', 'groupinfo', 'grouppic', 'listgc', 'getvcf', 'join']),
+        ...sec('MASS', ['tagall', 'hidetag', 'ht']),
+        ...sec('WARDS', ['antilink', 'antimention', 'antiforward', 'antidelete', 'antideleteconfig', 'antideletecfg', 'autoreact', 'autoreactconfig']),
+        ...sec('WARN', ['warn', 'unwarn', 'warns', 'warnconfig', 'warncfg', 'warnreset']),
+        ...sec('GREET', ['welcome', 'goodbye', 'greet']),
+        ...sec('MODERATION', ['block', 'unblock', 'del', 'cancel'])
+    ];
+    return ruinOpenBox('GROUP MENU', rows, 40);
+}
+
+// ── FUN MENU ──
+function buildRuinFunMenu(phoneNumber) {
+    const pfx = String(loadBotConfig(phoneNumber).prefix || '.');
+    const sec = (title, cmds) => {
+        const out = [`𖣘 ${title}`];
+        const tokens = cmds.map(c => pfx + c);
+        for (const line of wrapCmdLines(tokens, 36)) out.push('   ' + line);
+        return out;
+    };
+    const rows = [
+        ...sec('GAMES', ['tictactoe', 'ttt', 'xo', 'hangman', 'hm', 'chain', 'wordchain', 'wc', 'trivia', 'quiz', 'riddle', 'hint']),
+        ...sec('MEDIA', ['sticker', 'toimg', 'viewonce', 'vv', 'pfp', 'gpp', 'ggpp']),
+        ...sec('FUN', ['rizz', 'pickup', 'calc', 'base64'])
+    ];
+    return ruinOpenBox('FUN MENU', rows, 40);
+}
+
+// ── RUIN POLL (message 2 of Ruin .menu) ──
+const RUIN_POLL_QUESTION = `╔════════╦════════╗\n     EVENTIDE OMEGA\n╚════════╩════════╝`;
+const RUIN_POLL_OPTIONS = [
+    '╰|...➤ [ 1. ALL MENU ]',
+    '╰|...➤ [ 2. SYSTEM MENU ]',
+    '╰|...➤ [ 3. CONFIG MENU ]',
+    '╰|...➤ [ 4. GROUP MENU ]',
+    '╰|...➤ [ 5. FUN MENU ]'
+];
+const RUIN_POLL_IDS = ['rm_all', 'rm_system', 'rm_config', 'rm_group', 'rm_fun'];
+
+// Sends the Ruin persona menu: status panel, then the menu poll.
 async function sendRuinMenu(sock, remoteJid, phoneNumber) {
     if (sock?._eventidePhone) flashPresenceOnline(sock, sock._eventidePhone);
-    const cfg = loadBotConfig(phoneNumber);
-    const mode = String(loadBotMode(phoneNumber) || 'public').toUpperCase();
-    const host = isSupabaseEnabled() ? 'RENDER · SUPABASE' : 'PANEL · LOCAL';
-    const time = new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-    const user = String(sock.user?.name || phoneNumber);
-
-    const panel = buildRuinPanel('EVENTIDE OMEGA', [
-        `𖣘 USER: ${user}`,
-        `𖣘 PERSONA: RUIN`,
-        `𖣘 HOST: ${host}`,
-        `𖣘 PREFIX: ${cfg.prefix || '.'}`,
-        `𖣘 CMDS: ${RUIN_TOTAL_CMDS}`,
-        `𖣘 UPTIME: ${formatPanelUptime(process.uptime())}`,
-        `𖣘 MODE: ${mode}`,
-        `𖣘 STORAGE: ${formatBytes(getSessionStorageBytes())}`,
-        `𖣘 TIME: ${time}`
-    ]);
-    await sock.sendMessage(remoteJid, { text: panel });
-    await delay(350);
-    await sock.sendMessage(remoteJid, { text: buildRuinCommandIndex(phoneNumber) });
-    log('WA-CMD', `${phoneNumber}: Ruin persona menu delivered.`);
+    await sock.sendMessage(remoteJid, { text: buildRuinStatusPanel(phoneNumber, sock) });
+    await delay(400);
+    await sendMenuPoll(sock, remoteJid, phoneNumber, RUIN_POLL_QUESTION, RUIN_POLL_OPTIONS, RUIN_POLL_IDS);
+    log('WA-CMD', `${phoneNumber}: Ruin persona menu delivered (status panel + menu poll).`);
 }
+
+
 
 // Sends the Eclipse persona menu: the original cinematic 3-stage animation,
 // banner image and the Owners/Group/Fun poll. Unchanged from the classic menu.
@@ -3593,6 +3722,31 @@ async function handleMenuVote(sock, remoteJid, phoneNumber, votedOptionId, pollI
                     try { await sendEclipseMenu(sock, remoteJid, phoneNumber); }
                     catch (err) { logError('PERSONA', `${phoneNumber}: eclipse menu failed`, err); }
                 }
+                break;
+            }
+            case 'rm_all': {
+                const k = await sock.sendMessage(remoteJid, { text: buildRuinCommandIndexBox(phoneNumber) });
+                if (k?.key) recordMenuMessage(replyKey, k.key);
+                break;
+            }
+            case 'rm_system': {
+                const k = await sock.sendMessage(remoteJid, { text: buildRuinSystemMenu(phoneNumber) });
+                if (k?.key) recordMenuMessage(replyKey, k.key);
+                break;
+            }
+            case 'rm_config': {
+                const k = await sock.sendMessage(remoteJid, { text: buildRuinConfigMenu(phoneNumber) });
+                if (k?.key) recordMenuMessage(replyKey, k.key);
+                break;
+            }
+            case 'rm_group': {
+                const k = await sock.sendMessage(remoteJid, { text: buildRuinGroupMenu(phoneNumber) });
+                if (k?.key) recordMenuMessage(replyKey, k.key);
+                break;
+            }
+            case 'rm_fun': {
+                const k = await sock.sendMessage(remoteJid, { text: buildRuinFunMenu(phoneNumber) });
+                if (k?.key) recordMenuMessage(replyKey, k.key);
                 break;
             }
             case 'ttt_vs_bot': {
@@ -4779,9 +4933,8 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         return;
     }
 
-// ──────────────────────────────────────────────
-// 🗣️ CUSTOMER CARE AI ORACLE (.help <question>)
-// ──────────────────────────────────────────────
+    // 🗣️ CUSTOMER CARE AI ORACLE (.help <question>)
+    // ──────────────────────────────────────────────
     if (token === '.help') {
         // 🛡️ Owner-only: .help only works for the paired bot owner's number.
         if (!isSenderOwner) {

@@ -28,24 +28,26 @@ normally, on Render (Supabase restore) and panel (local disk) alike.
 
 ## Ruin menu
 
-**Message 1 — status panel:**
+**Message 1 — status panel** (CODEx-style open frame, aligned borders, short lines):
 ```
-╔══〔 𖣘 EVENTIDE OMEGA 〕══════════❐
-║ ╔══════════════════════════════◆
+╔══〔 𖣘 EVENTIDE OMEGA 〕═══════❐
+║ ╔═══════════════════════════◆
 ║ ║ 𖣘 USER: <bot name>
 ║ ║ 𖣘 PERSONA: RUIN
-║ ║ 𖣘 HOST: RENDER · SUPABASE   (or PANEL · LOCAL)
+║ ║ 𖣘 HOST: PANEL · LOCAL      (or RENDER · SUPABASE)
 ║ ║ 𖣘 PREFIX: .
 ║ ║ 𖣘 CMDS: 102
-║ ║ 𖣘 UPTIME: 0d - 0h - 0m - 58s
+║ ║ 𖣘 UPTIME: 0d - 0h - 59m - 16s
 ║ ║ 𖣘 MODE: PUBLIC
-║ ║ 𖣘 STORAGE: 12.4 MB          (sessions folder size)
-║ ║ 𖣘 TIME: 11:40 AM
-║ ╚══════════════════════════════◆
-╚══════════════════════════════════❐
+║ ║ 𖣘 STORAGE: 173.5 KB
+║ ║ 𖣘 TIME: 6:08 PM
+║ ╚═══════════════════════════◆
+╚══════════════════════════════❐
 ```
-**Message 2 — command index** grouped under ⚙ SYSTEM, 🛠 CONFIG, 🎮 FUN, 👥 GROUP,
-wrapped to WhatsApp width, prefix-aware (shows your custom prefix if you set one).
+**Message 2 — menu poll:** ALL MENU · SYSTEM MENU · CONFIG MENU · GROUP MENU · FUN MENU.
+Each vote opens its own framed view — ALL MENU shows the full command index
+(⚙ SYSTEM / 🛠 CONFIG / 🎮 FUN / 👥 GROUP), and the four submenus show their
+sections in matching boxes. Every view is one message, prefix-aware.
 
 ## Persistence (Render + Panel both covered)
 
