@@ -525,6 +525,7 @@ const COMMANDS = {
 const telegramUsers = new Map();
 const waSessions = new Map();
 const reconnectAttempts = new Map(); // Tracks reconnection retries per phone number (Max 3)
+const connClosed428s = new Map(); // phoneNumber -> { count, windowStart, lastNotifiedAt } for 428 connectionClosed tracking
 const sentPolls = new Map(); // Tracks sent poll creation messages in memory for decryption (ID -> message)
 const lastPollVotes = new Map(); // pollId:voterJid -> last voted option id (lets changed votes trigger a new reply)
 const menuReplyMessages = new Map(); // pollId:voterJid -> [message keys] sent for the current menu reply (deleted on vote change)
@@ -2882,6 +2883,53 @@ async function cleanupDisconnectedSession({ phoneNumber, tgId, authDir, notifyTe
     }
 }
 
+// ⚠️ 428 connectionClosed — reconnect safely, never delete the session.
+async function handleConnectionClosed428({ sock, phoneNumber, tgId, authDir, isRestore }) {
+    const liveSession = waSessions.get(phoneNumber);
+    if (liveSession?.sock && liveSession.sock !== sock) {
+        log('SOCKET', `${phoneNumber}: stale 428 close ignored.`);
+        return;
+    }
+    waSessions.delete(phoneNumber);
+
+    const now = Date.now();
+    let st = connClosed428s.get(phoneNumber);
+    if (!st || now - st.windowStart > 10 * 60 * 1000) {
+        st = { count: 0, windowStart: now, lastNotifiedAt: 0 };
+    }
+    st.count += 1;
+    connClosed428s.set(phoneNumber, st);
+
+    // Storm detection: >3 closes in 10 min means something is fighting this
+    // session (almost always a second instance of the same number) — back off
+    // instead of reconnecting in a hot loop.
+    const storming = st.count > 3;
+    const baseDelay = parseInt(process.env.CLOSE428_DELAY_MS || '5000', 10) || 5000;
+    const stormBackoff = parseInt(process.env.CLOSE428_STORM_BACKOFF_MS || '600000', 10) || 600000;
+    const delayMs = storming ? stormBackoff : baseDelay + Math.floor(Math.random() * baseDelay);
+    log('SOCKET', `${phoneNumber}: 428 connectionClosed (#${st.count}). Credentials are fine — session is NOT deleted. ${storming ? 'STORM — backing off (same number running in two places?).' : 'Reconnecting with a fresh WA version...'}`);
+
+    // Fresh WhatsApp Web version — version drift is a common 428 trigger.
+    cachedBaileysVersion = null;
+    cachedBaileysVersionAt = 0;
+    let freshVersion = null;
+    try { freshVersion = await getBaileysVersion(); } catch (_) {}
+
+    if (tgId !== null && typeof tgId !== 'undefined') {
+        setTelegramUserState(tgId, { phoneNumber, status: 'connecting', sock: null });
+        saveUserMap();
+    }
+
+    await delay(delayMs);
+
+    try {
+        await createSocketForSession({ phoneNumber, tgId, authDir, version: freshVersion, isRestore });
+        log('SOCKET', `${phoneNumber}: socket rebuilt after 428 with fresh WA version.`);
+    } catch (err) {
+        logError('SOCKET', `${phoneNumber}: failed to rebuild socket after 428`, err);
+    }
+}
+
 async function restartSocketAfterClose({ closingSock, phoneNumber, tgId, authDir, version, isRestore, reason, delayMs = 5000 }) {
     const liveSession = waSessions.get(phoneNumber);
     if (liveSession?.sock && liveSession.sock !== closingSock) {
@@ -3121,6 +3169,31 @@ function setupSocketEvents(sock, phoneNumber, tgId, authDir, version, isRestore)
                 logError('DEPLOY', `${phoneNumber}: deploy notice failed`, err);
             }
 
+            // ⚠️ 428 NOTICE — after reconnecting from connectionClosed, DM the
+            // owner (max once per 30 min) with the likely cause so it never
+            // stays a mystery in the logs.
+            try {
+                const st428 = connClosed428s.get(phoneNumber);
+                const myJid428 = sock?.authState?.creds?.me?.id;
+                if (st428 && st428.count > 0 && myJid428 && Date.now() - (st428.lastNotifiedAt || 0) > 30 * 60 * 1000) {
+                    st428.lastNotifiedAt = Date.now();
+                    connClosed428s.set(phoneNumber, st428);
+                    const selfJid428 = `${myJid428.split(':')[0]}@s.whatsapp.net`;
+                    await sock.sendMessage(selfJid428, {
+                        text: `⚠️ *CONNECTION NOTICE (428)*\n\n` +
+                            `WhatsApp closed my connection\n` +
+                            `${st428.count}x recently.\n\n` +
+                            `That usually means this number\n` +
+                            `is linked in TWO places at once\n` +
+                            `(e.g. Render + panel both on).\n\n` +
+                            `If both are running, stop one —\n` +
+                            `they fight each other forever.\n\n` +
+                            `   " one body, one vessel. "`
+                    }).catch(() => {});
+                    log('SOCKET', `${phoneNumber}: 428 owner notice DM sent (${st428.count} closes).`);
+                }
+            } catch (_) {}
+
             // 📡 READY MARKER — this is the log line that says the bot is
             // responding NOW. Watch for it after every deploy/restart.
             log('READY', `${phoneNumber}: ⚡ SESSION READY — the bot is responding now. Type .ping in WhatsApp to confirm.`);
@@ -3154,21 +3227,42 @@ function setupSocketEvents(sock, phoneNumber, tgId, authDir, version, isRestore)
                 return;
             }
 
-            if (code === 515) {
-                await restartSocketAfterClose({
-                    closingSock: sock,
-                    phoneNumber,
-                    tgId,
-                    authDir,
-                    version,
-                    isRestore,
-                    reason: 'Baileys requested new socket (515)',
-                    delayMs: 3000
-                });
-                return;
-            }
+    if (code === 515) {
+        await restartSocketAfterClose({
+            closingSock: sock,
+            phoneNumber,
+            tgId,
+            authDir,
+            version,
+            isRestore,
+            reason: 'Baileys requested new socket (515)',
+            delayMs: 3000
+        });
+        return;
+    }
 
-            await restartSocketAfterClose({
+    // ⚠️ 428 = connectionClosed — WhatsApp itself closed the link.
+    // This is NOT a broken session: credentials are perfectly fine, so the
+    // session must NEVER be deleted for it. The usual causes:
+    //   • the same number is linked/running in TWO places at once
+    //     (e.g. Render + panel both online — they kick each other forever)
+    //   • a network blip / WhatsApp server-side reset
+    // Handling: reconnect with a FRESH WhatsApp Web version (version drift is
+    // a known 428 trigger), jittered delay, storm backoff, and a one-time
+    // WhatsApp DM to the owner explaining the likely cause. Never counts
+    // against the max-reconnect budget that deletes sessions.
+    if (code === DisconnectReason.connectionClosed) {
+        await handleConnectionClosed428({
+            sock,
+            phoneNumber,
+            tgId,
+            authDir,
+            isRestore
+        });
+        return;
+    }
+
+    await restartSocketAfterClose({
                 closingSock: sock,
                 phoneNumber,
                 tgId,
