@@ -2037,7 +2037,7 @@ ANTI WARDS: .antilink on|off  .antimention on|off  .antiforward on|off  — all 
 WARN: .warn  .unwarn  .warns  .warnreset  .warnconfig  .warncfg
 GROUP ADMIN: .join <link>  .add  .kick  .promote  .demote  .mute  .unmute  .listmuted  .revoke  .link  .groupinfo  .grouppic  .listgc  .getvcf  .tagall  .hidetag/.ht  .block  .unblock
 GREET: .greet  .welcome  .goodbye
-SYSTEM: .ping  .uptime  .runtime  .info  .status  .version  .os  .botinfo  .alive  .profile  .session  .sessions  .logs  .recentlogs  .cmdstats  .qr  .logout  .reconnect  .restart  .shutdown  .backup  .dev  .devnumber  .devcontact
+SYSTEM: .ping  .uptime  .runtime  .info  .status  .version  .os  .botinfo  .alive  .profile  .session  .sessions  .cmdstats  .qr  .logout  .reconnect  .restart  .shutdown  .gitpull  .backup  .dev  .devnumber  .devcontact
 UTILS: .sticker  .toimg  .vv  .viewonce  .pfp  .gpp  .ggpp  .qr  .calc  .base64  .cancel  .del
 GAMES (interact by replying to the card/poll the bot sends): .tictactoe/.ttt/.xo  .hangman/.hm  .chain/.wordchain/.wc  .trivia/.quiz  .riddle  .hint
 FUN: .pickup/.rizz  (pickup lines)  .calc  .base64
@@ -2056,7 +2056,7 @@ FEATURE CHEAT SHEET (be exact):
 • PREFIX: .setprefix <char> changes the command prefix (e.g. "/" → commands become /menu).
 • ALIASES: .setalias <name> <command> makes shortcuts; .aliases lists them; .delalias removes.
 • REACTIONS: the bot drops a ⚡ on every command message it receives (fresh messages only).
-• LOGS: .logs / .recentlogs sends the latest bot logs to the owner.
+• GIT SYNC: .gitpull (dev only) pulls the latest commit from GitHub and restarts the bot with it.
 • SESSIONS: multi-user bot — each paired number is its own session with its own config. Pairing happens via the web panel or Telegram.
 • DEPLOY: the bot auto-pulls new code from GitHub and DMs the owner "🔄 DEPLOY COMPLETE" when a new build is live.
 
@@ -2129,7 +2129,7 @@ function getStaticHelpAnswer(rawQuestion) {
         blocks.push(`⚡ *STATUS*\n*.ping* — heartbeat · *.alive* — still here\n*.uptime / .runtime* — how long the bot's been up\n*.status* — full session status\n\n" the heart beats. "`);
     }
     if (has('deploy') || has('update') || has('restart') || has('shutdown')) {
-        blocks.push(`⚡ *DEPLOY & POWER* 👑 owner-only\n• Auto-deploy: the panel pulls new GitHub\n  commits by itself + DMs you DEPLOY COMPLETE\n• *.restart* — restart the bot\n• *.shutdown* — full power down\n\n" the machine rebuilds itself. "`);
+        blocks.push(`⚡ *DEPLOY & POWER* 👑 owner-only\n• Auto-deploy: the panel pulls new GitHub\n  commits by itself + DMs you DEPLOY COMPLETE\n• *.gitpull* — pull latest GitHub commit now\n• *.restart* — restart the bot\n• *.shutdown* — full power down\n\n" the machine rebuilds itself. "`);
     }
     if (has('backup') || has('session') || has('pair')) {
         blocks.push(`⚡ *SESSIONS & BACKUP*\n• Pairing: via the web panel or Telegram bot\n• *.session* — this session's info\n• *.sessions* — all paired sessions 👑\n• *.backup* — manual snapshot 👑\n\n" nothing is ever lost. "`);
@@ -2146,13 +2146,10 @@ function getStaticHelpAnswer(rawQuestion) {
 // ──────────────────────────────────────────────
 // 🧰 BASIC HELPERS
 // ──────────────────────────────────────────────
-const recentLogLines = []; // ring buffer — .logs sends the last lines to the owner
 function log(scope, message, extra) {
     const prefix = `[${new Date().toISOString()}] [${scope}]`;
     if (typeof extra === 'undefined') console.log(`${prefix} ${message}`);
     else console.log(`${prefix} ${message}`, extra);
-    recentLogLines.push(`[${scope}] ${message}`);
-    if (recentLogLines.length > 60) recentLogLines.shift();
 }
 
 function logError(scope, message, err) {
@@ -3343,8 +3340,8 @@ const RUIN_MENU_CATEGORIES = [
     {
         label: '⚙ SYSTEM',
         cmds: ['menu', 'help', 'ping', 'alive', 'uptime', 'runtime', 'os', 'botinfo', 'info', 'version',
-            'logs', 'recentlogs', 'dev', 'settings', 'session', 'sessions', 'cmdstats', 'qr', 'logout',
-            'restart', 'shutdown', 'reconnect', 'backup']
+            'dev', 'settings', 'session', 'sessions', 'cmdstats', 'qr', 'logout',
+            'restart', 'shutdown', 'reconnect', 'gitpull', 'backup']
     },
     {
         label: '🛠 CONFIG',
@@ -3515,9 +3512,9 @@ function buildRuinSystemMenu(phoneNumber) {
         return out;
     };
     const rows = [
-        ...sec('STATUS', ['ping', 'alive', 'uptime', 'runtime', 'status', 'info', 'version', 'os', 'botinfo', 'profile']),
+        ...sec('STATUS', ['ping', 'alive', 'uptime', 'runtime', 'status', 'info', 'version', 'os', 'botinfo', 'profile', 'cmdstats']),
         ...sec('SESSION', ['session', 'sessions', 'qr', 'logout', 'reconnect', 'backup']),
-        ...sec('LOGS', ['logs', 'recentlogs', 'cmdstats']),
+        ...sec('DEPLOY', ['gitpull']),
         ...sec('POWER', ['restart', 'shutdown', 'dev', 'devnumber', 'devcontact'])
     ];
     return ruinOpenBox('SYSTEM MENU', rows, 40);
@@ -4479,7 +4476,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     // (or set manually via .persona) commands run normally — the gate never
     // triggers again. `.persona` itself always passes so the owner can set it.
     // ──────────────────────────────────────────────
-    if (startsWithDot && token !== '.persona') {
+    if (startsWithDot && token !== '.persona' && token !== '.gitpull' && token !== '.gitupdate') {
         const boundPersona = String(botConfig.persona || '').trim().toLowerCase();
         if (!['eclipse', 'ruin'].includes(boundPersona)) {
             const gateOwner = msg.key.fromMe
@@ -5199,22 +5196,27 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     // 🔒 PRIVACY ACCESS LOCK (.mode public / owner)
     // ──────────────────────────────────────────────
 
-    // 📋 .logs — send the last log lines to the owner's chat (owner/dev only)
-    if (token === '.logs' || token === '.recentlogs') {
-        if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Owner/Dev only.', msg); return; }
-        let runCommit = '';
+    // 🛰 .gitpull — dev only: clone the latest commit from GitHub and restart
+    // the bot with it. Same machinery as auto-deploy, triggered from WhatsApp.
+    if (token === '.gitpull' || token === '.gitupdate') {
+        if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Dev only.', msg); return; }
         try {
-            const cf = path.join(__dirname, 'CURRENT_COMMIT.txt');
-            if (fs.existsSync(cf)) runCommit = fs.readFileSync(cf, 'utf8').trim().split(' ')[0] || '';
-        } catch (_) {}
-        const lines = recentLogLines.slice(-15);
-        await safeWaReply(sock, remoteJid,
-            `░▒▓█ *RECENT_LOGS* █▓▒░\n\n` +
-            `   ✦ *BUILD* :: ${runCommit || 'unknown'}\n` +
-            `   ✦ *REACT* :: ${runCommit ? 'V3_ARMED' : '?'}\n\n` +
-            (lines.length ? lines.map(l => `   ${l}`).join('\n') : '   • _no logs yet_') +
-            `\n\n   " The machine's heartbeat,\n     read from inside the chat. "`,
-            msg);
+            await safeWaReply(sock, remoteJid, '⏳ *GIT SYNC* :: pulling latest from GitHub...', msg);
+            const res = await pullLatestCode();
+            if (res.changed) {
+                await safeWaReply(sock, remoteJid, `🚀 *DEPLOY* :: new commit ${(res.commit || '').slice(0, 7)} — restarting with it...`, msg);
+                log('GIT', `${phoneNumber}: .gitpull deployed ${(res.commit || '').slice(0, 7)} — restarting.`);
+                setTimeout(() => {
+                    if (String(process.env.EVENTIDE_SUPERVISED || '') === '1') process.exit(0);
+                    else relaunchSelf();
+                }, 1500);
+            } else {
+                await safeWaReply(sock, remoteJid, `✅ *GIT SYNC* :: already on the latest commit (${(res.commit || '').slice(0, 7)}).`, msg);
+            }
+        } catch (err) {
+            logError('GIT', `${phoneNumber}: .gitpull failed`, err);
+            await safeWaReply(sock, remoteJid, `❌ GIT SYNC failed: ${err.message || err}`, msg);
+        }
         return;
     }
 
