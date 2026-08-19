@@ -1,18 +1,12 @@
-// Panel boot + auto-deploy supervisor.
+// Panel boot + supervisor.
 //
-//  1) Boot sync: pull the latest commit from GitHub main (unless disabled).
-//  2) Runs the bot (index.js) as a child process.
-//  3) 🛰 AUTO-DEPLOY: polls GitHub every few minutes — when a new commit
-//     appears it pulls it (npm-installs if package.json changed) and
-//     restarts the child. No panel restart button needed.
-//  4) Never exits — the panel's start command PID stays alive, logs stay in
+//  1) Stamps the local commit (CURRENT_COMMIT.txt) so the bot can show it.
+//  2) Runs the bot (index.js) as a child process and keeps it alive.
+//  3) Never exits — the panel's start command PID stays alive, logs stay in
 //     the panel console.
 //
-// Env knobs:
-//   AUTO_UPDATE              on/off — pull latest on boot (panel default: on)
-//   AUTO_DEPLOY              on/off — poll GitHub while running (panel default: on)
-//   AUTO_DEPLOY_POLL_MINUTES minutes between polls (default 3, fractional allowed, min 0.05)
-//   DEPLOY_SECRET            optional secret for the POST /api/deploy webhook
+// ⚠️ UPDATES: no auto-deploy anymore. New code is pulled ONLY from WhatsApp
+// via .gitpull (dev only). This file never touches GitHub.
 import './loadEnv.js';
 import { execSync, spawn } from 'child_process';
 import fs from 'fs';
@@ -21,36 +15,6 @@ import { fileURLToPath } from 'url';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 process.chdir(root);
-
-function flag(name) {
-    return String(process.env[name] || '').trim().toLowerCase();
-}
-function isOff(v) {
-    return ['0', 'false', 'off', 'no', 'disabled'].includes(v);
-}
-function isOn(v) {
-    return ['1', 'true', 'on', 'yes', 'enabled'].includes(v);
-}
-
-const panelMode = isOff(flag('USE_SUPABASE'));
-const auto = flag('AUTO_UPDATE');
-const shouldUpdateOnBoot = isOn(auto) || (!isOff(auto) && panelMode);
-
-// 🛰 AUTO-DEPLOY: panel default ON, Render default OFF (the platform redeploys
-// from GitHub itself there).
-const autoDeploy = flag('AUTO_DEPLOY');
-const pollEnabled = autoDeploy === '' ? panelMode : isOn(autoDeploy);
-const POLL_MIN = Math.max(0.05, parseFloat(process.env.AUTO_DEPLOY_POLL_MINUTES || '3') || 3);
-
-function sh(cmd, timeoutMs = 30000) {
-    execSync(cmd, {
-        cwd: root,
-        stdio: 'inherit',
-        timeout: timeoutMs, // never let a sync op block the event loop forever — a
-                            // queued SIGTERM handler must always be able to run
-        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
-    });
-}
 
 function hasCmd(cmd) {
     try {
@@ -71,76 +35,19 @@ function shQuiet(cmd, timeoutMs = 30000) {
     }).trim();
 }
 
-function shNull(cmd) {
-    try {
-        execSync(cmd, {
-            cwd: root,
-            stdio: 'ignore',
-            env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
-        });
-        return true;
-    } catch {
-        return false;
-    }
-}
-
-function stampCommit(note) {
+// Local stamp only — no network. The bot reads this for the deploy DM and
+// .gitpull updates it after every successful pull.
+function stampCommit() {
+    if (!hasCmd('git --version') || !fs.existsSync(path.join(root, '.git'))) return;
     try {
         const hash = shQuiet('git rev-parse --short HEAD');
         const msg = shQuiet('git log -1 --pretty=%s');
         const line = `${hash} ${msg}`;
         fs.writeFileSync(path.join(root, 'CURRENT_COMMIT.txt'), `${line}\n`, 'utf8');
-        console.log('────────────────────────────────────────');
-        console.log(`[UPDATE] ${note}`);
-        console.log(`[UPDATE] COMMIT: ${line}`);
-        console.log('────────────────────────────────────────');
-        return line;
+        console.log(`[SUPERVISOR] 📦 local commit: ${line}`);
     } catch (err) {
-        console.log('[UPDATE] could not read commit name:', err.message);
-        return '';
+        console.log('[SUPERVISOR] could not read commit name:', err.message);
     }
-}
-
-// Where auto-deploy pulls from. Overridable (e.g. a fork).
-const REMOTE_URL = String(process.env.GIT_REMOTE_URL || 'https://github.com/Phantom-Dev-X/eventide-original.git').trim();
-
-function ensureGit() {
-    if (!hasCmd('git --version')) return false;
-    try { sh('git config --global --add safe.directory ' + JSON.stringify(root)); } catch (_) {}
-    const gitDir = path.join(root, '.git');
-    if (!fs.existsSync(gitDir)) {
-        console.log('[UPDATE] no .git yet — attaching origin');
-        sh('git init');
-    }
-    if (!shNull(`git remote add origin ${REMOTE_URL}`)) {
-        shNull(`git remote set-url origin ${REMOTE_URL}`);
-    }
-    return true;
-}
-
-// Pull latest main from GitHub. Installs deps when package.json changed.
-function syncFromGithub(note) {
-    if (!ensureGit()) {
-        console.log('[UPDATE] git not installed in this image — skip auto-update');
-        return '';
-    }
-    const before = shQuiet('git rev-parse HEAD');
-    try { sh('git fetch --depth 1 origin main'); } catch (err) { console.error('[UPDATE] fetch failed:', err.message); }
-    let remote = '';
-    try { remote = shQuiet('git rev-parse origin/main'); } catch (_) {}
-    let pkgBefore = '';
-    try { pkgBefore = shQuiet('git rev-parse HEAD:package.json'); } catch (_) {}
-    if (remote && before !== remote) {
-        console.log(`[UPDATE] ${note} — new commit ${remote.slice(0, 7)}`);
-        try { sh('git checkout -f -B main origin/main'); } catch (err) { console.error('[UPDATE] checkout failed:', err.message); }
-    }
-    let pkgAfter = '';
-    try { pkgAfter = shQuiet('git rev-parse HEAD:package.json'); } catch (_) {}
-    if (pkgBefore && pkgAfter && pkgBefore !== pkgAfter) {
-        console.log('[UPDATE] package.json changed — npm install...');
-        try { sh('npm install --omit=dev --no-audit --no-fund', 180000); } catch (err) { console.error('[UPDATE] npm install failed:', err.message); }
-    }
-    return stampCommit(note);
 }
 
 // ──────────────────────────────────────────────
@@ -167,62 +74,21 @@ function startBot() {
         console.log(`[SUPERVISOR] restarting in ${backoff / 1000}s...`);
         setTimeout(() => {
             if (shuttingDown) return;
-            syncFromGithub('restart sync');
             startBot();
         }, backoff);
     });
 }
 
-// ──────────────────────────────────────────────
-// 🛰 AUTO-DEPLOY — poll GitHub while running
-// ──────────────────────────────────────────────
-let pollTimer = null;
-if (pollEnabled) {
-    console.log(`[AUTO-DEPLOY] 🛰 watching GitHub every ${POLL_MIN} min — pushes deploy automatically`);
-    pollTimer = setInterval(() => {
-        if (shuttingDown) return;
-        try {
-            if (!ensureGit()) return;
-            const before = shQuiet('git rev-parse HEAD');
-            try { shQuiet('git fetch --depth 1 origin main'); } catch (_) {}
-            let remote = '';
-            try { remote = shQuiet('git rev-parse origin/main'); } catch (_) {}
-            if (remote && before !== remote) {
-                console.log(`[AUTO-DEPLOY] 🚀 new commit detected (${remote.slice(0, 7)}) — deploying...`);
-                syncFromGithub('auto-deploy');
-                if (child) {
-                    try { child.kill('SIGTERM'); } catch (_) {}
-                } else {
-                    startBot();
-                }
-            }
-        } catch (err) {
-            console.error('[AUTO-DEPLOY] poll failed:', err.message);
-        }
-    }, POLL_MIN * 60 * 1000);
-} else {
-    console.log('[AUTO-DEPLOY] off (AUTO_DEPLOY not enabled on this host)');
-}
-
 // ⚡ FAST GRACEFUL SHUTDOWN — Pterodactyl sends SIGTERM when Stop is pressed.
-// Requirements:
-//   • stop ALL background work instantly (clear the poll timer — no new
-//     git/npm syncs start during shutdown)
-//   • SIGTERM the bot child, WAIT for it to actually exit (so no orphan
-//     process keeps the container alive — that's what made the panel hang on
-//     "Server marked as offline..." and caused power action locks)
-//   • SIGKILL the child if it doesn't die in ~2.5s (e.g. stuck in a sync op)
+//   • SIGTERM the bot child, WAIT for it to actually exit (no orphan process
+//     keeps the container alive)
+//   • SIGKILL the child if it doesn't die in ~2.5s
 //   • hard-exit with code 0 no later than ~4s so the panel registers the stop
-//     immediately
+//     immediately — no "Server marked as offline..." hangs
 function shutdown() {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log('[SUPERVISOR] SIGTERM/SIGINT received — fast shutdown...');
-
-    if (pollTimer) {
-        clearInterval(pollTimer);
-        pollTimer = null;
-    }
 
     const finish = (note) => {
         console.log(`[SUPERVISOR] ${note} — exiting (code 0)`);
@@ -257,17 +123,20 @@ process.on('SIGINT', shutdown);
 // ──────────────────────────────────────────────
 // 🚀 BOOT
 // ──────────────────────────────────────────────
-if (shouldUpdateOnBoot) {
-    console.log('[UPDATE] checking GitHub main on boot…');
-    syncFromGithub('boot sync');
-} else {
-    console.log('[UPDATE] auto-update off (Render / AUTO_UPDATE=false)');
-    if (hasCmd('git --version') && fs.existsSync(path.join(root, '.git'))) stampCommit('auto-update off — this is the local commit');
-}
+stampCommit();
 
 if (!fs.existsSync(path.join(root, 'node_modules'))) {
-    console.log('[UPDATE] node_modules missing — npm install...');
-    try { sh('npm install --omit=dev --no-audit --no-fund', 180000); } catch (err) { console.error('[UPDATE] npm install failed:', err.message); }
+    console.log('[SUPERVISOR] node_modules missing — npm install...');
+    try {
+        execSync('npm install --omit=dev --no-audit --no-fund', {
+            cwd: root,
+            stdio: 'inherit',
+            timeout: 180000,
+            env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+        });
+    } catch (err) {
+        console.error('[SUPERVISOR] npm install failed:', err.message);
+    }
 }
 
 startBot();

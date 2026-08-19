@@ -2058,7 +2058,7 @@ FEATURE CHEAT SHEET (be exact):
 • REACTIONS: the bot drops a ⚡ on every command message it receives (fresh messages only).
 • GIT SYNC: .gitpull (dev only) pulls the latest commit from GitHub and restarts the bot with it.
 • SESSIONS: multi-user bot — each paired number is its own session with its own config. Pairing happens via the web panel or Telegram.
-• DEPLOY: the bot auto-pulls new code from GitHub and DMs the owner "🔄 DEPLOY COMPLETE" when a new build is live.
+• DEPLOY: .gitpull (dev only) pulls the latest commit from GitHub and restarts the bot; the owner gets a DEPLOY COMPLETE DM when the new build is online.
 
 ANSWER STYLE:
 • Keep answers SHORT — WhatsApp bullets, *asterisk* bold, no markdown tables, no giant walls.
@@ -2129,7 +2129,7 @@ function getStaticHelpAnswer(rawQuestion) {
         blocks.push(`⚡ *STATUS*\n*.ping* — heartbeat · *.alive* — still here\n*.uptime / .runtime* — how long the bot's been up\n*.status* — full session status\n\n" the heart beats. "`);
     }
     if (has('deploy') || has('update') || has('restart') || has('shutdown')) {
-        blocks.push(`⚡ *DEPLOY & POWER* 👑 owner-only\n• Auto-deploy: the panel pulls new GitHub\n  commits by itself + DMs you DEPLOY COMPLETE\n• *.gitpull* — pull latest GitHub commit now\n• *.restart* — restart the bot\n• *.shutdown* — full power down\n\n" the machine rebuilds itself. "`);
+        blocks.push(`⚡ *DEPLOY & POWER* 👑 owner-only\n• *.gitpull* — pull latest GitHub commit now\n  (staged: checking → found → deploying → done)\n• *.restart* — restart the bot\n• *.shutdown* — full power down\n\n" the machine rebuilds itself. "`);
     }
     if (has('backup') || has('session') || has('pair')) {
         blocks.push(`⚡ *SESSIONS & BACKUP*\n• Pairing: via the web panel or Telegram bot\n• *.session* — this session's info\n• *.sessions* — all paired sessions 👑\n• *.backup* — manual snapshot 👑\n\n" nothing is ever lost. "`);
@@ -5197,25 +5197,46 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     // ──────────────────────────────────────────────
 
     // 🛰 .gitpull — dev only: clone the latest commit from GitHub and restart
-    // the bot with it. Same machinery as auto-deploy, triggered from WhatsApp.
+    // the bot with it. Staged progress: checking → found new commit → deploying
+    // → deployed successfully (with the commit name).
     if (token === '.gitpull' || token === '.gitupdate') {
         if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Dev only.', msg); return; }
+        if (gitSyncBusy) { await safeWaReply(sock, remoteJid, '⏳ *GIT SYNC* :: already running — one sec...', msg); return; }
+        gitSyncBusy = true;
         try {
-            await safeWaReply(sock, remoteJid, '⏳ *GIT SYNC* :: pulling latest from GitHub...', msg);
-            const res = await pullLatestCode();
-            if (res.changed) {
-                await safeWaReply(sock, remoteJid, `🚀 *DEPLOY* :: new commit ${(res.commit || '').slice(0, 7)} — restarting with it...`, msg);
-                log('GIT', `${phoneNumber}: .gitpull deployed ${(res.commit || '').slice(0, 7)} — restarting.`);
+            await safeWaReply(sock, remoteJid, '⏳ *GIT SYNC* :: checking git...', msg);
+
+            const chk = await gitCheck();
+            if (!chk.changed) {
+                await safeWaReply(sock, remoteJid,
+                    `✅ *GIT SYNC* :: already on the latest commit\n` +
+                    `   "${truncateCommitName(chk.name)}"\n\n` +
+                    `   nothing to deploy.`, msg);
+                log('GIT', `${phoneNumber}: .gitpull check — already latest (${chk.name}).`);
+            } else {
+                await safeWaReply(sock, remoteJid,
+                    `🚀 *GIT SYNC* :: found a new commit!\n` +
+                    `   "${truncateCommitName(chk.name)}"\n\n` +
+                    `   deploying...`, msg);
+                log('GIT', `${phoneNumber}: .gitpull deploying commit "${chk.name}".`);
+
+                const res = await pullLatestCode();
+                await safeWaReply(sock, remoteJid,
+                    `✅ *COMMIT DEPLOYED SUCCESSFULLY*\n` +
+                    `   "${truncateCommitName(res.name)}"\n` +
+                    `   (${(res.commit || '').slice(0, 7)})\n\n` +
+                    `   ⚡ restarting with the new build...`, msg);
+                log('GIT', `${phoneNumber}: .gitpull deployed "${res.name}" (${(res.commit || '').slice(0, 7)}) — restarting.`);
                 setTimeout(() => {
                     if (String(process.env.EVENTIDE_SUPERVISED || '') === '1') process.exit(0);
                     else relaunchSelf();
                 }, 1500);
-            } else {
-                await safeWaReply(sock, remoteJid, `✅ *GIT SYNC* :: already on the latest commit (${(res.commit || '').slice(0, 7)}).`, msg);
             }
         } catch (err) {
             logError('GIT', `${phoneNumber}: .gitpull failed`, err);
             await safeWaReply(sock, remoteJid, `❌ GIT SYNC failed: ${err.message || err}`, msg);
+        } finally {
+            gitSyncBusy = false;
         }
         return;
     }
@@ -7231,63 +7252,83 @@ initWebApp(app, {
 // 🚀 MAIN
 // ──────────────────────────────────────────────
 // ──────────────────────────────────────────────
-// 🛰 AUTO-DEPLOY (unsupervised mode — panel runs `node index.js` directly)
-// When boot.js is NOT supervising (Render via boot.js, or panel via npm start),
-// boot.js handles deploys. Here we handle the plain `node index.js` panel.
-// Polls GitHub every few minutes; on a new commit: pull (npm install if
-// package.json changed) then relaunch the bot as a fresh process.
+// 🛰 GIT SYNC (.gitpull) — dev-only WhatsApp command that pulls the latest
+// commit from GitHub and restarts the bot. No polling, no auto-deploy.
 // ──────────────────────────────────────────────
-function isPanelMode() {
-    const v = String(process.env.USE_SUPABASE || '').trim().toLowerCase();
-    return ['0', 'false', 'off', 'no', 'disabled'].includes(v);
-}
-
-function autoDeployPollEnabled() {
-    const v = String(process.env.AUTO_DEPLOY || '').trim().toLowerCase();
-    if (v === '') return isPanelMode();
-    return ['1', 'true', 'on', 'yes', 'enabled'].includes(v);
-}
-
-let deployInProgress = false;
+let gitSyncBusy = false;       // .gitpull in-flight guard
 let shuttingDown = false;      // set by the SIGTERM/SIGINT fast-shutdown handler
-let deployPollTimer = null;    // auto-deploy poll interval (cleared on shutdown)
 let httpServer = null;         // express server (closed on shutdown)
 
-async function pullLatestCode() {
-    const shQ = (cmd, timeoutMs = 30000) => execSync(cmd, {
+// Commit subjects can be long — keep the WhatsApp card short.
+function truncateCommitName(name, max = 38) {
+    const s = String(name || 'unknown commit').trim() || 'unknown commit';
+    return s.length > max ? s.slice(0, max - 1) + '…' : s;
+}
+
+// Git helpers used by .gitpull. If the folder has no .git (files copied
+// without history), we init + attach origin + fetch — i.e. clone in place.
+function gitShQ(cmd, timeoutMs = 60000) {
+    return execSync(cmd, {
         cwd: __dirname,
         encoding: 'utf8',
         timeout: timeoutMs, // a sync op can never block the event loop forever —
                             // the shutdown handler must always be able to run
         env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
     });
-    if (!fs.existsSync(path.join(__dirname, '.git'))) throw new Error('no .git dir');
-    try { shQ('git config --global --add safe.directory ' + JSON.stringify(__dirname)); } catch (_) {}
+}
+
+function gitEnsureRepo() {
+    if (!fs.existsSync(path.join(__dirname, '.git'))) {
+        log('GIT', 'no .git folder — initializing fresh repo (clone in place).');
+        gitShQ('git init');
+    }
+    try { gitShQ('git config --global --add safe.directory ' + JSON.stringify(__dirname)); } catch (_) {}
     const remoteUrl = String(process.env.GIT_REMOTE_URL || 'https://github.com/Phantom-Dev-X/eventide-original.git').trim();
     try {
-        shQ(`git remote add origin ${remoteUrl}`);
+        gitShQ(`git remote add origin ${remoteUrl}`);
     } catch (_) {
-        try { shQ(`git remote set-url origin ${remoteUrl}`); } catch (_) {}
+        try { gitShQ(`git remote set-url origin ${remoteUrl}`); } catch (_) {}
     }
-    const local = shQ('git rev-parse HEAD');
-    shQ('git fetch --depth 1 origin main');
-    const remote = shQ('git rev-parse origin/main');
-    if (local === remote) return { changed: false, commit: local };
+}
+
+function gitRemoteName() {
+    try { return gitShQ('git log -1 --pretty=%s origin/main').trim() || 'unknown commit'; }
+    catch (_) { return 'unknown commit'; }
+}
+
+// Light check: fetch + compare. Returns { changed, name } — no checkout.
+async function gitCheck() {
+    gitEnsureRepo();
+    gitShQ('git fetch --depth 1 origin main');
+    const local = gitShQ('git rev-parse HEAD').trim();
+    const remote = gitShQ('git rev-parse origin/main').trim();
+    return { changed: local !== remote, name: gitRemoteName() };
+}
+
+// Full pull: fetch + force-checkout + npm install if package.json changed.
+// Returns { changed, commit, name }.
+async function pullLatestCode() {
+    gitEnsureRepo();
+    gitShQ('git fetch --depth 1 origin main');
+    const local = gitShQ('git rev-parse HEAD').trim();
+    const remote = gitShQ('git rev-parse origin/main').trim();
+    if (local === remote) return { changed: false, commit: local, name: gitRemoteName() };
     let pkgBefore = '';
-    try { pkgBefore = shQ('git rev-parse HEAD:package.json'); } catch (_) {}
-    shQ('git checkout -f -B main origin/main');
+    try { pkgBefore = gitShQ('git rev-parse HEAD:package.json').trim(); } catch (_) {}
+    gitShQ('git checkout -f -B main origin/main');
     let commit = remote;
-    try { commit = shQ('git rev-parse HEAD'); } catch (_) {}
-    try { fs.writeFileSync(path.join(__dirname, 'CURRENT_COMMIT.txt'), `${commit} auto-deploy\n`, 'utf8'); } catch (_) {}
+    try { commit = gitShQ('git rev-parse HEAD').trim(); } catch (_) {}
+    const name = gitRemoteName();
+    try { fs.writeFileSync(path.join(__dirname, 'CURRENT_COMMIT.txt'), `${commit} ${name}\n`, 'utf8'); } catch (_) {}
     let pkgAfter = '';
-    try { pkgAfter = shQ('git rev-parse HEAD:package.json'); } catch (_) {}
+    try { pkgAfter = gitShQ('git rev-parse HEAD:package.json').trim(); } catch (_) {}
     if (pkgBefore && pkgAfter && pkgBefore !== pkgAfter) {
-        log('AUTO-DEPLOY', 'package.json changed — installing dependencies...');
-        try { shQ('npm install --omit=dev --no-audit --no-fund', 180000); } catch (err) {
-            logError('AUTO-DEPLOY', 'npm install failed', err);
+        log('GIT', 'package.json changed — installing dependencies...');
+        try { gitShQ('npm install --omit=dev --no-audit --no-fund', 180000); } catch (err) {
+            logError('GIT', 'npm install failed', err);
         }
     }
-    return { changed: true, commit };
+    return { changed: true, commit, name };
 }
 
 function relaunchSelf() {
@@ -7301,45 +7342,8 @@ function relaunchSelf() {
         env: { ...process.env, EVENTIDE_BIND_DELAY_MS: '3500' }
     });
     childProc.unref();
-    log('AUTO-DEPLOY', 'new bot process spawned — old process exiting in 1.5s...');
+    log('GIT', 'new bot process spawned — old process exiting in 1.5s...');
     setTimeout(() => process.exit(0), 1500);
-}
-
-async function deployLatest() {
-    if (shuttingDown || deployInProgress) return;
-    deployInProgress = true;
-    try {
-        const res = await pullLatestCode();
-        if (res.changed) {
-            log('AUTO-DEPLOY', `🚀 new commit ${(res.commit || '').slice(0, 7)} pulled — restarting bot...`);
-            if (String(process.env.EVENTIDE_SUPERVISED || '') === '1') {
-                log('AUTO-DEPLOY', 'supervised mode: exiting so boot.js respawns the new build');
-                setTimeout(() => process.exit(0), 500);
-            } else {
-                relaunchSelf();
-            }
-        }
-    } catch (err) {
-        logError('AUTO-DEPLOY', 'deploy failed', err);
-        deployInProgress = false;
-    }
-}
-
-function setupAutoDeployPoller() {
-    if (String(process.env.EVENTIDE_SUPERVISED || '') === '1') {
-        log('AUTO-DEPLOY', 'supervised by boot.js — deploys handled there');
-        return;
-    }
-    if (!autoDeployPollEnabled()) {
-        log('AUTO-DEPLOY', 'off (AUTO_DEPLOY not enabled for this host)');
-        return;
-    }
-    const mins = Math.max(0.05, parseFloat(process.env.AUTO_DEPLOY_POLL_MINUTES || '3') || 3);
-    log('AUTO-DEPLOY', `🛰 watching GitHub every ${mins} min — pushes deploy automatically`);
-    deployPollTimer = setInterval(() => {
-        if (shuttingDown) return;
-        deployLatest().catch(() => {});
-    }, mins * 60 * 1000);
 }
 
 async function main() {
@@ -7401,33 +7405,17 @@ async function main() {
         await delay(bindDelayMs);
     }
 
-    // 🌐 DEPLOY WEBHOOK — POST /api/deploy triggers pull+restart instantly.
-    // Optional DEPLOY_SECRET env: send header x-deploy-secret to match it.
-    app.post('/api/deploy', (req, res) => {
-        const secret = String(process.env.DEPLOY_SECRET || '').trim();
-        const provided = String(req.headers['x-deploy-secret'] || '');
-        if (secret && provided !== secret) {
-            log('DEPLOY', 'webhook rejected (bad secret)');
-            return res.status(403).json({ ok: false, error: 'bad secret' });
-        }
-        log('DEPLOY', '🌐 /api/deploy webhook — pulling latest commit and restarting...');
-        res.json({ ok: true, deploying: true });
-        setTimeout(() => deployLatest().catch(() => {}), 150);
-    });
-
     httpServer = app.listen(PORT, '0.0.0.0', () => {
         log('HTTP', `Server listening on port ${PORT}`);
         log('HTTP', `GET / -> status summary`);
         log('HTTP', `GET /health -> health info`);
         log('HTTP', `GET /ping -> pong`);
-        log('HTTP', `POST /api/deploy -> pull latest commit + restart (auto-deploy webhook)`);
         log('BOT', `Telegram bot polling is active.`);
         log('BOT', `Max users: ${MAX_USERS}`);
         log('BUILD', `✅ BUILD DONE in ${((Date.now() - buildStartedAt) / 1000).toFixed(1)}s — HTTP is up.`);
         log('BUILD', `⏳ sockets connecting... when you see "SESSION READY" for your number, .ping will respond.`);
     });
 
-    setupAutoDeployPoller();
 }
 
 process.on('unhandledRejection', err => logError('PROCESS', 'Unhandled promise rejection', err));
@@ -7449,8 +7437,6 @@ function shutdownBot(signal) {
     shuttingDown = true;
     log('PROCESS', `${signal} received — fast shutdown (exit code 0).`);
 
-    // stop the auto-deploy poller so no new git/npm work starts now
-    try { if (deployPollTimer) { clearInterval(deployPollTimer); deployPollTimer = null; } } catch (_) {}
 
     // best-effort connection teardown — never awaited, never allowed to block
     try { if (tgBot) tgBot.stopPolling().catch(() => {}); } catch (_) {}

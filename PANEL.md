@@ -3,12 +3,13 @@
 Render stays on Supabase (ephemeral disk).  
 This panel box uses the **persistent volume** only.
 
-## 🛰 Auto-deploy (push → live, no restart button)
+## 🛰 Deploying (push → live from WhatsApp)
 
-The panel **auto-pulls from GitHub** and restarts the bot whenever you push a
-commit. It also DMs your WhatsApp when the new build is online. Details:
-**[AUTO_DEPLOY.md](./AUTO_DEPLOY.md)** — recommended start command is `npm start`
-(boot.js supervises + auto-deploys); `node index.js` also self-updates.
+Deploys are manual + instant: push to GitHub, then type **`.gitpull`** in
+WhatsApp (dev only) — the bot pulls the new commit and restarts itself, with
+staged progress messages and the commit name. The owner also gets a
+`🔄 DEPLOY COMPLETE` DM when the new build is online. Details:
+**[AUTO_DEPLOY.md](./AUTO_DEPLOY.md)**.
 
 ## Startup command
 
