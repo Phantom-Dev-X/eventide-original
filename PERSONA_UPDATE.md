@@ -77,3 +77,18 @@ Once picked (poll or `.persona`), the value is `'eclipse'` or `'ruin'`.
 - Verified offline with a stubbed Baileys socket: 12/12 scenarios pass
   (poll sent on first pair → vote deletes poll + persists choice → .menu
   renders the right persona → .persona switches back and forth)
+
+## 🛎 Help AI persona (.helpconfig)
+
+The help AI now has its own voice, separate from the menu persona:
+
+- 🌑 **ECLIPSE** — the classic cinematic oracle (hype, terminal energy)
+- 🛎 **RUIN** — friendly customer-care agent (warm, human, casual: "ohh, the
+  antilink system! nice, let me walk you through it")
+
+- **First `.help` while unbound** → the bot asks via a poll (deleted after the
+  vote), choice saved forever.
+- **`.helpconfig eclipse|ruin`** (owner only) switches the voice anytime;
+  `.helpconfig` alone shows the current one (`ACTIVE :: RUIN` / `UNBOUND`).
+- Both voices share the exact same fact sheet (full command registry +
+  cheat sheet), so accuracy is identical — only the delivery changes.

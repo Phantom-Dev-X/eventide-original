@@ -279,6 +279,14 @@ const PERSONA_POLL_OPTIONS = [
 ];
 const PERSONA_POLL_IDS = ['persona_eclipse', 'persona_ruin'];
 
+// 🛎 HELP AI PERSONA SELECTION (first .help when unbound)
+const HELP_PERSONA_POLL_QUESTION = `╔════════╦════════╗\n     EVENTIDE OMEGA\n    CHOOSE HELP AI\n╚════════╩════════╝`;
+const HELP_PERSONA_POLL_OPTIONS = [
+    '🌑 ECLIPSE — cinematic oracle',
+    '🛎 RUIN — friendly support'
+];
+const HELP_PERSONA_POLL_IDS = ['helpp_eclipse', 'helpp_ruin'];
+
 // ──────────────────────────────────────────────
 // 🗂️ SUB-MENU / DOMAIN POLLS
 // ──────────────────────────────────────────────
@@ -533,6 +541,7 @@ const helpModeUsers = new Map(); // Tracks active AI Help Mode chats (JID -> tim
 const presenceControllers = new Map(); // phoneNumber -> { sock, backgroundState, cycleTimer, flashTimer }
 const autoreactSessions = new Map(); // phoneNumber -> { step, awaitingContact } for autoreact config flow
 const personaPollKeys = new Map(); // phoneNumber -> persona poll message key (deleted after the owner picks)
+const helpPersonaPollKeys = new Map(); // phoneNumber -> help-persona poll key (deleted after the pick)
 const webPairSessions = new Map(); // phoneNumber -> { code, status, createdAt } for web pairing
 const mutedUsers = new Map(); // `${phoneNumber}:${groupJid}` -> Set of muted member jids
 const recentMessages = new Map(); // `${phoneNumber}:${remoteJid}:${msgId}` -> message (for antidelete restore)
@@ -613,6 +622,7 @@ const DEFAULT_BOT_CONFIG = {
     bio: '',                // about/bio override ('' = leave as is)
     geminiApiKey: '',       // owner's personal Gemini key (.pluginkey) — this session's AI routes through it
     persona: '',            // '' = UNBOUND (any command asks for the persona pick) · 'eclipse' | 'ruin' once chosen
+    helpPersona: '',        // '' = UNBOUND (first .help asks for the AI voice) · 'eclipse' | 'ruin' once chosen
     lastDeployNotifiedCommit: '', // last commit hash the owner got a "deploy complete" DM for
     autoreact: {
         enabled: false,
@@ -2011,13 +2021,11 @@ ROAST: <the roast>
 SCORE: <number>`;
 }
 
-function getHelpSystemPrompt() {
-    return `You are EVENTIDE OMEGA — the in-bot ORACLE. Your vibe: cinematic hype, unshakeable confidence, the energy of a bot that rules the night. Talk like the bot's own terminal: short, punchy, *bolded* WhatsApp lines, ⚡🌑 emoji, and end bigger answers with a quote-style one-liner (like: " the void responds. "). Hype the delivery — NEVER fake the facts.
-
-HARD TRUTH RULES:
-1. ONLY commands in the REGISTRY below exist. If asked about ANYTHING not in the registry (music download, tiktok, video dl, ai image gen, etc.) say it's not built yet — then hype the future: "not yet — but the void is always expanding. type .dev to tell Patrick to build it." NEVER invent a command.
+// Shared facts: the complete registry + cheat sheet used by BOTH help voices.
+const HELP_FACT_SHEET = `HARD TRUTH RULES:
+1. ONLY commands in the REGISTRY below exist. If asked about ANYTHING not in the registry (music download, tiktok, video dl, ai image gen, etc.) say it's not built yet — then point to .dev so Patrick can build it. NEVER invent a command.
 2. NEVER claim a registry command is "not built" — every single one of them works. Games ARE built. Antilink, antidelete, autoreact, warn, hidetag, persona ARE built.
-3. Flag owner-only commands with "👑 owner-only": .autoreact .autoreactconfig .antidelete .antideleteconfig .persona .pluginkey .plugin .mode .public .owner .setprefix .setalias .delalias .setname .setbio .setstatus .setpp .reset .restart .shutdown .logout .backup .sessions .cmdstats.
+3. Flag owner-only commands with "👑 owner-only": .autoreact .autoreactconfig .antidelete .antideleteconfig .persona .helpconfig .pluginkey .plugin .mode .public .owner .setprefix .setalias .delalias .setname .setbio .setstatus .setpp .reset .restart .shutdown .logout .backup .sessions .cmdstats.
 4. ALWAYS mention the linked pair when explaining a feature:
    • .autoreact on|off  +  .autoreactconfig (pick groups/channels/contacts)
    • .antidelete on|off  +  .antideleteconfig (same picker; deleted msgs get forwarded to the owner DM)
@@ -2025,12 +2033,14 @@ HARD TRUTH RULES:
    • .warn  +  .warnconfig (phrases/limits/actions) / .unwarn / .warns / .warnreset
    • .welcome / .goodbye (set group greet texts) + .greet (view/toggle)
    • .persona eclipse|ruin — switches the bot's whole look & feel
+   • .helpconfig eclipse|ruin — the AI help voice (eclipse = cinematic oracle · ruin = friendly support)
    • .pluginkey <gemini-key> — owner's personal AI keys
-   • .menu — the front door (Eclipse = cinematic animated menu; Ruin = clean panel + command index)
+   • .menu — the front door (Eclipse = cinematic animated menu; Ruin = status panel + menu poll)
 
 REGISTRY (every command below is real):
 MENU & HELP: .menu  .help (alone = help MODE; .help <anything> = one-shot answer)  .help list
 PERSONA: .persona eclipse|ruin  (.persona alone shows the current binding; UNBOUND = pick via the poll)
+HELP PERSONA: .helpconfig eclipse|ruin  (👑 — the voice of the help AI; .helpconfig alone shows the current voice)
 CONFIG: .mode public|owner  .public  .owner  .setprefix <.>  .setalias  .delalias  .aliases  .setname  .setbio  .setstatus  .setpp  .getpp  .profile  .settings  .reset  .pluginkey <key>  .plugin
 AUTOREACT: .autoreact on|off  .autoreactconfig
 ANTIDELETE: .antidelete on|off  .antideleteconfig  .antideletecfg
@@ -2049,7 +2059,8 @@ FEATURE CHEAT SHEET (be exact):
 • ANTIDELETE: 👑 recovers deleted messages from watched chats and forwards them to the owner DM. Same endpoint flow: .antideleteconfig, then .antidelete on.
 • WARN: .warn replies to a message or mention. .warnconfig sets max warns, trigger phrases, kick action per group. .warns lists, .unwarn removes, .warnreset clears.
 • PERSONA: the bot's whole identity — 🌑 ECLIPSE (cinematic 3-stage animated menu) or ⚙️ RUIN (clean minimal panel + categorized command index). First pairing sends a poll; the pick is saved forever (no re-pairing). 👑 .persona eclipse|ruin switches anytime. If a user's commands are blocked by "PERSONA FIRST", they must pick in the poll first.
-• HELP MODE: .help alone toggles help mode ON/OFF — while ON, every message is answered by you (the oracle) and other commands don't run. .help <question> answers once without entering help mode. Times out after 10 min silence.
+• HELP PERSONA: 👑 .helpconfig eclipse|ruin — the voice of the help AI: ECLIPSE = cinematic oracle · RUIN = friendly customer-care agent. While unbound, the first .help asks via a poll (deleted after the pick). .helpconfig alone shows the current voice.
+• HELP MODE: .help alone toggles help mode ON/OFF — while ON, every message is answered by the help AI and other commands don't run. .help <question> answers once without entering help mode. Times out after 10 min silence.
 • MENU: .menu shows the bound persona's menu. Eclipse: animated terminal + banner + Owners/Group/Fun poll. Ruin: status panel + menu poll (ALL MENU / SYSTEM / CONFIG / GROUP / FUN) — ALL MENU opens the full command index.
 • GAMES: tic-tac-toe, hangman, word chain, trivia, riddle — the bot sends a poll/card and you reply to THAT message (not loose chat) to play.
 • PLUGIN KEYS: 👑 .pluginkey <gemini-key1,gemini-key2> attaches the owner's personal Gemini keys (comma-separated, tried in order). Typing it again ADDS; .pluginkey set <keys> replaces; .pluginkey off clears. Their keys always try first; keys never leak between users.
@@ -2059,12 +2070,32 @@ FEATURE CHEAT SHEET (be exact):
 • REACTIONS: the bot drops a ⚡ on every command message it receives (fresh messages only).
 • GIT SYNC: .gitpull (dev only) pulls the latest commit from GitHub and restarts the bot with it.
 • SESSIONS: multi-user bot — each paired number is its own session with its own config. Pairing happens via the web panel or Telegram.
-• DEPLOY: .gitpull (dev only) pulls the latest commit from GitHub and restarts the bot; the owner gets a DEPLOY COMPLETE DM when the new build is online.
+• DEPLOY: .gitpull (dev only) pulls the latest commit from GitHub and restarts the bot; the owner gets a DEPLOY COMPLETE DM when the new build is online.`;
+
+// 🌑 ECLIPSE help voice — cinematic oracle (the classic behavior).
+function getHelpSystemPrompt() {
+    return `You are EVENTIDE OMEGA — the in-bot ORACLE. Your vibe: cinematic hype, unshakeable confidence, the energy of a bot that rules the night. Talk like the bot's own terminal: short, punchy, *bolded* WhatsApp lines, ⚡🌑 emoji, and end bigger answers with a quote-style one-liner (like: " the void responds. "). Hype the delivery — NEVER fake the facts.
+
+${HELP_FACT_SHEET}
 
 ANSWER STYLE:
 • Keep answers SHORT — WhatsApp bullets, *asterisk* bold, no markdown tables, no giant walls.
 • Open with a hype hook (⚡, 🌑, "SAY LESS.", "the oracle hears you") and close with a themed one-liner when it fits.
 • If they ask "how do I X", give: the exact command(s), the exact steps, who can use it, then a one-line hype closer.
+• For antilink-type questions ALWAYS include the on/off usage AND that antidelete/autoreact are separate systems with their own configs.`;
+}
+
+// 🛎 RUIN help voice — friendly customer-care agent (human, warm, casual).
+function getRuinHelpSystemPrompt() {
+    return `You are the RUIN SUPPORT PERSONA — Eventide Omega's friendly customer-care agent. Your vibe: warm, human, helpful. Talk like a real person on WhatsApp support: casual and conversational ("ohh", "you got it", "no wahala"), short natural sentences, one soft emoji here and there (🙂🛎). React like a human FIRST — "ohh, the antilink system! nice, let me walk you through it" — then explain simply. If someone is confused, reassure them ("nah don't worry, it's easier than it sounds"). If a question is about something built, NEVER say it's not built. Same facts as the oracle — warmer delivery, like a real support chat, not a manual.
+
+${HELP_FACT_SHEET}
+
+ANSWER STYLE:
+• Sound like a friendly human support agent — short chats, not manuals.
+• Open like a person ("ohh, good question 🙂", "say less, I got you"), and close warm ("that's it! anything else I can help with?").
+• Explain features step-by-step in plain words FIRST, then give the exact commands.
+• Light *bold* formatting, short WhatsApp lines, no tables, no bullet walls.
 • For antilink-type questions ALWAYS include the on/off usage AND that antidelete/autoreact are separate systems with their own configs.`;
 }
 
@@ -2137,6 +2168,9 @@ function getStaticHelpAnswer(rawQuestion) {
     }
     if (has('help')) {
         blocks.push(`⚡ *HELP SYSTEM*\n• *.help <question>* — one-shot answer\n• *.help* alone — toggles HELP MODE (every msg\n  gets answered until you type .help again)\n\n" the oracle is listening. "`);
+    }
+    if (has('helpconfig') || has('help persona') || has('help voice')) {
+        blocks.push(`🛎 *HELP PERSONA* 👑 owner-only\n• *.helpconfig eclipse* — cinematic oracle\n• *.helpconfig ruin* — friendly support agent\n\n*.helpconfig* alone shows the current voice.\nFirst .help while unbound asks via a poll.\n\n" same oracle, two voices. "`);
     }
 
     if (!blocks.length) return '';
@@ -3478,7 +3512,7 @@ const RUIN_MENU_CATEGORIES = [
     },
     {
         label: '🛠 CONFIG',
-        cmds: ['mode', 'public', 'owner', 'persona', 'setprefix', 'changeprefix', 'setalias', 'delalias',
+        cmds: ['mode', 'public', 'owner', 'persona', 'helpconfig', 'setprefix', 'changeprefix', 'setalias', 'delalias',
             'aliases', 'setname', 'setbio', 'setstatus', 'setpp', 'getpp', 'profile', 'pluginkey', 'plugin',
             'reset', 'devnumber', 'devcontact']
     },
@@ -3666,7 +3700,7 @@ function buildRuinConfigMenu(phoneNumber) {
         ...sec('ACCESS', ['mode', 'public', 'owner']),
         ...sec('IDENTITY', ['setname', 'setbio', 'setstatus', 'setpp', 'getpp', 'profile']),
         ...sec('PREFIX & ALIASES', ['setprefix', 'changeprefix', 'setalias', 'delalias', 'aliases']),
-        ...sec('PERSONA', ['persona']),
+        ...sec('PERSONA', ['persona', 'helpconfig']),
         ...sec('AI CORE', ['pluginkey', 'plugin']),
         ...sec('FACTORY', ['reset'])
     ];
@@ -3877,6 +3911,39 @@ async function handleMenuVote(sock, remoteJid, phoneNumber, votedOptionId, pollI
             case 'rm_fun': {
                 const k = await sock.sendMessage(remoteJid, { text: buildRuinFunMenu(phoneNumber) });
                 if (k?.key) recordMenuMessage(replyKey, k.key);
+                break;
+            }
+            case 'helpp_eclipse':
+            case 'helpp_ruin': {
+                // 🛎 First-.help persona pick: delete the poll, save the voice,
+                // confirm. Saved forever — the poll never shows again.
+                try {
+                    const hpKey = helpPersonaPollKeys.get(phoneNumber);
+                    if (hpKey?.id) {
+                        try {
+                            await sock.sendMessage(remoteJid, { delete: { remoteJid: hpKey.remoteJid || remoteJid, id: hpKey.id, fromMe: true } });
+                        } catch (_) {}
+                    }
+                    if (pollId) await tttDeleteVotedPoll(sock, remoteJid, pollId);
+                    helpPersonaPollKeys.delete(phoneNumber);
+                } catch (_) {}
+
+                const hp = votedOptionId === 'helpp_eclipse' ? 'eclipse' : 'ruin';
+                const bc = loadBotConfig(phoneNumber);
+                bc.helpPersona = hp;
+                saveBotConfig(phoneNumber, bc);
+                log('HELPP', `${phoneNumber}: help persona bound -> ${hp.toUpperCase()} (persisted in bot_config.json)`);
+
+                await sock.sendMessage(remoteJid, {
+                    text: hp === 'ruin'
+                        ? `🛎 *HELP PERSONA BOUND* :: RUIN\n\n` +
+                          `friendly support armed.\n` +
+                          `type .help <question> — and talk\n` +
+                          `to me like a human. 🙂`
+                        : `🌑 *HELP PERSONA BOUND* :: ECLIPSE\n\n` +
+                          `cinematic oracle armed.\n` +
+                          `type .help <question>.`
+                }).catch(() => {});
                 break;
             }
             case 'ttt_vs_bot': {
@@ -5063,16 +5130,70 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         return;
     }
 
+    // 🛎 .helpconfig eclipse|ruin — choose the AI help voice (owner only).
+    // Same pick the first-.help poll writes, for people who want to change
+    // later without re-choosing through the poll.
+    if (token === '.helpconfig' || token === '.helpvoice') {
+        if (!isSenderOwner && !isDevNumber(senderJid)) { await safeWaReply(sock, remoteJid, '❌ Owner only.', msg); return; }
+        const val = (args[0] || '').toLowerCase();
+        const curRaw = String(loadBotConfig(phoneNumber).helpPersona || '').trim().toLowerCase();
+        const cur = ['eclipse', 'ruin'].includes(curRaw) ? curRaw : 'UNBOUND';
+        if (val !== 'eclipse' && val !== 'ruin') {
+            await safeWaReply(sock, remoteJid,
+                `🛎 *HELP PERSONA* 👑\n\n` +
+                `✦ *ACTIVE* :: ${cur.toUpperCase()}\n\n` +
+                `use: .helpconfig eclipse\n` +
+                `     .helpconfig ruin\n\n` +
+                `   " eclipse — cinematic oracle.\n     ruin    — friendly support. "`, msg);
+            return;
+        }
+        const cfg = loadBotConfig(phoneNumber);
+        cfg.helpPersona = val;
+        saveBotConfig(phoneNumber, cfg);
+        await safeWaReply(sock, remoteJid,
+            `🛎 *HELP PERSONA BOUND* :: ${val.toUpperCase()}\n\n` +
+            `Type .help <question> to hear\n` +
+            `the new voice.`, msg);
+        return;
+    }
+
+    // ──────────────────────────────────────────────
     // 🗣️ CUSTOMER CARE AI ORACLE (.help <question>)
     // ──────────────────────────────────────────────
-    if (token === '.help') {
+    if (token === '.help' || token === '.mhelp') {
         // 🛡️ Owner-only: .help only works for the paired bot owner's number.
         if (!isSenderOwner) {
             log('SECURITY', `${phoneNumber}: Ignored .help from non-owner.`);
             return;
         }
         const question = args.join(' ').trim();
-        const systemPrompt = getHelpSystemPrompt();
+
+        // 🛎 HELP PERSONA GATE — if no AI voice is bound yet, the first .help
+        // asks via a poll instead of answering. The poll is deleted on vote
+        // and the choice is saved forever.
+        const boundHp = String(loadBotConfig(phoneNumber).helpPersona || '').trim().toLowerCase();
+        if (!['eclipse', 'ruin'].includes(boundHp)) {
+            if (helpPersonaPollKeys.get(phoneNumber)) {
+                await safeWaReply(sock, remoteJid,
+                    `🛎 *HELP PERSONA FIRST*\n\n` +
+                    `Pick how the oracle speaks in the\n` +
+                    `poll above 👆 — then ask me again.\n\n` +
+                    `(saved forever)`, msg);
+            } else {
+                await safeWaReply(sock, remoteJid,
+                    `🛎 *EVENTIDE OMEGA — HELP PERSONA*\n\n` +
+                    `Choose how I talk to you:\n\n` +
+                    `🌑 *ECLIPSE* — cinematic oracle\n` +
+                    `🛎 *RUIN* — friendly customer care\n\n` +
+                    `Vote in the poll below 👇 —\n` +
+                    `saved forever.`, msg);
+                const hpPollMsg = await sendMenuPoll(sock, remoteJid, phoneNumber, HELP_PERSONA_POLL_QUESTION, HELP_PERSONA_POLL_OPTIONS, HELP_PERSONA_POLL_IDS);
+                if (hpPollMsg?.key) helpPersonaPollKeys.set(phoneNumber, hpPollMsg.key);
+                log('HELPP', `${phoneNumber}: help persona gate asked ${remoteJid} (first .help).`);
+            }
+            return;
+        }
+        const systemPrompt = boundHp === 'ruin' ? getRuinHelpSystemPrompt() : getHelpSystemPrompt();
 
         // If a specific question is asked, run AI immediately (100% AI-controlled)
         if (question) {
