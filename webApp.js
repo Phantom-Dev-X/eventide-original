@@ -24,6 +24,27 @@ export function initWebApp(app, incoming) {
     loadIdSessions();
     deps.log?.('WEB', `loaded ${Object.keys(webUsers).length} web account(s) from disk`);
 
+    // 🔒 PANEL LOCK — the web panel (login/signup/pair pages) used to be fully
+    // public, which made Chrome's Safe Browsing flag the site as "deceptive"
+    // (a public login + phone-pairing page looks exactly like credential
+    // harvesting). Now:
+    //   • PANEL_PIN unset  (default) → panel DISABLED. The root serves only a
+    //     harmless branded landing page (no forms at all) and every panel
+    //     route/API answers 404/403.
+    //   • PANEL_PIN set    → panel enabled behind the PIN: visitors enter it
+    //     on the landing page (single password field), get an HttpOnly cookie,
+    //     and only then see the real panel pages/APIs. Crawlers and scanners
+    //     never see the login/signup/phone forms.
+    const PANEL_PIN = String(process.env.PANEL_PIN || '').trim();
+    const panelEnabled = PANEL_PIN.length > 0;
+    const PANEL_COOKIE = 'eventide_panel';
+
+    const isImagePath = (p) => /\.(png|jpg|jpeg|webp|gif|ico|svg)$/i.test(p);
+    const panelUnlocked = (req) => {
+        if (!panelEnabled) return false;
+        return req.cookies?.[PANEL_COOKIE] === PANEL_PIN || req.headers['x-panel-pin'] === PANEL_PIN;
+    };
+
     app.use((req, res, next) => {
         const origin = req.headers.origin || '';
         const allowed = (process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -70,14 +91,85 @@ export function initWebApp(app, incoming) {
         next();
     });
 
+    // 🔒 PANEL GATE — everything except the landing page, health checks and
+    // harmless assets requires the PIN. Without it the panel surface is
+    // invisible to visitors and scanners alike.
+    app.use((req, res, next) => {
+        const p = req.path;
+        if (
+            p === '/' || p === '/index.html' ||
+            p === '/ping' || p === '/health' || p === '/go/channel' ||
+            p === '/api/panel/enter' ||
+            isImagePath(p) || p.startsWith('/menu_media/')
+        ) return next();
+        if (panelUnlocked(req)) return next();
+        return res.status(403).send('panel locked');
+    });
+
+    // 🏠 SAFE LANDING PAGE — the ONLY thing the public URL ever shows.
+    // Branding only, zero forms (unless PANEL_PIN is set, in which case the
+    // single PIN field is the only input on the page).
+    const landingHtml = () => {
+        const pinForm = panelEnabled
+            ? `<form method="POST" action="/api/panel/enter" style="margin-top:26px;">
+                    <input type="password" name="pin" placeholder="panel PIN" autocomplete="current-password"
+                        style="padding:10px 14px;border-radius:8px;border:1px solid #2a3646;background:#0d1117;color:#cfe3cf;width:220px;font-family:inherit;text-align:center;" />
+                    <br/><button type="submit"
+                        style="margin-top:12px;padding:10px 26px;border-radius:8px;border:none;background:#1f6feb;color:#fff;font-family:inherit;font-weight:bold;cursor:pointer;">enter</button>
+                </form>`
+            : '';
+        return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Eventide Omega</title>
+<style>
+  body { background:#0b0f14; color:#d7dee8; font-family: -apple-system, 'Segoe UI', Roboto, sans-serif;
+         display:flex; align-items:center; justify-content:center; min-height:100vh; margin:0; padding:24px; text-align:center; }
+  .card { max-width:520px; }
+  h1 { font-size:26px; letter-spacing:1px; color:#e8eef6; margin:12px 0 4px; }
+  .sub { color:#6f7d8c; font-size:14px; margin-bottom:22px; }
+  .quote { color:#4fc3f7; font-size:14px; font-style:italic; margin-top:26px; }
+  .dot { display:inline-block; width:10px; height:10px; border-radius:50%; background:#3fb950;
+         box-shadow:0 0 12px #3fb950; margin-right:8px; vertical-align:middle; }
+  .err { color:#f85149; font-size:13px; margin-top:14px; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div style="font-size:44px;">🌑</div>
+    <h1>EVENTIDE OMEGA</h1>
+    <div class="sub">a WhatsApp bot that lives in the dark.</div>
+    <div><span class="dot"></span>operational — this page is just the front door.</div>
+    ${pinForm}
+    ${`<div class="quote">" even in your darkest hour, the void answers. "</div>`}
+  </div>
+</body>
+</html>`;
+    };
+    app.get('/', (req, res) => res.type('html').send(landingHtml()));
+    app.get('/index.html', (req, res) => res.type('html').send(landingHtml()));
+
+    // 🔑 PIN entry: sets the panel cookie and jumps to the dashboard.
+    // (urlencoded form posts — parsed right here so the HTML form works)
+    app.post('/api/panel/enter', deps.express.urlencoded({ extended: false }), (req, res) => {
+        const pin = String(req.body?.pin || '').trim();
+        if (!panelEnabled || pin !== PANEL_PIN) {
+            res.redirect(302, '/?err=1');
+            return;
+        }
+        res.cookie(PANEL_COOKIE, PANEL_PIN, { httpOnly: true, maxAge: 7 * 24 * 3600 * 1000, path: '/' });
+        res.redirect(302, '/dashboard.html');
+    });
+    app.get('/api/panel/enter', (req, res) => res.redirect(302, '/'));
+
     // Pages — send the file, do NOT redirect /
     const page = (file) => (req, res) => {
         const fp = path.join(PUBLIC_DIR, file);
         if (!fs.existsSync(fp)) return res.status(404).send('Not found');
         res.sendFile(fp);
     };
-    app.get('/', page('index.html'));
-    app.get('/index.html', page('index.html'));
     app.get('/login.html', page('login.html'));
     app.get('/signup.html', page('signup.html'));
     app.get('/forgot.html', page('forgot.html'));
