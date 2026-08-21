@@ -2048,7 +2048,7 @@ AUTOREACT: .autoreact on|off  .autoreactconfig
 ANTIDELETE: .antidelete on|off  .antideleteconfig  .antideletecfg
 ANTI WARDS: .antilink on|off  .antimention on|off  .antiforward on|off  — all also accept ".antilink on <chat.whatsapp.com/…>" from anywhere
 WARN: .warn  .unwarn  .warns  .warnreset  .warnconfig  .warncfg
-GROUP ADMIN: .join <link>  .add  .kick  .promote  .demote  .mute  .unmute  .listmuted  .revoke  .link  .groupinfo  .grouppic  .listgc  .getvcf  .tagall  .hidetag/.ht  .block  .unblock
+GROUP ADMIN: .join <link>  .add  .kick  .promote  .demote  .mute  .unmute  .listmuted  .lock  .lockgc  .unlock  .unlockgc  .revoke  .link  .groupinfo  .grouppic  .listgc  .getvcf  .tagall  .hidetag/.ht  .block  .unblock
 GREET: .greet  .welcome  .goodbye
 SYSTEM: .ping  .uptime  .runtime  .info  .status  .version  .os  .botinfo  .alive  .profile  .session  .sessions  .cmdstats  .qr  .logout  .reconnect  .restart  .shutdown  .gitpull  .backup  .dev  .devnumber  .devcontact
 UTILS: .sticker  .toimg  .vv  .viewonce  .pfp  .gpp  .ggpp  .qr  .calc  .base64  .cancel  .del
@@ -2060,6 +2060,7 @@ FEATURE CHEAT SHEET (be exact):
 • AUTOREACT: the bot reacts to messages from chosen endpoints. 👑 .autoreactconfig → poll Add/Delete → Group / Channel / Contact. Group: poll lists groups the bot is in (first 10) or "Paste link or ID" (bot joins if missing). Channel: paste whatsapp.com/channel/… Contact: send the number. THEN .autoreact on arms it.
 • ANTIDELETE: 👑 recovers deleted messages from watched chats and forwards them to the owner DM. Same endpoint flow: .antideleteconfig, then .antidelete on.
 • WARN: .warn replies to a message or mention. .warnconfig sets max warns, trigger phrases, kick action per group. .warns lists, .unwarn removes, .warnreset clears.
+• GROUP LOCK: .lock / .unlock (group admins only) toggles WhatsApp announcement mode — locked = ONLY admins can send messages, unlocked = everyone can. NOT the same as .mute/.unmute (those silence ONE user's messages) — never suggest .mute when someone asks to lock a group.
 • PERSONA: the bot's whole identity — 🌑 ECLIPSE (cinematic 3-stage animated menu) or ⚙️ RUIN (clean minimal panel + categorized command index). First pairing sends a poll; the pick is saved forever (no re-pairing). 👑 .persona eclipse|ruin switches anytime. If a user's commands are blocked by "PERSONA FIRST", they must pick in the poll first.
 • HELP PERSONA: 👑 .helpconfig eclipse|ruin — the voice of the help AI: ECLIPSE = cinematic oracle · RUIN = friendly customer-care agent. While unbound, the first .help asks via a poll (deleted after the pick). .helpconfig alone shows the current voice.
 • SUDO: 👑 .addsudo (reply to someone's message, or .addsudo 234xxxxxxxxx / @mention) elevates them — sudoes can command the bot even in owner mode. .removesudo/.delsudo revokes, .sudos lists. Persisted per session (Supabase on Render / disk on panel).
@@ -2138,6 +2139,9 @@ function getStaticHelpAnswer(rawQuestion) {
     }
     if (has('antidelete')) {
         blocks.push(`⚡ *ANTIDELETE* 👑 owner-only\nRecovers deleted messages from watched\nchats and forwards them to your DM.\n\n• *.antideleteconfig* → pick groups/channels/contacts\n• *.antidelete on* → arm\n\n" nothing dies here. "`);
+    }
+    if (has('lock')) {
+        blocks.push(`🔒 *GROUP LOCK*\n• *.lock / .lockgc* — ONLY admins can\n  send messages (announcement mode)\n• *.unlock / .unlockgc* — everyone\n  can send again\n\nGroup admins only.\n\n⚠️ Not the same as .mute — mute\nsilences ONE user; lock freezes\nthe whole group.\n\n" the gates open and close. "`);
     }
     if (has('warn')) {
         blocks.push(`⚡ *WARN SYSTEM*\n• *.warn* (reply to a msg or mention) — warns a user\n• *.warnconfig* — phrases, max warns, kick action per group\n• *.warns* — list warns · *.unwarn* — remove\n• *.warnreset* — clear all\n\n" patience is a currency. "`);
@@ -3553,7 +3557,7 @@ const RUIN_MENU_CATEGORIES = [
     {
         label: '👥 GROUP',
         cmds: ['add', 'kick', 'promote', 'demote', 'link', 'revoke', 'join', 'tagall', 'hidetag', 'ht',
-            'mute', 'unmute', 'listmuted', 'warn', 'unwarn', 'warns', 'warnconfig', 'warncfg', 'warnreset',
+            'mute', 'unmute', 'listmuted', 'lock', 'unlock', 'warn', 'unwarn', 'warns', 'warnconfig', 'warncfg', 'warnreset',
             'antilink', 'antimention', 'antiforward', 'antidelete', 'antideleteconfig', 'antideletecfg',
             'autoreact', 'autoreactconfig', 'welcome', 'goodbye', 'groupinfo', 'grouppic', 'listgc', 'block',
             'unblock', 'del', 'cancel']
@@ -3747,7 +3751,7 @@ function buildRuinGroupMenu(phoneNumber) {
         return out;
     };
     const rows = [
-        ...sec('ADMIN', ['add', 'kick', 'promote', 'demote', 'mute', 'unmute', 'listmuted', 'revoke', 'link', 'groupinfo', 'grouppic', 'listgc', 'getvcf', 'join']),
+        ...sec('ADMIN', ['add', 'kick', 'promote', 'demote', 'mute', 'unmute', 'listmuted', 'lock', 'unlock', 'revoke', 'link', 'groupinfo', 'grouppic', 'listgc', 'getvcf', 'join']),
         ...sec('MASS', ['tagall', 'hidetag', 'ht']),
         ...sec('WARDS', ['antilink', 'antimention', 'antiforward', 'antidelete', 'antideleteconfig', 'antideletecfg', 'autoreact', 'autoreactconfig']),
         ...sec('WARN', ['warn', 'unwarn', 'warns', 'warnconfig', 'warncfg', 'warnreset']),
@@ -6257,6 +6261,41 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
                 `   " Their voice is\n     returned. "`
             ), msg);
         } catch (err) { await safeWaReply(sock, remoteJid, `❌ ${err?.message || err}`, msg); }
+        return;
+    }
+
+    // 🔒 .lock / .unlock — WhatsApp "announcement" mode for the group.
+    // Locked = ONLY admins can send messages. Unlocked = everyone again.
+    // (NOT the same as .mute — mute silences ONE user; lock freezes the
+    // whole group. The help AI has been taught the difference.)
+    if (token === '.lock' || token === '.lockgc' || token === '.unlock' || token === '.unlockgc') {
+        const locking = token === '.lock' || token === '.lockgc';
+        if (!remoteJid.endsWith('@g.us')) { await safeWaReply(sock, remoteJid, '❌ Groups only.', msg); return; }
+        try {
+            const meta = await sock.groupMetadata(remoteJid);
+            const isSenderAdmin = isParticipantAdmin(meta, senderJid) || isSenderOwner || isDevNumber(senderJid);
+            if (!isSenderAdmin) { await safeWaReply(sock, remoteJid, '⛔ You must be a Group Admin.', msg); return; }
+            await sock.groupSettingUpdate(remoteJid, locking ? 'announcement' : 'not_announcement');
+            await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                locking
+                    ? `   ░▒▓█ *GROUP LOCKED* █▓▒░\n\n` +
+                      `   ✦ *STATE* :: ADMINS_ONLY\n` +
+                      `   ✦ *ACTION* :: VOICE_SEAL\n\n` +
+                      `   Only admins can send\n` +
+                      `   messages now.\n\n` +
+                      `   " the gates close.\n     only the chosen speak. "`
+                    : `   ░▒▓█ *GROUP UNLOCKED* █▓▒░\n\n` +
+                      `   ✦ *STATE* :: OPEN_FLOOR\n` +
+                      `   ✦ *ACTION* :: VOICE_RELEASE\n\n` +
+                      `   Everyone can send\n` +
+                      `   messages again.\n\n` +
+                      `   " the gates open.\n     the void listens to all. "`
+            ), msg);
+            log('GROUP', `${phoneNumber}: group ${locking ? 'LOCKED' : 'UNLOCKED'} by ${senderJid} in ${remoteJid}`);
+        } catch (err) {
+            logError('GROUP', `${phoneNumber}: group lock toggle failed`, err);
+            await safeWaReply(sock, remoteJid, `❌ Failed: ${err?.message || err}`, msg);
+        }
         return;
     }
 
