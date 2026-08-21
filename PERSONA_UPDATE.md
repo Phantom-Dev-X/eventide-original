@@ -92,3 +92,15 @@ The help AI now has its own voice, separate from the menu persona:
   `.helpconfig` alone shows the current one (`ACTIVE :: RUIN` / `UNBOUND`).
 - Both voices share the exact same fact sheet (full command registry +
   cheat sheet), so accuracy is identical — only the delivery changes.
+
+## 🛡 Sudo system
+
+`.addsudo` elevates a user so they can command the bot **even in owner mode**.
+
+- **Target by reply** — reply to their message and send `.addsudo` (works in groups)
+- **Or by number / mention** — `.addsudo 234939398382` or `.addsudo @234939398382`
+- `.removesudo` / `.delsudo` revokes (same targeting) · `.sudos` lists them
+- Owner/dev only; sudoes are **not** admins — they can *use* the bot in owner
+  mode, but owner-only commands still reject them
+- Persisted in `bot_config.json` per session → Supabase on Render / disk on
+  panel; sudoes also get the ⚡ reaction on their commands in owner mode
