@@ -2063,7 +2063,7 @@ FEATURE CHEAT SHEET (be exact):
 • GROUP LOCK: .lock / .unlock (group admins only) toggles WhatsApp announcement mode — locked = ONLY admins can send messages, unlocked = everyone can. NOT the same as .mute/.unmute (those silence ONE user's messages) — never suggest .mute when someone asks to lock a group.
 • PERSONA: the bot's whole identity — 🌑 ECLIPSE (cinematic 3-stage animated menu) or ⚙️ RUIN (clean minimal panel + categorized command index). First pairing sends a poll; the pick is saved forever (no re-pairing). 👑 .persona eclipse|ruin switches anytime. If a user's commands are blocked by "PERSONA FIRST", they must pick in the poll first.
 • HELP PERSONA: 👑 .helpconfig eclipse|ruin — the voice of the help AI: ECLIPSE = cinematic oracle · RUIN = friendly customer-care agent. While unbound, the first .help asks via a poll (deleted after the pick). .helpconfig alone shows the current voice.
-• SUDO: 👑 .addsudo (reply to someone's message, or .addsudo 234xxxxxxxxx / @mention) elevates them — sudoes can command the bot even in owner mode. .removesudo/.delsudo revokes, .sudos lists. Persisted per session (Supabase on Render / disk on panel).
+• SUDO: 👑 .addsudo (reply to someone's message, or .addsudo 234xxxxxxxxx / @mention) elevates them — sudoes can command the bot even in owner mode. .removesudo/.delsudo revokes, .sudos lists. Persisted per session (Supabase on Render / disk on panel). Sudoes can also vote on menu/game polls, but NEVER on bot-config polls (persona, helpconfig, autoreact/antidelete/warn setups — those stay owner-only).
 • HELP MODE: .help alone toggles help mode ON/OFF — while ON, every message is answered by the help AI and other commands don't run. .help <question> answers once without entering help mode. Times out after 10 min silence.
 • MENU: .menu shows the bound persona's menu. Eclipse: animated terminal + banner + Owners/Group/Fun poll. Ruin: status panel + menu poll (ALL MENU / SYSTEM / CONFIG / GROUP / FUN) — ALL MENU opens the full command index.
 • GAMES: tic-tac-toe, hangman, word chain, trivia, riddle — the bot sends a poll/card and you reply to THAT message (not loose chat) to play.
@@ -2186,7 +2186,7 @@ function getStaticHelpAnswer(rawQuestion) {
         blocks.push(`⚡ *HELP SYSTEM*\n• *.help <question>* — one-shot answer\n• *.help* alone — toggles HELP MODE (every msg\n  gets answered until you type .help again)\n\n" the oracle is listening. "`);
     }
     if (has('sudo')) {
-        blocks.push(`🛡 *SUDO SYSTEM* 👑 owner-only\n• *.addsudo* (reply to their msg) or\n  *.addsudo <number|@mention>* — elevate\n• *.removesudo / .delsudo* — revoke\n• *.sudos* — list\n\nSudoes can command the bot even in\nowner mode. Saved forever per session.\n\n" the void obeys the chosen. "`);
+        blocks.push(`🛡 *SUDO SYSTEM* 👑 owner-only\n• *.addsudo* (reply to their msg) or\n  *.addsudo <number|@mention>* — elevate\n• *.removesudo / .delsudo* — revoke\n• *.sudos* — list\n\nSudoes can command the bot even in\nowner mode, and vote on menu/game\npolls — but NEVER on bot-config\npolls (persona/helpconfig/autoreact/\nantidelete/warn setups stay\nowner-only). Saved forever per session.\n\n" the void obeys the chosen. "`);
     }
     if (has('helpconfig') || has('help persona') || has('help voice')) {
         blocks.push(`🛎 *HELP PERSONA* 👑 owner-only\n• *.helpconfig eclipse* — cinematic oracle\n• *.helpconfig ruin* — friendly support agent\n\n*.helpconfig* alone shows the current voice.\nFirst .help while unbound asks via a poll.\n\n" same oracle, two voices. "`);
@@ -2479,6 +2479,26 @@ function isSudo(phoneNumber, jid) {
     if (!Array.isArray(sudos) || !sudos.length) return false;
     const num = normalizeDigits(String(jid || '').split(':')[0].split('@')[0]);
     return !!num && sudos.some(s => normalizeDigits(s) === num);
+}
+
+// 🛡️ POLL VOTING RIGHTS — who may vote on which poll the bot sent:
+//   • owner → everything
+//   • sudo → menu + game polls (they can navigate the bot) but NEVER
+//     bot-self config polls (persona_/helpp_/ar_/ad_/wn_/wg_/greet_ —
+//     those change the bot itself and stay owner-only)
+//   • everyone else → only game/ttt polls
+function canVoteOnPoll(phoneNumber, uniqVoters, ids, ownerJids) {
+    const voters = Array.isArray(uniqVoters) ? uniqVoters : [];
+    const list = Array.isArray(ids) ? ids : [];
+    if (voters.some(v => ownerJids.includes(v))) return true;
+    const isSudoVote = voters.some(v => isSudo(phoneNumber, v));
+    const isConfigPoll = list.some(id => /^(persona_|helpp_|ar_|ad_|wn_|wg_|greet_)/.test(String(id)));
+    if (isConfigPoll) return false; // bot-self settings: owner only, not even sudoes
+    const isMenuPoll = list.some(id => /^(rm_|owners|group|fun|bug|system|config)/.test(String(id)));
+    if (isMenuPoll) return isSudoVote; // menu navigation: owner + sudoes
+    const isTttPoll = list.some(id => String(id).startsWith('ttt_'));
+    const isArenaPoll = isGamePoll(list);
+    return isTttPoll || isArenaPoll;
 }
 
 // ──────────────────────────────────────────────
@@ -3398,6 +3418,12 @@ function handlePollVote(sock, phoneNumber, key, pollUpdates) {
     }
     const uniqVoters = [...new Set(voters.filter(Boolean))];
 
+    // 🛡️ same voting rights as the pollUpdateMessage path
+    const ownerJids = [...new Set([mePN, meLID].filter(Boolean))];
+    if (!canVoteOnPoll(phoneNumber, uniqVoters, Array.isArray(cached.ids) ? cached.ids : [], ownerJids)) {
+        return null;
+    }
+
     for (const update of pollUpdates) {
         if (!update?.vote) continue;
         const idx = decryptVoteOption(cached.secretHex, cached.options, key.id, creators, uniqVoters, update.vote);
@@ -3448,13 +3474,12 @@ function handlePollUpdateMessage(sock, phoneNumber, msg) {
     }
     const uniqVoters = [...new Set(voters.filter(Boolean))];
 
-    // 🛡️ Only respond to the owner's votes on polls the bot sent — ignore
-    // everyone else, no matter the access mode (owner or public).
+    // 🛡️ POLL VOTING RIGHTS: owner votes on everything; sudoes vote on
+    // menu/game polls (they can navigate the bot) but NEVER on bot-self
+    // config polls (persona/helpconfig/autoreact/antidelete/warn setups);
+    // everyone else only votes on game/ttt polls.
     const ownerJids = [...new Set([mePN, meLID].filter(Boolean))];
-    const isOwnerVote = uniqVoters.some(v => ownerJids.includes(v));
-    const isTttPoll = Array.isArray(cached.ids) && cached.ids.some(id => String(id).startsWith('ttt_'));
-    const isArenaPoll = isGamePoll(cached.ids);
-    if (!isOwnerVote && !isTttPoll && !isArenaPoll) {
+    if (!canVoteOnPoll(phoneNumber, uniqVoters, Array.isArray(cached.ids) ? cached.ids : [], ownerJids)) {
         log('POLL', `${phoneNumber}: ignored non-owner poll vote (voter=[${uniqVoters.join(',')}])`);
         return null;
     }
