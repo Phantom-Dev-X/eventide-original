@@ -2039,7 +2039,7 @@ const HELP_FACT_SHEET = `HARD TRUTH RULES:
    • .menu — the front door (Eclipse = cinematic animated menu; Ruin = status panel + menu poll)
 
 REGISTRY (every command below is real):
-MENU & HELP: .menu  .help (alone = help MODE; .help <anything> = one-shot answer)  .help list
+MENU & HELP: .menu  .help (alone = help MODE; .help <anything> = one-shot answer; .mhelp / .jelp aliases)  .help list
 PERSONA: .persona eclipse|ruin  (.persona alone shows the current binding; UNBOUND = pick via the poll)
 HELP PERSONA: .helpconfig eclipse|ruin  (👑 — the voice of the help AI; .helpconfig alone shows the current voice)
 SUDO: .addsudo  .removesudo/.delsudo  .sudos  (👑 owner-only — reply to someone's message or pass number/@mention; sudoes command the bot even in owner mode)
@@ -2063,7 +2063,7 @@ FEATURE CHEAT SHEET (be exact):
 • GROUP LOCK: .lock / .unlock (group admins only) toggles WhatsApp announcement mode — locked = ONLY admins can send messages, unlocked = everyone can. NOT the same as .mute/.unmute (those silence ONE user's messages) — never suggest .mute when someone asks to lock a group.
 • PERSONA: the bot's whole identity — 🌑 ECLIPSE (cinematic 3-stage animated menu) or ⚙️ RUIN (clean minimal panel + categorized command index). First pairing sends a poll; the pick is saved forever (no re-pairing). 👑 .persona eclipse|ruin switches anytime. If a user's commands are blocked by "PERSONA FIRST", they must pick in the poll first.
 • HELP PERSONA: 👑 .helpconfig eclipse|ruin — the voice of the help AI: ECLIPSE = cinematic oracle · RUIN = friendly customer-care agent. While unbound, the first .help asks via a poll (deleted after the pick). .helpconfig alone shows the current voice.
-• SUDO: 👑 .addsudo (reply to someone's message, or .addsudo 234xxxxxxxxx / @mention) elevates them — sudoes can command the bot even in owner mode. .removesudo/.delsudo revokes, .sudos lists. Persisted per session (Supabase on Render / disk on panel). Sudoes can also vote on menu/game polls, but NEVER on bot-config polls (persona, helpconfig, autoreact/antidelete/warn setups — those stay owner-only).
+• SUDO: 👑 .addsudo (reply to someone's message, or .addsudo 234xxxxxxxxx / @mention) elevates them — sudoes can command the bot even in owner mode. .removesudo/.delsudo revokes, .sudos lists. Persisted per session (Supabase on Render / disk on panel). Sudoes can also vote on menu/game polls (but NEVER on bot-config polls — persona, helpconfig, autoreact/antidelete/warn setups stay owner-only), and .help answers sudoes too.
 • HELP MODE: .help alone toggles help mode ON/OFF — while ON, every message is answered by the help AI and other commands don't run. .help <question> answers once without entering help mode. Times out after 10 min silence.
 • MENU: .menu shows the bound persona's menu. Eclipse: animated terminal + banner + Owners/Group/Fun poll. Ruin: status panel + menu poll (ALL MENU / SYSTEM / CONFIG / GROUP / FUN) — ALL MENU opens the full command index.
 • GAMES: tic-tac-toe, hangman, word chain, trivia, riddle — the bot sends a poll/card and you reply to THAT message (not loose chat) to play.
@@ -2183,7 +2183,7 @@ function getStaticHelpAnswer(rawQuestion) {
         blocks.push(`⚡ *SESSIONS & BACKUP*\n• Pairing: via the web panel or Telegram bot\n• *.session* — this session's info\n• *.sessions* — all paired sessions 👑\n• *.backup* — manual snapshot 👑\n\n" nothing is ever lost. "`);
     }
     if (has('help')) {
-        blocks.push(`⚡ *HELP SYSTEM*\n• *.help <question>* — one-shot answer\n• *.help* alone — toggles HELP MODE (every msg\n  gets answered until you type .help again)\n\n" the oracle is listening. "`);
+        blocks.push(`⚡ *HELP SYSTEM*\n• *.help <question>* — one-shot answer\n• *.help* alone — toggles HELP MODE (every msg\n  gets answered until you type .help again)\n• aliases: .mhelp .jelp\n\nThe owner AND sudoes can ask.\n\n" the oracle is listening. "`);
     }
     if (has('sudo')) {
         blocks.push(`🛡 *SUDO SYSTEM* 👑 owner-only\n• *.addsudo* (reply to their msg) or\n  *.addsudo <number|@mention>* — elevate\n• *.removesudo / .delsudo* — revoke\n• *.sudos* — list\n\nSudoes can command the bot even in\nowner mode, and vote on menu/game\npolls — but NEVER on bot-config\npolls (persona/helpconfig/autoreact/\nantidelete/warn setups stay\nowner-only). Saved forever per session.\n\n" the void obeys the chosen. "`);
@@ -4737,7 +4737,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     // ──────────────────────────────────────────────
     if (startsWithDot && token !== '.persona' && token !== '.gitpull' && token !== '.gitupdate') {
         const boundPersona = String(botConfig.persona || '').trim().toLowerCase();
-        if (!['eclipse', 'ruin'].includes(boundPersona)) {
+        if (!['eclipse', 'ruin'].includes(boundPersona) && !isSudo(phoneNumber, msg.key.participant || msg.key.remoteJid)) {
             const gateOwner = msg.key.fromMe
                 || jidNormalizedUser(msg.key.participant || msg.key.remoteJid) === jidNormalizedUser(sock.user?.id || '');
             try {
@@ -5285,10 +5285,12 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     // ──────────────────────────────────────────────
     // 🗣️ CUSTOMER CARE AI ORACLE (.help <question>)
     // ──────────────────────────────────────────────
-    if (token === '.help' || token === '.mhelp') {
-        // 🛡️ Owner-only: .help only works for the paired bot owner's number.
-        if (!isSenderOwner) {
-            log('SECURITY', `${phoneNumber}: Ignored .help from non-owner.`);
+    if (token === '.help' || token === '.mhelp' || token === '.jelp') {
+        // 🛡️ Owner OR sudo: .help answers the owner and every elevated user.
+        // (.jelp = typo-forgiving alias.) Bot-config commands stay owner-only,
+        // but asking the oracle is open to the chosen.
+        if (!isSenderOwner && !isSudo(phoneNumber, senderJid)) {
+            log('SECURITY', `${phoneNumber}: Ignored .help from non-owner/non-sudo.`);
             return;
         }
         const question = args.join(' ').trim();

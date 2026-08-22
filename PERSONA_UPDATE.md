@@ -104,3 +104,10 @@ The help AI now has its own voice, separate from the menu persona:
   mode, but owner-only commands still reject them
 - Persisted in `bot_config.json` per session → Supabase on Render / disk on
   panel; sudoes also get the ⚡ reaction on their commands in owner mode
+
+### Sudo + help
+
+- `.help` / `.mhelp` / `.jelp` (typo-forgiving alias) answer **sudos too** —
+  only strangers are ignored. Bot-config commands stay owner-only.
+- Sudoes pass the persona gate (they can't vote config polls anyway), so
+  their commands keep working even while the persona is unbound.
