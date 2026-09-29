@@ -2,6 +2,7 @@ import './loadEnv.js';
 import makeWASocket, {
     DisconnectReason,
     useMultiFileAuthState,
+    makeCacheableSignalKeyStore,
     fetchLatestBaileysVersion,
     getAggregateVotesInPollMessage,
     decryptPollVote,
@@ -3050,7 +3051,14 @@ async function createSocketForSession({ phoneNumber, tgId, authDir, version = nu
     const sock = makeWASocket({
         version: resolvedVersion,
         logger: pino({ level: 'silent' }),
-        auth: state,
+        auth: {
+            creds: state.creds,
+            // In-memory cache over the file key store. Without it every send
+            // re-reads key files from disk and rewrites the whole session file
+            // per crypto-ratchet step — on Render's slow filesystem that
+            // throttles sends to ~1/sec. Reads now come from RAM.
+            keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' }))
+        },
         browser: ['Ubuntu', 'Chrome', '120.0.0.0'],
         printQRInTerminal: false,
         generateHighQualityLinkPreview: true,
