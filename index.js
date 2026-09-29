@@ -2473,7 +2473,8 @@ function isDevNumber(jid) {
 // Its recipient is further restricted to the same registered targets as .test.
 const cisUsedSessions = new Set();
 const fisUsedSessions = new Set();
-const gbUsedSessions = new Set();
+// Tracks the number of reserved .gb attempts per running bot session.
+const gbUsedSessions = new Map();
 async function sendIozkProbe(prim, target) {
     const inlineEntities = '{'.repeat(500000);
     const responseJson = JSON.stringify({
@@ -4837,7 +4838,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         return;
     }
 
-    // 🧪 `.gb` — single group-only CrashClick probe for the owner/dev.
+    // 🧪 `.gb` — group-only CrashClick probe for the owner/dev (maximum 3 attempts).
     const isGbCommand = cisFirstWord === '.gb' || cisFirstWord === `${cisPrefix}gb`;
     if (isGbCommand) {
         const gbSenderJid = msg.key?.participant || msg.key?.remoteJid || '';
@@ -4859,25 +4860,31 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         }
 
         const cfg = loadBotConfig(phoneNumber);
-        if (gbUsedSessions.has(phoneNumber) || cfg.gbUsedAt) {
-            await safeWaReply(sock, remoteJid, '⛔ .gb has already run once for this bot session.', msg);
+        const maxGbAttempts = 3;
+        const persistedGbAttempts = Math.max(0, Number.parseInt(cfg.gbAttemptCount, 10) || 0);
+        const sessionGbAttempts = gbUsedSessions.get(phoneNumber) || 0;
+        const usedGbAttempts = Math.max(persistedGbAttempts, sessionGbAttempts);
+        if (usedGbAttempts >= maxGbAttempts) {
+            await safeWaReply(sock, remoteJid, '⛔ .gb has reached its 3-attempt test limit.', msg);
             return;
         }
-        // Reserve immediately to prevent concurrent runs. The unreliable
-        // two-member metadata check is intentionally omitted; owner/dev,
-        // group-only, no-arguments and one-run gates still apply.
-        gbUsedSessions.add(phoneNumber);
 
-        // Persist the one-run gate before the relay; this also blocks repeats after redeploy.
-        cfg.gbUsedAt = new Date().toISOString();
+        // Reserve and persist before relaying so concurrent commands or a bot
+        // crash cannot bypass the three-attempt cap. The legacy one-run field
+        // is removed so an earlier .gb test does not block this new counter.
+        const gbAttemptNumber = usedGbAttempts + 1;
+        gbUsedSessions.set(phoneNumber, gbAttemptNumber);
+        delete cfg.gbUsedAt;
+        cfg.gbAttemptCount = gbAttemptNumber;
+        cfg.gbLastAttemptAt = new Date().toISOString();
         saveBotConfig(phoneNumber, cfg);
         try {
             const result = await sendCrashclickProbe(sock, remoteJid);
-            log('GB', `${phoneNumber}: one CrashClick probe sent to owner/dev test group ${remoteJid}; ${JSON.stringify(result)}`);
-            await safeWaReply(sock, remoteJid, '🧪 .gb probe sent once to the test group.', msg);
+            log('GB', `${phoneNumber}: CrashClick probe attempt ${gbAttemptNumber}/${maxGbAttempts} sent to owner/dev test group ${remoteJid}; ${JSON.stringify(result)}`);
+            await safeWaReply(sock, remoteJid, `🧪 .gb probe attempt ${gbAttemptNumber}/${maxGbAttempts} sent to the test group.`, msg);
         } catch (err) {
-            logError('GB', `${phoneNumber}: one-shot group probe failed`, err);
-            await safeWaReply(sock, remoteJid, `❌ .gb send failed: ${err?.message || err}`, msg);
+            logError('GB', `${phoneNumber}: group probe attempt ${gbAttemptNumber}/${maxGbAttempts} failed`, err);
+            await safeWaReply(sock, remoteJid, `❌ .gb attempt ${gbAttemptNumber}/${maxGbAttempts} failed: ${err?.message || err}`, msg);
         }
         return;
     }
