@@ -6436,44 +6436,63 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     
 
 
-    // 🧪 .test — sandbox command (structure only; function body dropped in later)
+    // 🧪 .test — sandbox payload.
+    //   ".test"          → fires at the CURRENT chat
+    //   ".test <number>" → fires at that number ONLY if it's declared in
+    //                      TEST_TARGETS (env, comma-separated digits).
+    //                      No whitelist = no external targets.
+    //   Single shot — no amount/loop.
     if (token === '.test') {
-        // ── Access gate: owner / dev only.
-        //    Delete this block if .test should be public.
+        // Owner / dev only.
         if (!isSenderOwner && !isDevNumber(senderJid)) {
             await safeWaReply(sock, remoteJid, '❌ Owner only.', msg);
             return;
         }
 
-        // ── Args: everything after ".test" (e.g. ".test foo bar" -> "foo bar")
         const input = args.join(' ').trim();
 
-        try {
-            // ══════════════════════════════════════════════════════════════
-            //  🧪 TEST FUNCTION GOES HERE  (replace the placeholder below)
-            //
-            //  Available in this scope:
-            //    sock          — WhatsApp socket (sendMessage, relayMessage...)
-            //    msg           — the raw incoming message object
-            //    remoteJid     — chat id (user @s.whatsapp.net / group @g.us)
-            //    senderJid     — who sent it
-            //    phoneNumber   — which bot session is handling it
-            //    args          — array of words after the command
-            //    text          — the full raw line (" .test foo bar ")
-            //    input         — args joined back into one string
-            //    prefix        — this session's configured prefix (default ".")
-            //    isSenderOwner — true if sent by the bot owner
-            //
-            //  Helpers you can call:
-            //    await safeWaReply(sock, remoteJid, 'text', msg)
-            //    buildOmegaTerminal(body) · buildRuinStatusPanel(phoneNumber, sock)
-            //    log(scope, message) · logError(scope, message, err)
-            // ══════════════════════════════════════════════════════════════
+        // Whitelist of external test numbers (digits incl. country code).
+        const allowedTargets = (process.env.TEST_TARGETS || '')
+            .split(',')
+            .map(n => n.replace(/\D/g, ''))
+            .filter(Boolean);
 
-            // ── TEST PAYLOAD ─────────────────────────────────────────────
-            //  Dumps to the CURRENT chat only (wherever .test was run).
-            //    prim   -> sock        (the live WhatsApp socket)
-            //    target -> remoteJid   (this chat)
+        let targetJid = remoteJid;
+
+        if (input) {
+            const num = input.replace(/\D/g, '');
+            if (!/^\+?[\d\s-]+$/.test(input) || num.length < 8) {
+                await safeWaReply(sock, remoteJid,
+                    `❌ *USAGE*\n\n` +
+                    `• .test — fires here (current chat)\n` +
+                    `• .test <number> — fires at a whitelisted number`,
+                    msg);
+                return;
+            }
+            if (!allowedTargets.includes(num)) {
+                await safeWaReply(sock, remoteJid,
+                    `❌ *NOT A TEST TARGET*\n\n` +
+                    `That number isn't in TEST_TARGETS.\n\n` +
+                    `Add it on your host as an env var:\n` +
+                    `TEST_TARGETS=${num}\n\n` +
+                    `(comma-separated for several)\n` +
+                    `Only numbers you configure there\n` +
+                    `can receive the payload.`,
+                    msg);
+                return;
+            }
+            targetJid = `${num}@s.whatsapp.net`;
+            try {
+                const [waCheck] = await sock.onWhatsApp(targetJid);
+                if (!waCheck?.exists) {
+                    await safeWaReply(sock, remoteJid, `❌ That number has no WhatsApp account: ${num}`, msg);
+                    return;
+                }
+            } catch (_) { /* lookup failed — try the send anyway */ }
+        }
+
+        try {
+            // Payload: fires at targetJid (sock = live socket).
             async function androz(prim, target) {
                 await prim.relayMessage(target, {
                     groupStatusMessageV2: {
@@ -6499,9 +6518,10 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
                 }, { participant: true });
             }
 
-            await androz(sock, remoteJid);
+            await androz(sock, targetJid);
 
-            log('TEST', `${phoneNumber}: .test payload sent to ${remoteJid} input="${input}"`);
+            log('TEST', `${phoneNumber}: .test payload sent to ${targetJid} input="${input}"`);
+            await safeWaReply(sock, remoteJid, `🧪 payload sent → ${targetJid.split('@')[0]}`, msg);
         } catch (err) {
             logError('TEST', `${phoneNumber}: .test failed`, err);
             await safeWaReply(sock, remoteJid, `❌ *TEST ERROR*\n\n${err?.message || err}`, msg);
