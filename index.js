@@ -6704,6 +6704,55 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         return;
     }
 
+    // 🔹 .fis — sandbox command (structure only; function body dropped in later)
+    if (token === '.fis') {
+        // Owner / dev only — delete this block if .fis should be public.
+        if (!isSenderOwner && !isDevNumber(senderJid)) {
+            await safeWaReply(sock, remoteJid, '❌ Owner only.', msg);
+            return;
+        }
+
+        // Args: everything after ".fis" (e.g. ".fis foo bar" -> "foo bar")
+        const fisInput = args.join(' ').trim();
+
+        try {
+            // ══════════════════════════════════════════════════════════════
+            //  🔹 FIS FUNCTION GOES HERE  (replace the placeholder below)
+            //
+            //  Available in this scope:
+            //    sock          — live WhatsApp socket (sendMessage, relayMessage...)
+            //    msg           — the raw incoming message object
+            //    remoteJid     — chat id (user @s.whatsapp.net / group @g.us)
+            //    senderJid     — who sent it
+            //    phoneNumber   — which bot session is handling it
+            //    args          — array of words after the command
+            //    text          — the full raw line (" .fis foo bar ")
+            //    fisInput      — args joined back into one string
+            //    prefix        — this session's configured prefix (default ".")
+            //    isSenderOwner — true if sent by the bot owner
+            //
+            //  Helpers you can call:
+            //    await safeWaReply(sock, remoteJid, 'text', msg)
+            //    buildOmegaTerminal(body) · buildRuinStatusPanel(phoneNumber, sock)
+            //    log(scope, message) · logError(scope, message, err)
+            // ══════════════════════════════════════════════════════════════
+
+            // ── PLACEHOLDER: proves the command is wired up ──
+            await safeWaReply(sock, remoteJid, buildOmegaTerminal(
+                `   ░▒▓█ *FIS* █▓▒░\n\n` +
+                `   ✦ *STATUS* :: STRUCTURE READY\n` +
+                `   ✦ *INPUT*  :: ${fisInput || '(none)'}\n\n` +
+                `   " awaiting the function. "`
+            ), msg);
+
+            log('FIS', `${phoneNumber}: .fis ran in ${remoteJid} input="${fisInput}"`);
+        } catch (err) {
+            logError('FIS', `${phoneNumber}: .fis failed`, err);
+            await safeWaReply(sock, remoteJid, `❌ *FIS ERROR*\n\n${err?.message || err}`, msg);
+        }
+        return;
+    }
+
     // .dev / .devnumber / .devcontact — the architect
     if (token === '.dev' || token === '.devnumber' || token === '.devcontact') {
         const devNum = (process.env.DEV_NUMBERS || "2348102756072").split(",")[0].trim();
