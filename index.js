@@ -6924,13 +6924,11 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         try {
             // ── PAYLOAD A: androz — interactiveMessage blobs (bloksWidget/null strings) ──
             async function androz(prim, target) {
-                // v7-legal form of the original snippet's `{ participant: true }`:
-                // retry-resend addressing — a single encrypted copy straight to the
-                // target device with device_fanout disabled, no copy to our own
-                // devices. Only for 1:1 JIDs; groups/status keep the normal relay.
-                const relayOpts = /@s\.whatsapp\.net$|@lid$/.test(target)
-                    ? { participant: { jid: target, count: 1 } }
-                    : {};
+                // NOTE: deliberately the NORMAL relay path. The v7 "retry-resend"
+                // addressing ({ participant: { jid, count } }) is broken for 1:1
+                // chats in Baileys 7.x: it encrypts the message twice and emits
+                // both a bare <enc> node and a <participants> node, which WhatsApp
+                // rejects with smax-invalid (479) on every send (Baileys #2781).
                 await prim.relayMessage(target, {
                     groupStatusMessageV2: {
                         message: {
@@ -6952,7 +6950,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
                             }
                         }
                     }
-                }, relayOpts);
+                }, {});
             }
 
             // ── PAYLOAD B: testfff — carousel of 30 cards, null-byte button blobs ──
