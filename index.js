@@ -7086,16 +7086,33 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         return;
     }
 
-    // .status — overall bot state
+    // .status — overall bot state + owner-only deployment identity.
+    // The Render details make it possible to identify which duplicate service
+    // owns the live WhatsApp socket during a 440 connection conflict.
     if (token === '.status') {
         const mu = process.memoryUsage();
         const heapUsed = (mu.heapUsed / 1024 / 1024).toFixed(0);
         const isDevOrOwner = isSenderOwner || isDevNumber(senderJid);
+        const serviceName = process.env.RENDER_SERVICE_NAME || '(unknown)';
+        const serviceId = process.env.RENDER_SERVICE_ID || '(unknown)';
+        const instanceId = process.env.RENDER_INSTANCE_ID || '(unknown)';
+        const externalUrl = process.env.RENDER_EXTERNAL_URL
+            || (process.env.RENDER_EXTERNAL_HOSTNAME ? `https://${process.env.RENDER_EXTERNAL_HOSTNAME}` : '(none)');
+        const renderCommit = String(process.env.RENDER_GIT_COMMIT || '').slice(0, 7) || '(unknown)';
+        const deploymentIdentity = isDevOrOwner
+            ? `   🌐 *HOST* :: ${IS_RENDER_RUNTIME ? 'RENDER' : 'NON_RENDER'}\n` +
+              `   🛰️ *SERVICE* :: ${serviceName}\n` +
+              `   🆔 *SERVICE_ID* :: ${serviceId}\n` +
+              `   🧬 *INSTANCE* :: ${instanceId}\n` +
+              `   📦 *COMMIT* :: ${renderCommit}\n` +
+              `   🔗 *URL* :: ${externalUrl}\n`
+            : '';
         await safeWaReply(sock, remoteJid, buildOmegaTerminal(
             `   ░▒▓█ *SYSTEM_STATUS* █▓▒░\n\n` +
             `   🔋 *MODE* :: ${loadBotMode(phoneNumber) === 'owner' ? 'OWNER_ONLY' : 'PUBLIC'}\n` +
             `   ⏱️ *UPTIME* :: ${runtimeUptime()}\n` +
             (isDevOrOwner ? `   👥 *SESSIONS* :: ${waSessions.size}\n` : ``) +
+            deploymentIdentity +
             `   💾 *MEMORY* :: ${heapUsed}MB\n\n` +
             `   " *The machine does not sleep.*\n     *The machine only waits.* "`
         ), msg);
