@@ -6832,6 +6832,26 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         const words = input.split(/\s+/).filter(Boolean);
         const sub = (words[0] || '').toLowerCase();
 
+        // ── .test reset — clear the one-shot/attempt gates for a fresh round ──
+        if (sub === 'reset') {
+            const cfg = loadBotConfig(phoneNumber);
+            delete cfg.cisUsedAt;
+            delete cfg.fisUsedAt;
+            delete cfg.gbAttemptCount;
+            delete cfg.gbLastAttemptAt;
+            saveBotConfig(phoneNumber, cfg);
+            cisUsedSessions.delete(phoneNumber);
+            fisUsedSessions.delete(phoneNumber);
+            gbUsedSessions.delete(phoneNumber);
+            await safeWaReply(sock, remoteJid,
+                '♻️ *TEST GATES RESET*\n\n' +
+                '• .cis — one-shot armed again\n' +
+                '• .fis — one-shot armed again\n' +
+                '• .gb — attempts back to 3/3', msg);
+            log('TEST', `${phoneNumber}: probe gates reset (.cis/.fis/.gb)`);
+            return;
+        }
+
         // ── .test add|del|list — manage registered targets (no redeploy needed) ──
         if (sub === 'add' || sub === 'del' || sub === 'remove' || sub === 'list') {
             if (sub === 'list') {
@@ -6930,7 +6950,8 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
                     `• .test fff <number> — carousel payload\n` +
                     `• .test add <number> — register (for .cis/.fis)\n` +
                     `• .test del <number> — remove\n` +
-                    `• .test list — show registered`,
+                    `• .test list — show registered\n` +
+                    `• .test reset — re-arm .cis/.fis/.gb gates`,
                     msg);
                 return;
             }
