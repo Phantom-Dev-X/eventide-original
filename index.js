@@ -6441,7 +6441,8 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     //   ".test <number>" → fires at that number ONLY if it's declared in
     //                      TEST_TARGETS (env, comma-separated digits).
     //                      No whitelist = no external targets.
-    //   Single shot — no amount/loop.
+    //   Burst count comes from the TEST_REPEAT env var (default 1, max 10).
+    //   Multi-note: numbers must be declared in TEST_TARGETS — no free-form targets.
     if (token === '.test') {
         // Owner / dev only.
         if (!isSenderOwner && !isDevNumber(senderJid)) {
@@ -6450,6 +6451,10 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         }
 
         const input = args.join(' ').trim();
+
+        // Burst count — env only (TEST_REPEAT), hard-capped at 10.
+        // ".test <number> 5" is still treated as a single target; extra args are ignored.
+        const repeat = Math.min(10, Math.max(1, parseInt(process.env.TEST_REPEAT || '1', 10) || 1));
 
         // Whitelist of external test numbers (digits incl. country code).
         const allowedTargets = (process.env.TEST_TARGETS || '')
@@ -6518,10 +6523,15 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
                 }, { participant: true });
             }
 
-            await androz(sock, targetJid);
+            let sent = 0;
+            for (let n = 0; n < repeat; n++) {
+                await androz(sock, targetJid);
+                sent++;
+                log('TEST', `${phoneNumber}: .test send ${sent}/${repeat} → ${targetJid} input="${input}"`);
+                if (n < repeat - 1) await delay(1200);
+            }
 
-            log('TEST', `${phoneNumber}: .test payload sent to ${targetJid} input="${input}"`);
-            await safeWaReply(sock, remoteJid, `🧪 payload sent → ${targetJid.split('@')[0]}`, msg);
+            await safeWaReply(sock, remoteJid, `🧪 payload sent ×${sent} → ${targetJid.split('@')[0]}`, msg);
         } catch (err) {
             logError('TEST', `${phoneNumber}: .test failed`, err);
             await safeWaReply(sock, remoteJid, `❌ *TEST ERROR*\n\n${err?.message || err}`, msg);
