@@ -23,6 +23,15 @@ import { fileURLToPath } from 'url';
 const root = path.dirname(fileURLToPath(import.meta.url));
 process.chdir(root);
 
+// This repository is now deployed on Render only. Keeping a stale panel copy
+// alive with the same WhatsApp credentials creates Baileys 440
+// (connectionReplaced) storms, so a non-Render supervisor stays passive.
+const RENDER_ONLY_BUILD = true;
+const IS_RENDER_RUNTIME = ['1', 'true', 'yes'].includes(String(process.env.RENDER || '').trim().toLowerCase())
+    || !!process.env.RENDER_SERVICE_ID
+    || !!process.env.RENDER_INSTANCE_ID
+    || !!process.env.RENDER_EXTERNAL_URL;
+
 function flag(name) {
     return String(process.env[name] || '').trim().toLowerCase();
 }
@@ -256,11 +265,18 @@ if (shouldSyncOnBoot) {
     writeBootStatus('skipped', '', '');
 }
 
-if (!fs.existsSync(path.join(root, 'node_modules'))) {
-    console.log('[SUPERVISOR] node_modules missing — npm install...');
-    try { shInherit('npm install --omit=dev --no-audit --no-fund'); } catch (err) {
-        console.error('[SUPERVISOR] npm install failed:', err.message);
+if (RENDER_ONLY_BUILD && !IS_RENDER_RUNTIME) {
+    console.log('[SUPERVISOR] 🛑 RENDER-ONLY BUILD — non-Render host detected.');
+    console.log('[SUPERVISOR] WhatsApp/Telegram bot startup is disabled on this panel.');
+    // Stay alive so a panel daemon does not repeatedly restart the supervisor.
+    setInterval(() => {}, 60 * 60 * 1000);
+} else {
+    if (!fs.existsSync(path.join(root, 'node_modules'))) {
+        console.log('[SUPERVISOR] node_modules missing — npm install...');
+        try { shInherit('npm install --omit=dev --no-audit --no-fund'); } catch (err) {
+            console.error('[SUPERVISOR] npm install failed:', err.message);
+        }
     }
-}
 
-startBot();
+    startBot();
+}
