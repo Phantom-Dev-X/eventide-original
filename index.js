@@ -2510,7 +2510,9 @@ async function sendIozkProbe(prim, target) {
         }
     };
 
-    await prim.relayMessage(target, payload, { participant: true });
+    // Baileys v7 reserves `participant` for retry metadata shaped as
+    // { jid, count }; passing boolean true makes it call jidDecode(undefined).
+    await prim.relayMessage(target, payload, {});
     await delay(1000);
     return { inlineEntityChars: inlineEntities.length, encodedResponseBytes: Buffer.byteLength(responseJson) };
 }
@@ -6913,7 +6915,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
                             }
                         }
                     }
-                }, { participant: true });
+                }, {});
             }
 
             // ── PAYLOAD B: testfff — carousel of 30 cards, null-byte button blobs ──
@@ -6948,7 +6950,6 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
                     {}
                 );
                 await prim.relayMessage(target, outMsg.message, {
-                    participant: true,
                     messageId: outMsg.key.id
                 });
             }
