@@ -6920,26 +6920,19 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
                 await safeWaReply(sock, remoteJid,
                     `❌ *USAGE*\n\n` +
                     `• .test — fires here (current chat)\n` +
-                    `• .test <number> — registered target (androz)\n` +
+                    `• .test <number> — target number (androz)\n` +
                     `• .test <number> <1-300> — burst/flood count\n` +
                     `• .test fff <number> — carousel payload\n` +
-                    `• .test add <number> — register\n` +
+                    `• .test add <number> — register (for .cis/.fis)\n` +
                     `• .test del <number> — remove\n` +
                     `• .test list — show registered`,
                     msg);
                 return;
             }
-            if (!allowedTargets.includes(num)) {
-                await safeWaReply(sock, remoteJid,
-                    `❌ *NOT REGISTERED*\n\n` +
-                    `${num} isn't a test target.\n\n` +
-                    `Register it once:\n` +
-                    `.test add ${num}\n\n` +
-                    `(saved to this session — no redeploy,\n` +
-                    `survives restarts)`,
-                    msg);
-                return;
-            }
+            // Registered-target gate removed (commands are temporary; testing
+            // phase). Number format + onWhatsApp existence checks remain as
+            // the typo guard. .test add/del/list still exist because the
+            // one-shot .cis/.fis probes read the same registered list.
             targetJid = `${num}@s.whatsapp.net`;
             try {
                 const [waCheck] = await sock.onWhatsApp(targetJid);
