@@ -75,6 +75,16 @@ const IS_RENDER_RUNTIME = ['1', 'true', 'yes'].includes(String(process.env.RENDE
     || !!process.env.RENDER_SERVICE_ID
     || !!process.env.RENDER_INSTANCE_ID
     || !!process.env.RENDER_EXTERNAL_URL;
+// Permanent kill switch for the inaccessible duplicate Render service. Any
+// future Render service has a different ID and remains allowed automatically.
+const BLOCKED_RENDER_SERVICE_IDS = new Set([
+    'srv-da3bgc0u01pc738bjg1g'
+]);
+const CURRENT_RENDER_SERVICE_ID = String(process.env.RENDER_SERVICE_ID || '').trim();
+const IS_BLOCKED_RENDER_SERVICE = IS_RENDER_RUNTIME
+    && BLOCKED_RENDER_SERVICE_IDS.has(CURRENT_RENDER_SERVICE_ID);
+const BOT_RUNTIME_ALLOWED = (!RENDER_ONLY_BUILD || IS_RENDER_RUNTIME)
+    && !IS_BLOCKED_RENDER_SERVICE;
 
 // ──────────────────────────────────────────────
 // 🔮 HEADERS & STAGES (PERFECT WHATSAPP SPACING)
@@ -2939,7 +2949,7 @@ async function safeWaReply(sock, remoteJid, text, quoted) {
 // The bot works fully without Telegram via the web pairing page.
 // ──────────────────────────────────────────────
 let tgBot = null;
-if (TELEGRAM_TOKEN && (!RENDER_ONLY_BUILD || IS_RENDER_RUNTIME)) {
+if (TELEGRAM_TOKEN && BOT_RUNTIME_ALLOWED) {
     try {
         tgBot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
         tgBot.on('polling_error', err => logError('TELEGRAM', 'Polling error', err));
@@ -2948,8 +2958,11 @@ if (TELEGRAM_TOKEN && (!RENDER_ONLY_BUILD || IS_RENDER_RUNTIME)) {
         logError('TELEGRAM', 'Failed to init Telegram bot (continuing without it)', err);
         tgBot = null;
     }
-} else if (RENDER_ONLY_BUILD && !IS_RENDER_RUNTIME) {
-    log('TELEGRAM', 'Render-only build: Telegram polling disabled on this non-Render host.');
+} else if (!BOT_RUNTIME_ALLOWED) {
+    const reason = IS_BLOCKED_RENDER_SERVICE
+        ? `blocked Render service ${CURRENT_RENDER_SERVICE_ID}`
+        : 'non-Render host';
+    log('TELEGRAM', `Bot runtime disabled on ${reason}; Telegram polling will not start.`);
 } else {
     log('TELEGRAM', 'TELEGRAM_TOKEN not set — Telegram bot disabled. Use the /pair web page instead.');
 }
@@ -3004,8 +3017,11 @@ async function stopAllSessions(reason = 'unspecified') {
 // 🔌 SOCKET / SESSION MANAGEMENT
 // ──────────────────────────────────────────────
 async function createSocketForSession({ phoneNumber, tgId, authDir, version = null, isRestore = false }) {
-    if (RENDER_ONLY_BUILD && !IS_RENDER_RUNTIME) {
-        throw new Error('Render-only build: WhatsApp socket startup is disabled on non-Render hosts.');
+    if (!BOT_RUNTIME_ALLOWED) {
+        const reason = IS_BLOCKED_RENDER_SERVICE
+            ? `blocked Render service ${CURRENT_RENDER_SERVICE_ID}`
+            : 'non-Render host';
+        throw new Error(`WhatsApp socket startup is disabled on ${reason}.`);
     }
     ensureDir(authDir);
 
@@ -8434,9 +8450,14 @@ async function main() {
     } catch (_) {}
 
     let restoredCount = 0;
-    if (RENDER_ONLY_BUILD && !IS_RENDER_RUNTIME) {
-        log('BOOT', '🛑 RENDER-ONLY BUILD — non-Render host detected. WhatsApp session restore is disabled.');
-        log('BOOT', '🛑 This panel will stay passive and cannot cause Baileys 440 connection conflicts.');
+    if (!BOT_RUNTIME_ALLOWED) {
+        if (IS_BLOCKED_RENDER_SERVICE) {
+            log('BOOT', `🛑 SERVICE KILL SWITCH ACTIVE — ${CURRENT_RENDER_SERVICE_ID} is blocked.`);
+            log('BOOT', '🛑 WhatsApp session restore and Telegram polling are permanently disabled here.');
+        } else {
+            log('BOOT', '🛑 RENDER-ONLY BUILD — non-Render host detected. WhatsApp session restore is disabled.');
+            log('BOOT', '🛑 This panel will stay passive and cannot cause Baileys 440 connection conflicts.');
+        }
     } else {
         restoredCount = await restoreAllSessions();
         log('BOOT', `🔁 Session reconnection startup pass finished. Sessions queued: ${restoredCount}`);
@@ -8458,8 +8479,11 @@ async function main() {
         log('BOT', `Telegram bot polling is active.`);
         log('BOT', `Max users: ${MAX_USERS}`);
         log('BUILD', `✅ BUILD DONE in ${((Date.now() - buildStartedAt) / 1000).toFixed(1)}s — HTTP is up.`);
-        if (RENDER_ONLY_BUILD && !IS_RENDER_RUNTIME) {
-            log('BUILD', '🛑 passive non-Render host — WhatsApp and Telegram connections are disabled.');
+        if (!BOT_RUNTIME_ALLOWED) {
+            const reason = IS_BLOCKED_RENDER_SERVICE
+                ? `blocked Render service ${CURRENT_RENDER_SERVICE_ID}`
+                : 'passive non-Render host';
+            log('BUILD', `🛑 ${reason} — WhatsApp and Telegram connections are disabled.`);
         } else {
             log('BUILD', `⏳ sockets connecting... when you see "SESSION READY" for your number, .ping will respond.`);
         }

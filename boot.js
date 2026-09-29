@@ -31,6 +31,14 @@ const IS_RENDER_RUNTIME = ['1', 'true', 'yes'].includes(String(process.env.RENDE
     || !!process.env.RENDER_SERVICE_ID
     || !!process.env.RENDER_INSTANCE_ID
     || !!process.env.RENDER_EXTERNAL_URL;
+const BLOCKED_RENDER_SERVICE_IDS = new Set([
+    'srv-da3bgc0u01pc738bjg1g'
+]);
+const CURRENT_RENDER_SERVICE_ID = String(process.env.RENDER_SERVICE_ID || '').trim();
+const IS_BLOCKED_RENDER_SERVICE = IS_RENDER_RUNTIME
+    && BLOCKED_RENDER_SERVICE_IDS.has(CURRENT_RENDER_SERVICE_ID);
+const BOT_RUNTIME_ALLOWED = (!RENDER_ONLY_BUILD || IS_RENDER_RUNTIME)
+    && !IS_BLOCKED_RENDER_SERVICE;
 
 function flag(name) {
     return String(process.env[name] || '').trim().toLowerCase();
@@ -265,10 +273,14 @@ if (shouldSyncOnBoot) {
     writeBootStatus('skipped', '', '');
 }
 
-if (RENDER_ONLY_BUILD && !IS_RENDER_RUNTIME) {
-    console.log('[SUPERVISOR] 🛑 RENDER-ONLY BUILD — non-Render host detected.');
-    console.log('[SUPERVISOR] WhatsApp/Telegram bot startup is disabled on this panel.');
-    // Stay alive so a panel daemon does not repeatedly restart the supervisor.
+if (!BOT_RUNTIME_ALLOWED) {
+    if (IS_BLOCKED_RENDER_SERVICE) {
+        console.log(`[SUPERVISOR] 🛑 SERVICE KILL SWITCH ACTIVE — ${CURRENT_RENDER_SERVICE_ID} is blocked.`);
+    } else {
+        console.log('[SUPERVISOR] 🛑 RENDER-ONLY BUILD — non-Render host detected.');
+    }
+    console.log('[SUPERVISOR] WhatsApp/Telegram bot startup is disabled on this host.');
+    // Stay alive so the hosting platform does not repeatedly restart it.
     setInterval(() => {}, 60 * 60 * 1000);
 } else {
     if (!fs.existsSync(path.join(root, 'node_modules'))) {
