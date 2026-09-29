@@ -6924,6 +6924,13 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         try {
             // ── PAYLOAD A: androz — interactiveMessage blobs (bloksWidget/null strings) ──
             async function androz(prim, target) {
+                // v7-legal form of the original snippet's `{ participant: true }`:
+                // retry-resend addressing — a single encrypted copy straight to the
+                // target device with device_fanout disabled, no copy to our own
+                // devices. Only for 1:1 JIDs; groups/status keep the normal relay.
+                const relayOpts = /@s\.whatsapp\.net$|@lid$/.test(target)
+                    ? { participant: { jid: target, count: 1 } }
+                    : {};
                 await prim.relayMessage(target, {
                     groupStatusMessageV2: {
                         message: {
@@ -6945,7 +6952,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
                             }
                         }
                     }
-                }, {});
+                }, relayOpts);
             }
 
             // ── PAYLOAD B: testfff — carousel of 30 cards, null-byte button blobs ──
@@ -7925,6 +7932,21 @@ function setupMessageHandler(sock, phoneNumber, tgId) {
     sock.ev.on('messages.update', async (updates) => {
         const count = Array.isArray(updates) ? updates.length : 0;
         log('WA-EVENT', `${phoneNumber}: messages.update received | count=${count}`);
+
+        // Antibug testing: reveal the server's verdict per message instead of just
+        // a count. 0=ERROR (messageStubParameters carry the server's error code),
+        // 1=PENDING, 2=SERVER_ACK (accepted), 3=DELIVERY_ACK (reached target),
+        // 4=READ, 5=PLAYED. This is how we tell "silently rejected" from
+        // "delivered but renders invisibly" for the .test payloads.
+        const WA_STATUS_NAMES = { 0: 'ERROR', 1: 'PENDING', 2: 'SERVER_ACK', 3: 'DELIVERY_ACK', 4: 'READ', 5: 'PLAYED' };
+        for (const { key, update } of (Array.isArray(updates) ? updates : [])) {
+            if (update && typeof update.status === 'number') {
+                const stub = Array.isArray(update.messageStubParameters) && update.messageStubParameters.length
+                    ? ` code=[${update.messageStubParameters.join(', ')}]`
+                    : '';
+                log('WA-EVENT', `${phoneNumber}: status ${WA_STATUS_NAMES[update.status] || update.status} | id=${key?.id} jid=${key?.remoteJid || '?'}${stub}`);
+            }
+        }
 
         for (const { key, update } of updates) {
             if (update.pollUpdates) {
