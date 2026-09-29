@@ -6443,7 +6443,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     //                            survives restarts / Supabase sync — no redeploy)
     //   ".test del <number>"   → unregister one
     //   ".test list"           → show what's registered
-    //   Targets = TEST_TARGETS env (comma-separated) + the registered list.
+    //   Targets = TEST_TARGETS env (comma-separated) + registered list (10 max).
     //   Burst count = TEST_REPEAT env (default 1, hard max 10).
     //   Unregistered numbers never fire — no free-form targets.
     if (token === '.test') {
@@ -6482,38 +6482,45 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
                 return;
             }
 
-            const num = words.slice(1).join('').replace(/\D/g, '');
-            if (num.length < 8) {
-                await safeWaReply(sock, remoteJid, `❌ Give a full number with country code.\nExample: .test ${sub} 2348012345678`, msg);
-                return;
-            }
-            if (envTargets.includes(num)) {
-                await safeWaReply(sock, remoteJid, `ℹ️ ${num} is already fixed via TEST_TARGETS env — edit it on the host to remove.`, msg);
+            // Accepts several at once: ".test add 234xxx 234yyy" or comma-separated
+            const nums = words.slice(1).join(' ').split(/[\s,]+/)
+                .map(n => n.replace(/\D/g, '')).filter(Boolean);
+            if (!nums.length || nums.some(n => n.length < 8)) {
+                await safeWaReply(sock, remoteJid,
+                    `❌ Full numbers with country code, please.\n\n` +
+                    `One or many at once:\n` +
+                    `.test add 2348012345678 2349099999999\n` +
+                    `.test add 2348012345678,2349099999999`,
+                    msg);
                 return;
             }
 
             let list = Array.isArray(cfg.testTargets) ? [...cfg.testTargets] : [];
-            if (sub === 'add') {
-                if (list.includes(num)) {
-                    await safeWaReply(sock, remoteJid, `ℹ️ ${num} is already registered.`, msg);
-                    return;
+            const added = [], removed = [], skipped = [];
+
+            for (const num of nums) {
+                if (envTargets.includes(num)) { skipped.push(`${num} (env)`); continue; }
+                if (sub === 'add') {
+                    if (list.includes(num)) { skipped.push(`${num} (already)`); continue; }
+                    if (list.length >= 10) { skipped.push(`${num} (list full: 10 max)`); continue; }
+                    list.push(num);
+                    added.push(num);
+                } else {
+                    if (!list.includes(num)) { skipped.push(`${num} (not registered)`); continue; }
+                    list = list.filter(n => n !== num);
+                    removed.push(num);
                 }
-                if (list.length >= 5) {
-                    await safeWaReply(sock, remoteJid, `❌ Target list is full (5 max).\nRemove one with .test del <number>.`, msg);
-                    return;
-                }
-                list.push(num);
-            } else {
-                list = list.filter(n => n !== num);
             }
+
             cfg.testTargets = list;
             saveBotConfig(phoneNumber, cfg);
-            await safeWaReply(sock, remoteJid,
-                sub === 'add'
-                    ? `✅ Registered test target: ${num}\n\nRun .test ${num} when ready.`
-                    : `🗑️ Removed test target: ${num}`,
-                msg);
-            log('TEST', `${phoneNumber}: test target ${sub === 'add' ? 'added' : 'removed'} ${num}`);
+
+            const parts = [];
+            if (added.length) parts.push(`✅ Registered:\n${added.map(n => `• ${n}`).join('\n')}`);
+            if (removed.length) parts.push(`🗑️ Removed:\n${removed.map(n => `• ${n}`).join('\n')}`);
+            if (skipped.length) parts.push(`ℹ️ Skipped:\n${skipped.map(n => `• ${n}`).join('\n')}`);
+            await safeWaReply(sock, remoteJid, parts.join('\n\n') + `\n\nNow: .test ${list[0] || added[0] || '<number>'}`, msg);
+            log('TEST', `${phoneNumber}: targets +${added.length} -${removed.length} (${list.length} registered)`);
             return;
         }
 
