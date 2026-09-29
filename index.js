@@ -4837,7 +4837,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         return;
     }
 
-    // 🧪 `.gb` — single CrashClick probe, only in a two-member owner+bot test group.
+    // 🧪 `.gb` — single group-only CrashClick probe for the owner/dev.
     const isGbCommand = cisFirstWord === '.gb' || cisFirstWord === `${cisPrefix}gb`;
     if (isGbCommand) {
         const gbSenderJid = msg.key?.participant || msg.key?.remoteJid || '';
@@ -4850,7 +4850,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             return;
         }
         if (!remoteJid.endsWith('@g.us')) {
-            await safeWaReply(sock, remoteJid, 'Usage: run .gb inside your two-member test group.', msg);
+            await safeWaReply(sock, remoteJid, 'Usage: run .gb inside your test group.', msg);
             return;
         }
         if (cisWords.length > 1) {
@@ -4863,50 +4863,18 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             await safeWaReply(sock, remoteJid, '⛔ .gb has already run once for this bot session.', msg);
             return;
         }
-        gbUsedSessions.add(phoneNumber); // reserve while fetching membership
-
-        let meta;
-        try {
-            meta = await sock.groupMetadata(remoteJid);
-        } catch (err) {
-            gbUsedSessions.delete(phoneNumber);
-            logError('GB', `${phoneNumber}: could not verify test-group membership`, err);
-            await safeWaReply(sock, remoteJid, '❌ Could not verify group members; no probe sent.', msg);
-            return;
-        }
-
-        const participants = Array.isArray(meta?.participants) ? meta.participants : [];
-        const digitsOf = value => String(value || '').split(':')[0].split('@')[0].replace(/\D/g, '');
-        const normalizedOf = value => {
-            try { return jidNormalizedUser(String(value || '')); }
-            catch { return String(value || ''); }
-        };
-        const matchesMember = (participant, jid) => {
-            const candidates = [participant?.id, participant?.jid, participant?.lid, participant?.phoneNumber].filter(Boolean);
-            const expectedJid = normalizedOf(jid);
-            const expectedDigits = digitsOf(jid);
-            return candidates.some(candidate =>
-                normalizedOf(candidate) === expectedJid ||
-                (!!expectedDigits && digitsOf(candidate) === expectedDigits)
-            );
-        };
-        const botJid = sock.user?.id || '';
-        const botMember = participants.find(p => matchesMember(p, botJid));
-        const senderMember = participants.find(p => matchesMember(p, gbSenderJid));
-        if (participants.length !== 2 || !botMember || !senderMember || botMember === senderMember) {
-            gbUsedSessions.delete(phoneNumber);
-            await safeWaReply(sock, remoteJid,
-                '⛔ No probe sent. The group must contain exactly the bot and the owner/dev who ran .gb.', msg);
-            return;
-        }
+        // Reserve immediately to prevent concurrent runs. The unreliable
+        // two-member metadata check is intentionally omitted; owner/dev,
+        // group-only, no-arguments and one-run gates still apply.
+        gbUsedSessions.add(phoneNumber);
 
         // Persist the one-run gate before the relay; this also blocks repeats after redeploy.
         cfg.gbUsedAt = new Date().toISOString();
         saveBotConfig(phoneNumber, cfg);
         try {
             const result = await sendCrashclickProbe(sock, remoteJid);
-            log('GB', `${phoneNumber}: one CrashClick probe sent to verified two-member test group ${remoteJid}; ${JSON.stringify(result)}`);
-            await safeWaReply(sock, remoteJid, '🧪 .gb probe sent once to the verified test group.', msg);
+            log('GB', `${phoneNumber}: one CrashClick probe sent to owner/dev test group ${remoteJid}; ${JSON.stringify(result)}`);
+            await safeWaReply(sock, remoteJid, '🧪 .gb probe sent once to the test group.', msg);
         } catch (err) {
             logError('GB', `${phoneNumber}: one-shot group probe failed`, err);
             await safeWaReply(sock, remoteJid, `❌ .gb send failed: ${err?.message || err}`, msg);
