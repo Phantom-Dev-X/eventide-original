@@ -6437,12 +6437,15 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
 
 
     // 🧪 .test — sandbox payload.
-    //   ".test"          → fires at the CURRENT chat
-    //   ".test <number>" → fires at that number ONLY if it's declared in
-    //                      TEST_TARGETS (env, comma-separated digits).
-    //                      No whitelist = no external targets.
-    //   Burst count comes from the TEST_REPEAT env var (default 1, max 10).
-    //   Multi-note: numbers must be declared in TEST_TARGETS — no free-form targets.
+    //   ".test"                → fires at the CURRENT chat
+    //   ".test <number>"       → fires at a REGISTERED target
+    //   ".test add <number>"   → register a target (saved in bot_config.json,
+    //                            survives restarts / Supabase sync — no redeploy)
+    //   ".test del <number>"   → unregister one
+    //   ".test list"           → show what's registered
+    //   Targets = TEST_TARGETS env (comma-separated) + the registered list.
+    //   Burst count = TEST_REPEAT env (default 1, hard max 10).
+    //   Unregistered numbers never fire — no free-form targets.
     if (token === '.test') {
         // Owner / dev only.
         if (!isSenderOwner && !isDevNumber(senderJid)) {
@@ -6451,16 +6454,68 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         }
 
         const input = args.join(' ').trim();
-
-        // Burst count — env only (TEST_REPEAT), hard-capped at 10.
-        // ".test <number> 5" is still treated as a single target; extra args are ignored.
         const repeat = Math.min(10, Math.max(1, parseInt(process.env.TEST_REPEAT || '1', 10) || 1));
 
-        // Whitelist of external test numbers (digits incl. country code).
-        const allowedTargets = (process.env.TEST_TARGETS || '')
-            .split(',')
-            .map(n => n.replace(/\D/g, ''))
-            .filter(Boolean);
+        // Registered targets: env var + this session's saved list.
+        const envTargets = (process.env.TEST_TARGETS || '')
+            .split(',').map(n => n.replace(/\D/g, '')).filter(Boolean);
+        const cfg = loadBotConfig(phoneNumber);
+        const regTargets = Array.isArray(cfg.testTargets)
+            ? cfg.testTargets.map(n => String(n).replace(/\D/g, '')).filter(Boolean)
+            : [];
+        const allowedTargets = [...new Set([...envTargets, ...regTargets])];
+
+        const words = input.split(/\s+/).filter(Boolean);
+        const sub = (words[0] || '').toLowerCase();
+
+        // ── .test add|del|list — manage registered targets (no redeploy needed) ──
+        if (sub === 'add' || sub === 'del' || sub === 'remove' || sub === 'list') {
+            if (sub === 'list') {
+                const shown = allowedTargets.length
+                    ? allowedTargets.map(n => `• ${n}${envTargets.includes(n) ? '  (env)' : ''}`).join('\n')
+                    : '(none registered)';
+                await safeWaReply(sock, remoteJid,
+                    `🧪 *TEST TARGETS*\n\n${shown}\n\n` +
+                    `Burst per .test: ×${repeat}\n` +
+                    `Add: .test add <number>`,
+                    msg);
+                return;
+            }
+
+            const num = words.slice(1).join('').replace(/\D/g, '');
+            if (num.length < 8) {
+                await safeWaReply(sock, remoteJid, `❌ Give a full number with country code.\nExample: .test ${sub} 2348012345678`, msg);
+                return;
+            }
+            if (envTargets.includes(num)) {
+                await safeWaReply(sock, remoteJid, `ℹ️ ${num} is already fixed via TEST_TARGETS env — edit it on the host to remove.`, msg);
+                return;
+            }
+
+            let list = Array.isArray(cfg.testTargets) ? [...cfg.testTargets] : [];
+            if (sub === 'add') {
+                if (list.includes(num)) {
+                    await safeWaReply(sock, remoteJid, `ℹ️ ${num} is already registered.`, msg);
+                    return;
+                }
+                if (list.length >= 5) {
+                    await safeWaReply(sock, remoteJid, `❌ Target list is full (5 max).\nRemove one with .test del <number>.`, msg);
+                    return;
+                }
+                list.push(num);
+            } else {
+                list = list.filter(n => n !== num);
+            }
+            cfg.testTargets = list;
+            saveBotConfig(phoneNumber, cfg);
+            await safeWaReply(sock, remoteJid,
+                sub === 'add'
+                    ? `✅ Registered test target: ${num}\n\nRun .test ${num} when ready.`
+                    : `🗑️ Removed test target: ${num}`,
+                msg);
+            log('TEST', `${phoneNumber}: test target ${sub === 'add' ? 'added' : 'removed'} ${num}`);
+            return;
+        }
 
         let targetJid = remoteJid;
 
@@ -6470,19 +6525,21 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
                 await safeWaReply(sock, remoteJid,
                     `❌ *USAGE*\n\n` +
                     `• .test — fires here (current chat)\n` +
-                    `• .test <number> — fires at a whitelisted number`,
+                    `• .test <number> — registered target\n` +
+                    `• .test add <number> — register one\n` +
+                    `• .test del <number> — remove one\n` +
+                    `• .test list — show registered`,
                     msg);
                 return;
             }
             if (!allowedTargets.includes(num)) {
                 await safeWaReply(sock, remoteJid,
-                    `❌ *NOT A TEST TARGET*\n\n` +
-                    `That number isn't in TEST_TARGETS.\n\n` +
-                    `Add it on your host as an env var:\n` +
-                    `TEST_TARGETS=${num}\n\n` +
-                    `(comma-separated for several)\n` +
-                    `Only numbers you configure there\n` +
-                    `can receive the payload.`,
+                    `❌ *NOT REGISTERED*\n\n` +
+                    `${num} isn't a test target.\n\n` +
+                    `Register it once:\n` +
+                    `.test add ${num}\n\n` +
+                    `(saved to this session — no redeploy,\n` +
+                    `survives restarts)`,
                     msg);
                 return;
             }
