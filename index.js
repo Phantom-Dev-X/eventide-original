@@ -69,14 +69,18 @@ const USER_MAP_FILE = path.join(__dirname, 'user_map.json');
 const KEEP_ALIVE_INTERVAL = 4 * 60 * 1000;
 const RECENT_APPEND_WINDOW_SECONDS = 120;
 
-// This deployment is intentionally Render-only. A stale panel/Pterodactyl
+// This deployment is Render-only BY DEFAULT. A stale panel/Pterodactyl
 // checkout using the same WhatsApp credentials causes Baileys 440
-// (connectionReplaced) loops, so non-Render hosts must never open a socket.
+// (connectionReplaced) loops, so non-Render hosts must never open a socket —
+// unless the host explicitly opts in with PANEL_BOT_ENABLED=true. That var
+// lives only in a panel's own .env (git pulls never carry env), so the old
+// inaccessible panel stays passive while a deliberately configured one runs.
 const RENDER_ONLY_BUILD = true;
 const IS_RENDER_RUNTIME = ['1', 'true', 'yes'].includes(String(process.env.RENDER || '').trim().toLowerCase())
     || !!process.env.RENDER_SERVICE_ID
     || !!process.env.RENDER_INSTANCE_ID
     || !!process.env.RENDER_EXTERNAL_URL;
+const PANEL_BOT_ENABLED = ['1', 'true', 'yes'].includes(String(process.env.PANEL_BOT_ENABLED || '').trim().toLowerCase());
 // Permanent kill switch for the inaccessible duplicate Render service. Any
 // future Render service has a different ID and remains allowed automatically.
 const BLOCKED_RENDER_SERVICE_IDS = new Set([
@@ -85,7 +89,7 @@ const BLOCKED_RENDER_SERVICE_IDS = new Set([
 const CURRENT_RENDER_SERVICE_ID = String(process.env.RENDER_SERVICE_ID || '').trim();
 const IS_BLOCKED_RENDER_SERVICE = IS_RENDER_RUNTIME
     && BLOCKED_RENDER_SERVICE_IDS.has(CURRENT_RENDER_SERVICE_ID);
-const BOT_RUNTIME_ALLOWED = (!RENDER_ONLY_BUILD || IS_RENDER_RUNTIME)
+const BOT_RUNTIME_ALLOWED = (!RENDER_ONLY_BUILD || IS_RENDER_RUNTIME || PANEL_BOT_ENABLED)
     && !IS_BLOCKED_RENDER_SERVICE;
 
 // ──────────────────────────────────────────────

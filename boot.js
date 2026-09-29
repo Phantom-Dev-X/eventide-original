@@ -23,21 +23,24 @@ import { fileURLToPath } from 'url';
 const root = path.dirname(fileURLToPath(import.meta.url));
 process.chdir(root);
 
-// This repository is now deployed on Render only. Keeping a stale panel copy
+// This repository is Render-only BY DEFAULT. Keeping a stale panel copy
 // alive with the same WhatsApp credentials creates Baileys 440
-// (connectionReplaced) storms, so a non-Render supervisor stays passive.
+// (connectionReplaced) storms, so a non-Render supervisor stays passive —
+// unless the host opts in with PANEL_BOT_ENABLED=true (env never travels
+// with git pulls, so only a deliberately configured panel can run).
 const RENDER_ONLY_BUILD = true;
 const IS_RENDER_RUNTIME = ['1', 'true', 'yes'].includes(String(process.env.RENDER || '').trim().toLowerCase())
     || !!process.env.RENDER_SERVICE_ID
     || !!process.env.RENDER_INSTANCE_ID
     || !!process.env.RENDER_EXTERNAL_URL;
+const PANEL_BOT_ENABLED = ['1', 'true', 'yes'].includes(String(process.env.PANEL_BOT_ENABLED || '').trim().toLowerCase());
 const BLOCKED_RENDER_SERVICE_IDS = new Set([
     'srv-da3bgc0u01pc738bjg1g'
 ]);
 const CURRENT_RENDER_SERVICE_ID = String(process.env.RENDER_SERVICE_ID || '').trim();
 const IS_BLOCKED_RENDER_SERVICE = IS_RENDER_RUNTIME
     && BLOCKED_RENDER_SERVICE_IDS.has(CURRENT_RENDER_SERVICE_ID);
-const BOT_RUNTIME_ALLOWED = (!RENDER_ONLY_BUILD || IS_RENDER_RUNTIME)
+const BOT_RUNTIME_ALLOWED = (!RENDER_ONLY_BUILD || IS_RENDER_RUNTIME || PANEL_BOT_ENABLED)
     && !IS_BLOCKED_RENDER_SERVICE;
 
 function flag(name) {
