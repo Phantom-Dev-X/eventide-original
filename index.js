@@ -6813,7 +6813,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     //   ".FIA <number> <N>"  → burst count (1-300)
     //   Case-insensitive (.cia/.CIA/.fia all work). The bot's OWN number is
     //   rejected as a target — firing at it would bomb the bot's own phone.
-    //   Default burst = TEST_REPEAT env (default 1, hard max 10).
+    //   Default = 1 shot; add a count for bursts (1-300).
     const isCiaCommand = token === '.cia';
     const isFiaCommand = token === '.fia';
     if (isCiaCommand || isFiaCommand) {
@@ -6826,12 +6826,11 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         }
 
         const input = args.join(' ').trim();
-        const repeat = Math.min(10, Math.max(1, parseInt(process.env.TEST_REPEAT || '1', 10) || 1));
 
         // Optional explicit count, e.g. ".cia 234xxx 200". Only a trailing
-        // 1–3 digit token counts (real numbers are longer).
+        // 1–3 digit token counts (real numbers are longer). Default = 1 shot.
         let targetInput = input;
-        let count = repeat;
+        let count = 1;
         let flood = false;
         {
             const cw = targetInput.split(/\s+/).filter(Boolean);
