@@ -6815,10 +6815,11 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
 
     // 🧪 TEMPORARY .Cia/.Ciad/.FIA/.FIAd — sandbox payloads (owner/dev only;
     // delete with the other test commands when antibug testing ends).
-    //   ".Cia"               → ONE androz payload at the CURRENT chat
+    //   ".Cia"               → usage help only (never fires bare)
     //   ".Cia <number>"      → ONE androz payload at that number
     //   ".Ciad <number> <N>" → androz FLOOD (N required, 1-300)
-    //   ".FIA" / ".FIA <number>"     → ONE carousel payload
+    //   ".FIA"               → usage help only (never fires bare)
+    //   ".FIA <number>"      → ONE carousel payload
     //   ".FIAd <number> <N>"         → carousel FLOOD (N required, 1-300)
     //   Passing an amount to .Cia/.FIA replies "amount not needed" — floods
     //   live on the d-commands. Case-insensitive. The bot's OWN number is
@@ -6864,7 +6865,17 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             targetInput = parts.join(' ').trim();
         }
 
-        let targetJid = remoteJid;
+        // Bare .Cia/.FIA (no target) → usage help only. These commands never
+        // fire at the current chat by accident.
+        if (!targetInput) {
+            await safeWaReply(sock, remoteJid,
+                `🧪 *${displayKind} USAGE*\n\n` +
+                `• .${displayKind} <number> — one shot at that number\n` +
+                `• .${displayKind}d <number> <amount> — flood (1-300)`, msg);
+            return;
+        }
+
+        let targetJid = '';
 
         if (targetInput) {
             const num = targetInput.replace(/\D/g, '');
