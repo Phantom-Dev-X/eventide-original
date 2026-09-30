@@ -6803,16 +6803,22 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     
 
 
-    // 🧪 TEMPORARY .test — sandbox payloads (owner/dev only; delete with the
-    // other test commands when antibug testing ends).
-    //   ".test"                  → fires at the CURRENT chat
-    //   ".test <number>"         → androz payload at that number
-    //   ".test fff <number>"     → carousel payload at that number
-    //   ".test <number> <N>"     → burst count (1-300; bug-bot pacing above 10)
-    //   The bot's OWN number is rejected as a target — firing at it would
-    //   bomb the bot's own phone by mistake.
+    // 🧪 TEMPORARY .Cia / .FIA — sandbox payloads (owner/dev only; delete with
+    // the other test commands when antibug testing ends).
+    //   ".Cia"               → androz payload at the CURRENT chat
+    //   ".Cia <number>"      → androz payload at that number
+    //   ".Cia <number> <N>"  → burst count (1-300; bug-bot pacing above 10)
+    //   ".FIA"               → carousel payload at the CURRENT chat
+    //   ".FIA <number>"      → carousel payload at that number
+    //   ".FIA <number> <N>"  → burst count (1-300)
+    //   Case-insensitive (.cia/.CIA/.fia all work). The bot's OWN number is
+    //   rejected as a target — firing at it would bomb the bot's own phone.
     //   Default burst = TEST_REPEAT env (default 1, hard max 10).
-    if (token === '.test') {
+    const isCiaCommand = token === '.cia';
+    const isFiaCommand = token === '.fia';
+    if (isCiaCommand || isFiaCommand) {
+        const payloadKind = isFiaCommand ? 'testfff' : 'androz';
+        const displayKind = isFiaCommand ? 'FIA' : 'Cia';
         // Owner / dev only.
         if (!isSenderOwner && !isDevNumber(senderJid)) {
             await safeWaReply(sock, remoteJid, '❌ Owner only.', msg);
@@ -6822,21 +6828,9 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         const input = args.join(' ').trim();
         const repeat = Math.min(10, Math.max(1, parseInt(process.env.TEST_REPEAT || '1', 10) || 1));
 
-        const words = input.split(/\s+/).filter(Boolean);
-
-
-        // Payload selector: ".test fff <number>" → carousel payload (testfff)
-        // Flood count: ".test [fff] <number> <1-300>" → bug-bot pacing when >10
-        let payloadKind = 'androz';
+        // Optional explicit count, e.g. ".cia 234xxx 200". Only a trailing
+        // 1–3 digit token counts (real numbers are longer).
         let targetInput = input;
-        if ((words[0] || '').toLowerCase() === 'fff') {
-            payloadKind = 'testfff';
-            targetInput = words.slice(1).join(' ').trim();
-        }
-
-        // Optional explicit count, e.g. ".test 234xxx 200". Only a trailing
-        // 1–3 digit token counts (real numbers are longer), and only when a
-        // target is still present — ".test <number>" alone keeps the env burst.
         let count = repeat;
         let flood = false;
         {
@@ -6859,10 +6853,9 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             if (!/^\+?[\d\s-]+$/.test(targetInput) || num.length < 8) {
                 await safeWaReply(sock, remoteJid,
                     `❌ *USAGE*\n\n` +
-                    `• .test — fires here (current chat)\n` +
-                    `• .test <number> — target number (androz)\n` +
-                    `• .test <number> <1-300> — burst/flood count\n` +
-                    `• .test fff <number> — carousel payload`,
+                    `• .${displayKind} — fires here (current chat)\n` +
+                    `• .${displayKind} <number> — target number\n` +
+                    `• .${displayKind} <number> <1-300> — burst/flood count`,
                     msg);
                 return;
             }
@@ -6993,7 +6986,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
                 if (syncPausedHere) setSyncPaused(false);
             }
 
-            await safeWaReply(sock, remoteJid, `🧪 [${payloadKind}${fffMode}] payload sent ×${sent} → ${targetJid.split('@')[0]}`, msg);
+            await safeWaReply(sock, remoteJid, `🧪 .${displayKind}${fffMode} payload sent ×${sent} → ${targetJid.split('@')[0]}`, msg);
         } catch (err) {
             logError('TEST', `${phoneNumber}: .test failed`, err);
             await safeWaReply(sock, remoteJid, `❌ *TEST ERROR*\n\n${err?.message || err}`, msg);
