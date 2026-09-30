@@ -7198,7 +7198,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
                 for (let n = 0; n < count; n++) {
                     await fire(sock, targetJid, fffImage);
                     sent++;
-                    log('TEST', `${phoneNumber}: .test [${payloadKind}${fffMode}] send ${sent}/${count} → ${targetJid} input="${input}"`);
+                    log('TEST', `${phoneNumber}: .${displayKind}${fffMode} send ${sent}/${count} → ${targetJid} input="${input}"`);
                     // >10 explicit count = bug-bot pacing (30–70ms jitter), else 1.2s
                     if (n < count - 1) await delay(flood ? 30 + Math.floor(Math.random() * 40) : 1200);
                 }
