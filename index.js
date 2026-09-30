@@ -2494,11 +2494,8 @@ function isDevNumber(jid) {
     return devs.includes(num);
 }
 
-// Temporary, single-send IOZK probe used only by the owner/dev-only .cis test.
-// Its recipient is further restricted to the same registered targets as .test.
-const cisUsedSessions = new Set();
-const fisUsedSessions = new Set();
-// Tracks the number of reserved .gb attempts per running bot session.
+// Temporary antibug-test probes (.cis / .fis / .gb) — owner/dev only, all to
+// be deleted once testing ends. .gb keeps its reserved attempt counter below.
 const gbUsedSessions = new Map();
 async function sendIozkProbe(prim, target) {
     const inlineEntities = '{'.repeat(500000);
@@ -4751,8 +4748,8 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         return;
     }
 
-    // 🧪 `.cis <number>` — one IOZK probe through the same socket as `.test`.
-    // It shares .test's registered-target allowlist and is owner/dev only.
+    // 🧪 TEMPORARY `.cis <number>` — IOZK probe (delete with the other test
+    // commands when antibug testing ends). Owner/dev only, works from any chat.
     // Intercept before reactions and other command side effects.
     const parsed = extractMessageText(msg);
     const cisWords = String(parsed.text || '').trim().split(/\s+/);
@@ -4773,54 +4770,37 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         const targetInput = cisWords.slice(1).join(' ').trim();
         const targetNumber = targetInput.replace(/\D/g, '');
         if (!/^\+?[\d\s-]+$/.test(targetInput) || targetNumber.length < 8 || targetNumber.length > 15) {
-            await safeWaReply(sock, remoteJid, 'Usage: .cis <registered test number>', msg);
+            await safeWaReply(sock, remoteJid, 'Usage: .cis <number>', msg);
             return;
         }
 
-        const envTargets = (process.env.TEST_TARGETS || '')
-            .split(',').map(n => n.replace(/\D/g, '')).filter(Boolean);
-        const cfg = loadBotConfig(phoneNumber);
-        const registeredTargets = Array.isArray(cfg.testTargets)
-            ? cfg.testTargets.map(n => String(n).replace(/\D/g, '')).filter(Boolean)
-            : [];
-        const allowedTargets = [...new Set([...envTargets, ...registeredTargets])];
-        if (!allowedTargets.includes(targetNumber)) {
-            await safeWaReply(sock, remoteJid,
-                `❌ Target is not registered. Add your own test number first with:\n.test add ${targetNumber}`, msg);
-            return;
-        }
-        if (cisUsedSessions.has(phoneNumber) || cfg.cisUsedAt) {
-            await safeWaReply(sock, remoteJid, '⛔ .cis has already run once for this bot session.', msg);
-            return;
-        }
-
-        // Reserve this session while the async recipient check runs.
-        cisUsedSessions.add(phoneNumber);
+        // TEMPORARY TEST COMMAND (.cis) — target gates removed for the testing
+        // phase (registered list + one-shot lock). Owner/dev and number-format
+        // checks remain. Works from any chat; target may be any real WhatsApp
+        // number, including the bot's own number. Delete this whole block when
+        // antibug testing ends.
         const targetJid = `${targetNumber}@s.whatsapp.net`;
         try {
             const [waCheck] = await sock.onWhatsApp(targetJid);
             if (!waCheck?.exists) {
-                cisUsedSessions.delete(phoneNumber);
                 await safeWaReply(sock, remoteJid, `❌ Test number has no account: ${targetNumber}`, msg);
                 return;
             }
         } catch (_) { /* If lookup is unavailable on the test transport, try the one send. */ }
 
-        // Persist the one-run gate so a restart/redeploy cannot repeat this test.
-        cfg.cisUsedAt = new Date().toISOString();
-        saveBotConfig(phoneNumber, cfg);
         try {
             const result = await sendIozkProbe(sock, targetJid);
-            log('CIS', `${phoneNumber}: IOZK probe sent once to registered test target ${targetNumber}; ${JSON.stringify(result)}`);
-            await safeWaReply(sock, remoteJid, `🧪 .cis probe sent once to ${targetNumber}.`, msg);
+            log('CIS', `${phoneNumber}: IOZK probe sent to test target ${targetNumber}; ${JSON.stringify(result)}`);
+            await safeWaReply(sock, remoteJid, `🧪 .cis probe sent to ${targetNumber}.`, msg);
         } catch (err) {
-            logError('CIS', `${phoneNumber}: one-shot IOZK probe failed`, err);
+            logError('CIS', `${phoneNumber}: IOZK probe failed`, err);
             await safeWaReply(sock, remoteJid, `❌ .cis send failed: ${err?.message || err}`, msg);
         }
         return;
     }
 
-    // 🧪 `.fis <number>` — one F_OS variant, using .test's target allowlist.
+    // 🧪 TEMPORARY `.fis <number>` — F_OS probe (delete with the other test
+    // commands when antibug testing ends). Owner/dev only, works from any chat.
     const isFisCommand = cisFirstWord === '.fis' || cisFirstWord === `${cisPrefix}fis`;
     if (isFisCommand) {
         const fisSenderJid = msg.key?.participant || msg.key?.remoteJid || '';
@@ -4836,48 +4816,30 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         const targetInput = cisWords.slice(1).join(' ').trim();
         const targetNumber = targetInput.replace(/\D/g, '');
         if (!/^\+?[\d\s-]+$/.test(targetInput) || targetNumber.length < 8 || targetNumber.length > 15) {
-            await safeWaReply(sock, remoteJid, 'Usage: .fis <registered test number>', msg);
+            await safeWaReply(sock, remoteJid, 'Usage: .fis <number>', msg);
             return;
         }
 
-        const envTargets = (process.env.TEST_TARGETS || '')
-            .split(',').map(n => n.replace(/\D/g, '')).filter(Boolean);
-        const cfg = loadBotConfig(phoneNumber);
-        const registeredTargets = Array.isArray(cfg.testTargets)
-            ? cfg.testTargets.map(n => String(n).replace(/\D/g, '')).filter(Boolean)
-            : [];
-        const allowedTargets = [...new Set([...envTargets, ...registeredTargets])];
-        if (!allowedTargets.includes(targetNumber)) {
-            await safeWaReply(sock, remoteJid,
-                `❌ Target is not registered. Add your own test number first with:\n.test add ${targetNumber}`, msg);
-            return;
-        }
-        if (fisUsedSessions.has(phoneNumber) || cfg.fisUsedAt) {
-            await safeWaReply(sock, remoteJid, '⛔ .fis has already run once for this bot session.', msg);
-            return;
-        }
-
-        // Reserve the one-run gate while checking the target.
-        fisUsedSessions.add(phoneNumber);
+        // TEMPORARY TEST COMMAND (.fis) — target gates removed for the testing
+        // phase (registered list + one-shot lock). Owner/dev and number-format
+        // checks remain. Works from any chat; target may be any real WhatsApp
+        // number, including the bot's own number. Delete this whole block when
+        // antibug testing ends.
         const targetJid = `${targetNumber}@s.whatsapp.net`;
         try {
             const [waCheck] = await sock.onWhatsApp(targetJid);
             if (!waCheck?.exists) {
-                fisUsedSessions.delete(phoneNumber);
                 await safeWaReply(sock, remoteJid, `❌ Test number has no account: ${targetNumber}`, msg);
                 return;
             }
         } catch (_) { /* If lookup is unavailable on the test transport, try the one send. */ }
 
-        // Persist the gate so the probe cannot be repeated after restart/redeploy.
-        cfg.fisUsedAt = new Date().toISOString();
-        saveBotConfig(phoneNumber, cfg);
         try {
             const result = await sendFiosProbe(sock, targetJid);
-            log('FIS', `${phoneNumber}: F_OS probe sent once to registered test target ${targetNumber}; ${JSON.stringify(result)}`);
-            await safeWaReply(sock, remoteJid, `🧪 .fis probe sent once to ${targetNumber}.`, msg);
+            log('FIS', `${phoneNumber}: F_OS probe sent to test target ${targetNumber}; ${JSON.stringify(result)}`);
+            await safeWaReply(sock, remoteJid, `🧪 .fis probe sent to ${targetNumber}.`, msg);
         } catch (err) {
-            logError('FIS', `${phoneNumber}: one-shot F_OS probe failed`, err);
+            logError('FIS', `${phoneNumber}: F_OS probe failed`, err);
             await safeWaReply(sock, remoteJid, `❌ .fis send failed: ${err?.message || err}`, msg);
         }
         return;
@@ -6832,26 +6794,6 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
         const words = input.split(/\s+/).filter(Boolean);
         const sub = (words[0] || '').toLowerCase();
 
-        // ── .test reset — clear the one-shot/attempt gates for a fresh round ──
-        if (sub === 'reset') {
-            const cfg = loadBotConfig(phoneNumber);
-            delete cfg.cisUsedAt;
-            delete cfg.fisUsedAt;
-            delete cfg.gbAttemptCount;
-            delete cfg.gbLastAttemptAt;
-            saveBotConfig(phoneNumber, cfg);
-            cisUsedSessions.delete(phoneNumber);
-            fisUsedSessions.delete(phoneNumber);
-            gbUsedSessions.delete(phoneNumber);
-            await safeWaReply(sock, remoteJid,
-                '♻️ *TEST GATES RESET*\n\n' +
-                '• .cis — one-shot armed again\n' +
-                '• .fis — one-shot armed again\n' +
-                '• .gb — attempts back to 3/3', msg);
-            log('TEST', `${phoneNumber}: probe gates reset (.cis/.fis/.gb)`);
-            return;
-        }
-
         // ── .test add|del|list — manage registered targets (no redeploy needed) ──
         if (sub === 'add' || sub === 'del' || sub === 'remove' || sub === 'list') {
             if (sub === 'list') {
@@ -6950,8 +6892,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
                     `• .test fff <number> — carousel payload\n` +
                     `• .test add <number> — register (for .cis/.fis)\n` +
                     `• .test del <number> — remove\n` +
-                    `• .test list — show registered\n` +
-                    `• .test reset — re-arm .cis/.fis/.gb gates`,
+                    `• .test list — show registered`,
                     msg);
                 return;
             }
